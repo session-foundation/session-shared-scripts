@@ -6,6 +6,6 @@ runs:
       - name: Checkout iOS
         uses: actions/checkout@v4
         with:
-          repository: 'oxen-io/session-ios'
+          repository: 'session-foundation/session-ios'
           path: 'ios'
           ref: 'dev'
