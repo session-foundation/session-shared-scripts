@@ -6,7 +6,7 @@ runs:
       - name: Checkout Android
         uses: actions/checkout@v4
         with:
-          repository: 'oxen-io/session-android'
+          repository: 'session-foundation/session-android'
           path: 'android'
           submodules: recursive
           ref: 'dev'
