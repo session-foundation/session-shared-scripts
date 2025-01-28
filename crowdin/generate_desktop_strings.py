@@ -127,7 +127,7 @@ def convert_non_translatable_strings_to_type_script(input_file, output_path, exp
     # Output the file in the desired format
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-    joined_exported_locales = ", ".join(f"\n  '{locale}'" for locale in exported_locales)
+    joined_exported_locales = ",".join(f"\n  '{locale}'" for locale in exported_locales)
     joined_rtl_locales = ", ".join(f"'{locale}'" for locale in rtl_locales)
 
     with open(output_path, 'w', encoding='utf-8') as file:
@@ -143,7 +143,7 @@ def convert_non_translatable_strings_to_type_script(input_file, output_path, exp
         file.write('\n')
         file.write(f"export const crowdinLocales = [{joined_exported_locales},\n] as const;\n")
         file.write('\n')
-        file.write(f"export type CrowdinLocale = (typeof crowdinLocales)[number];\n")
+        file.write("export type CrowdinLocale = (typeof crowdinLocales)[number];\n")
         file.write('\n')
 
 
