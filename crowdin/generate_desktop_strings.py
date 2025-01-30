@@ -145,6 +145,10 @@ def convert_non_translatable_strings_to_type_script(input_file, output_path, exp
         file.write('\n')
         file.write("export type CrowdinLocale = (typeof crowdinLocales)[number];\n")
         file.write('\n')
+        file.write('export function isCrowdinLocale(locale: string): locale is CrowdinLocale {\n')
+        file.write('  return crowdinLocales.includes(locale as CrowdinLocale);\n')
+        file.write('}\n')
+        file.write('\n')
 
 
 def convert_all_files(input_directory):
