@@ -6,6 +6,7 @@ import argparse
 import re
 from pathlib import Path
 from colorama import Fore, Style
+from generate_shared import load_glossary_dict, clean_string
 
 # Variables that should be treated as numeric (using %d)
 NUMERIC_VARIABLES = ['count', 'found_count', 'total_count']
@@ -66,20 +67,6 @@ def convert_placeholders(text):
 
     return re.sub(r'\{([^}]+)\}', repl, text)
 
-def clean_string(text):
-    # Note: any changes done for all platforms needs most likely to be done on crowdin side.
-    # So we don't want to replace -&gt; with → for instance, we want the crowdin strings to not have those at all.
-    # We can use standard XML escaped characters for most things (since XLIFF is an XML format) but
-    # want the following cases escaped in a particular way
-    text = text.replace("'", r"\'")
-    text = text.replace("&quot;", "\"")
-    text = text.replace("\"", "\\\"")
-    text = text.replace("&lt;b&gt;", "<b>")
-    text = text.replace("&lt;/b&gt;", "</b>")
-    text = text.replace("&lt;/br&gt;", "\\n")
-    text = text.replace("<br/>", "\\n")
-    text = text.replace("&", "&amp;")   # Assume any remaining ampersands are desired
-    return text.strip()                 # Strip whitespace
 
 def generate_android_xml(translations, app_name):
     sorted_translations = sorted(translations.items())
@@ -93,11 +80,11 @@ def generate_android_xml(translations, app_name):
         if isinstance(target, dict):  # It's a plural group
             result += f'    <plurals name="{resname}">\n'
             for form, value in target.items():
-                escaped_value = clean_string(convert_placeholders(value))
+                escaped_value = clean_string(convert_placeholders(value), True, {}, {})
                 result += f'        <item quantity="{form}">{escaped_value}</item>\n'
             result += '    </plurals>\n'
         else:  # It's a regular string (for these we DON'T want to convert the placeholders)
-            escaped_target = clean_string(target)
+            escaped_target = clean_string(target, True, {}, {})
             result += f'    <string name="{resname}">{escaped_target}</string>\n'
 
     result += '</resources>'
@@ -131,17 +118,10 @@ def convert_xliff_to_android_xml(input_file, output_dir, source_locale, locale, 
 
 
 def convert_non_translatable_strings_to_kotlin(input_file, output_path):
-    if not os.path.exists(input_file):
-        raise FileNotFoundError(f"Could not find '{input_file}' in raw translations directory")
+    glossary_dict = load_glossary_dict(input_file)
 
-    # Process the non-translatable string input
-    non_translatable_strings_data = {}
-    with open(input_file, 'r', encoding="utf-8") as file:
-        non_translatable_strings_data = json.load(file)
-
-    entries = non_translatable_strings_data['data']
-    max_key_length = max(len(entry['data']['note'].upper()) for entry in entries)
-    app_name = None
+    max_key_length = max(len(key) for key in glossary_dict)
+    app_name = glossary_dict['app_name']
 
     # Output the file in the desired format
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -151,17 +131,16 @@ def convert_non_translatable_strings_to_kotlin(input_file, output_path):
         file.write('\n')
         file.write('// Non-translatable strings for use with the UI\n')
         file.write("object NonTranslatableStringConstants {\n")
-        for entry in entries:
-            key = entry['data']['note'].upper()
-            text = entry['data']['text']
+        for key_lowercase in glossary_dict:
+            key = key_lowercase.upper()
+            text = glossary_dict[key_lowercase]
             file.write(f'    const val {key:<{max_key_length}} = "{text}"\n')
-
-            if key == 'APP_NAME':
-                app_name = text
 
         file.write('}\n')
         file.write('\n')
 
+    if not app_name:
+        raise ValueError("could not find app_name in glossary_dict")
     return app_name
 
 def convert_all_files(input_directory):

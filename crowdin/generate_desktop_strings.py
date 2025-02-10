@@ -3,9 +3,9 @@ import json
 import xml.etree.ElementTree as ET
 import sys
 import argparse
-import html
 from pathlib import Path
-from colorama import Fore, Style, init
+from colorama import Fore, Style
+from generate_shared import clean_string, load_glossary_dict
 
 # Customizable mapping for output folder hierarchy
 # Add entries here to customize the output path for specific locales
@@ -36,6 +36,8 @@ args = parser.parse_args()
 INPUT_DIRECTORY = args.raw_translations_directory
 TRANSLATIONS_OUTPUT_DIRECTORY = args.translations_output_directory
 NON_TRANSLATABLE_STRINGS_OUTPUT_PATH = args.non_translatable_strings_output_path
+
+clean_string_extra_dict = {'{count}': '#'}
 
 def parse_xliff(file_path):
     tree = ET.parse(file_path)
@@ -69,26 +71,20 @@ def parse_xliff(file_path):
 
     return translations
 
-def clean_string(text):
-    # Note: any changes done for all platforms needs most likely to be done on crowdin side.
-    # So we don't want to replace -&gt; with → for instance, we want the crowdin strings to not have those at all.
-    text = html.unescape(text)          # Unescape any HTML escaping
-    return text.strip()                 # Strip whitespace
 
-def generate_icu_pattern(target):
+def generate_icu_pattern(target, glossary_dict):
     if isinstance(target, dict):  # It's a plural group
         pattern_parts = []
         for form, value in target.items():
             if form in ['zero', 'one', 'two', 'few', 'many', 'other', 'exact', 'fractional']:
-                # Replace {count} with #
-                value = clean_string(value.replace('{count}', '#'))
+                value = clean_string(value, False, glossary_dict, clean_string_extra_dict)
                 pattern_parts.append(f"{form} [{value}]")
 
         return "{{count, plural, {0}}}".format(" ".join(pattern_parts))
     else:  # It's a regular string
-        return clean_string(target)
+        return clean_string(target, False, glossary_dict, clean_string_extra_dict)
 
-def convert_xliff_to_json(input_file, output_dir, locale, locale_two_letter_code):
+def convert_xliff_to_json(input_file, output_dir, locale, locale_two_letter_code, glossary_dict):
     if not os.path.exists(input_file):
         raise FileNotFoundError(f"Could not find '{input_file}' in raw translations directory")
 
@@ -97,8 +93,9 @@ def convert_xliff_to_json(input_file, output_dir, locale, locale_two_letter_code
     sorted_translations = sorted(translations.items())
     converted_translations = {}
 
+
     for resname, target in sorted_translations:
-        converted_translations[resname] = generate_icu_pattern(target)
+        converted_translations[resname] = generate_icu_pattern(target, glossary_dict)
 
     # Generate output files
     output_locale = LOCALE_PATH_MAPPING.get(locale, LOCALE_PATH_MAPPING.get(locale_two_letter_code, locale_two_letter_code))
@@ -112,16 +109,10 @@ def convert_xliff_to_json(input_file, output_dir, locale, locale_two_letter_code
         file.write('\n')
     return output_locale
 
+
+
 def convert_non_translatable_strings_to_type_script(input_file, output_path, exported_locales, rtl_languages):
-    if not os.path.exists(input_file):
-        raise FileNotFoundError(f"Could not find '{input_file}' in raw translations directory")
-
-    # Process the non-translatable string input
-    non_translatable_strings_data = {}
-    with open(input_file, 'r', encoding="utf-8") as file:
-        non_translatable_strings_data = json.load(file)
-
-    entries = non_translatable_strings_data['data']
+    glossary_dict = load_glossary_dict(input_file)
     rtl_locales = sorted([lang["twoLettersCode"] for lang in rtl_languages])
 
     # Output the file in the desired format
@@ -132,9 +123,8 @@ def convert_non_translatable_strings_to_type_script(input_file, output_path, exp
 
     with open(output_path, 'w', encoding='utf-8') as file:
         file.write('export enum LOCALE_DEFAULTS {\n')
-        for entry in entries:
-            key = entry['data']['note']
-            text = entry['data']['text']
+        for key in glossary_dict:
+            text = glossary_dict[key]
             file.write(f"  {key} = '{text}',\n")
 
         file.write('}\n')
@@ -143,7 +133,7 @@ def convert_non_translatable_strings_to_type_script(input_file, output_path, exp
         file.write('\n')
         file.write(f"export const crowdinLocales = [{joined_exported_locales},\n] as const;\n")
         file.write('\n')
-        file.write(f"export type CrowdinLocale = (typeof crowdinLocales)[number];\n")
+        file.write("export type CrowdinLocale = (typeof crowdinLocales)[number];\n")
         file.write('\n')
 
 
@@ -158,6 +148,8 @@ def convert_all_files(input_directory):
     with open(project_info_file, 'r', encoding="utf-8") as file:
         project_details = json.load(file)
 
+    non_translatable_strings_file = os.path.join(input_directory, "_non_translatable_strings.json")
+
     # Extract the language info and sort the target languages alphabetically by locale
     source_language = project_details['data']['sourceLanguage']
     target_languages = project_details['data']['targetLanguages']
@@ -168,18 +160,20 @@ def convert_all_files(input_directory):
     # Convert the XLIFF data to the desired format
     print(f"\033[2K{Fore.WHITE}⏳ Converting translations to target format...{Style.RESET_ALL}", end='\r')
     exported_locales = []
+    glossary_dict = load_glossary_dict(non_translatable_strings_file)
+
     for language in [source_language] + target_languages:
         lang_locale = language['locale']
         lang_two_letter_code = language['twoLettersCode']
         print(f"\033[2K{Fore.WHITE}⏳ Converting translations for {lang_locale} to target format...{Style.RESET_ALL}", end='\r')
         input_file = os.path.join(input_directory, f"{lang_locale}.xliff")
-        exported_as = convert_xliff_to_json(input_file, TRANSLATIONS_OUTPUT_DIRECTORY, lang_locale, lang_two_letter_code)
+        exported_as = convert_xliff_to_json(input_file, TRANSLATIONS_OUTPUT_DIRECTORY, lang_locale, lang_two_letter_code, glossary_dict)
         exported_locales.append(exported_as)
     print(f"\033[2K{Fore.GREEN}✅ All conversions complete{Style.RESET_ALL}")
 
     # Convert the non-translatable strings to the desired format
     print(f"\033[2K{Fore.WHITE}⏳ Generating static strings file...{Style.RESET_ALL}", end='\r')
-    non_translatable_strings_file = os.path.join(input_directory, "_non_translatable_strings.json")
+
     rtl_languages = [lang for lang in target_languages if lang["textDirection"] == "rtl"]
     convert_non_translatable_strings_to_type_script(non_translatable_strings_file, NON_TRANSLATABLE_STRINGS_OUTPUT_PATH, exported_locales, rtl_languages)
     print(f"\033[2K{Fore.GREEN}✅ Static string generation complete{Style.RESET_ALL}")
