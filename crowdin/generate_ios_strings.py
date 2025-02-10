@@ -7,7 +7,7 @@ import html
 from pathlib import Path
 from colorama import Fore, Style
 from datetime import datetime
-from generate_shared import load_glossary_dict, clean_string
+from generate_shared import load_glossary_dict, clean_string, setup_generation
 
 
 # It seems that Xcode uses different language codes and doesn't support all of the languages we get from Crowdin
@@ -109,7 +109,7 @@ def convert_placeholders_for_plurals(translations):
     # Replace {count} with %lld for iOS
     converted_translations = {}
     for form, value in translations.items():
-        converted_translations[form] = clean_string(value.replace('{count}', '%lld'), False, {}, {})
+        converted_translations[form] = clean_string(value, False, {}, {'{count}': '%lld'})
 
     return converted_translations
 
@@ -240,26 +240,10 @@ def convert_non_translatable_strings_to_swift(input_file, output_path):
         file.write('}\n')
 
 def convert_all_files(input_directory):
-    # Extract the project information
-    print(f"\033[2K{Fore.WHITE}⏳ Processing project info...{Style.RESET_ALL}", end='\r')
-    project_info_file = os.path.join(input_directory, "_project_info.json")
-    if not os.path.exists(project_info_file):
-        raise FileNotFoundError(f"Could not find '{project_info_file}' in raw translations directory")
-
-    project_details = {}
-    with open(project_info_file, 'r', encoding="utf-8") as file:
-        project_details = json.load(file)
-
-    # Extract the language info and sort the target languages alphabetically by locale
-    source_language = project_details['data']['sourceLanguage']
-    target_languages = project_details['data']['targetLanguages']
-    target_languages.sort(key=lambda x: x['locale'])
-    num_languages = len(target_languages)
-    print(f"\033[2K{Fore.GREEN}✅ Project info processed, {num_languages} languages will be converted{Style.RESET_ALL}")
-
-    # Convert the non-translatable strings to the desired format
+    setup_values = setup_generation(input_directory)
+    source_language, rtl_languages, non_translatable_strings_file, target_languages = setup_values.values()
     print(f"\033[2K{Fore.WHITE}⏳ Generating static strings file...{Style.RESET_ALL}", end='\r')
-    non_translatable_strings_file = os.path.join(input_directory, "_non_translatable_strings.json")
+
     convert_non_translatable_strings_to_swift(non_translatable_strings_file, NON_TRANSLATABLE_STRINGS_OUTPUT_PATH)
     print(f"\033[2K{Fore.GREEN}✅ Static string generation complete{Style.RESET_ALL}")
 
