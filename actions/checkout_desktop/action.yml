@@ -8,7 +8,7 @@ runs:
         with:
           repository: 'session-foundation/session-desktop'
           path: 'desktop'
-          ref: 'unstable'
+          ref: 'dev'
       - name: Remove existing strings
         shell: bash
         run: |
