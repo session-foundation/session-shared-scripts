@@ -1,5 +1,4 @@
 import os
-import json
 import xml.etree.ElementTree as ET
 import sys
 import argparse
@@ -10,6 +9,8 @@ from generate_shared import load_glossary_dict, clean_string, setup_generation
 
 # Variables that should be treated as numeric (using %d)
 NUMERIC_VARIABLES = ['count', 'found_count', 'total_count']
+
+AUTO_REPLACE_STATIC_STRINGS = False
 
 
 # Parse command-line arguments
@@ -68,7 +69,7 @@ def convert_placeholders(text):
     return re.sub(r'\{([^}]+)\}', repl, text)
 
 
-def generate_android_xml(translations, app_name):
+def generate_android_xml(translations, app_name, glossary_dict):
     sorted_translations = sorted(translations.items())
     result = '<?xml version="1.0" encoding="utf-8"?>\n'
     result += '<resources>\n'
@@ -80,25 +81,26 @@ def generate_android_xml(translations, app_name):
         if isinstance(target, dict):  # It's a plural group
             result += f'    <plurals name="{resname}">\n'
             for form, value in target.items():
-                escaped_value = clean_string(convert_placeholders(value), True, {}, {})
+                escaped_value = clean_string(convert_placeholders(value), True, glossary_dict, {})
                 result += f'        <item quantity="{form}">{escaped_value}</item>\n'
             result += '    </plurals>\n'
         else:  # It's a regular string (for these we DON'T want to convert the placeholders)
-            escaped_target = clean_string(target, True, {}, {})
+            escaped_target = clean_string(target, True, glossary_dict, {})
             result += f'    <string name="{resname}">{escaped_target}</string>\n'
 
     result += '</resources>'
 
     return result
 
-def convert_xliff_to_android_xml(input_file, output_dir, source_locale, locale, app_name):
+def convert_xliff_to_android_xml(input_file, output_dir, source_locale, locale, glossary_dict):
     if not os.path.exists(input_file):
         raise FileNotFoundError(f"Could not find '{input_file}' in raw translations directory")
 
     # Parse the XLIFF and convert to XML (only include the 'app_name' entry in the source language)
     is_source_language = locale == source_locale
     translations = parse_xliff(input_file)
-    output_data = generate_android_xml(translations, app_name if is_source_language else None)
+    app_name = glossary_dict['app_name']
+    output_data = generate_android_xml(translations, app_name if is_source_language else None, glossary_dict if AUTO_REPLACE_STATIC_STRINGS else {})
 
     # android is pretty smart to resolve resources for translations, see the example here:
     # https://developer.android.com/guide/topics/resources/multilingual-support#resource-resolution-examples
@@ -141,14 +143,14 @@ def convert_non_translatable_strings_to_kotlin(input_file, output_path):
 
     if not app_name:
         raise ValueError("could not find app_name in glossary_dict")
-    return app_name
 
-def convert_all_files(input_directory):
+def convert_all_files(input_directory: str ):
     setup_values = setup_generation(input_directory)
     source_language, rtl_languages, non_translatable_strings_file, target_languages = setup_values.values()
 
-    app_name = convert_non_translatable_strings_to_kotlin(non_translatable_strings_file, NON_TRANSLATABLE_STRINGS_OUTPUT_PATH)
+    convert_non_translatable_strings_to_kotlin(non_translatable_strings_file, NON_TRANSLATABLE_STRINGS_OUTPUT_PATH)
     print(f"\033[2K{Fore.GREEN}✅ Static string generation complete{Style.RESET_ALL}")
+    glossary_dict = load_glossary_dict(non_translatable_strings_file)
 
     # Convert the XLIFF data to the desired format
     print(f"\033[2K{Fore.WHITE}⏳ Converting translations to target format...{Style.RESET_ALL}", end='\r')
@@ -161,7 +163,7 @@ def convert_all_files(input_directory):
             continue
         print(f"\033[2K{Fore.WHITE}⏳ Converting translations for {lang_locale} to target format...{Style.RESET_ALL}", end='\r')
         input_file = os.path.join(input_directory, f"{lang_locale}.xliff")
-        convert_xliff_to_android_xml(input_file, TRANSLATIONS_OUTPUT_DIRECTORY, source_locale, lang_locale, app_name)
+        convert_xliff_to_android_xml(input_file, TRANSLATIONS_OUTPUT_DIRECTORY, source_locale, lang_locale, glossary_dict)
     print(f"\033[2K{Fore.GREEN}✅ All conversions complete{Style.RESET_ALL}")
 
 if __name__ == "__main__":
