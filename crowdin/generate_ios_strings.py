@@ -105,11 +105,11 @@ def parse_xliff(file_path):
 
     return translations, target_language
 
-def convert_placeholders_for_plurals(translations):
+def convert_placeholders_for_plurals(translations, glossary_dict):
     # Replace {count} with %lld for iOS
     converted_translations = {}
     for form, value in translations.items():
-        converted_translations[form] = clean_string(value, False, {}, {'{count}': '%lld'})
+        converted_translations[form] = clean_string(value, False, glossary_dict, {'{count}': '%lld'})
 
     return converted_translations
 
@@ -121,7 +121,7 @@ def sort_dict_case_insensitive(data):
     else:
         return data
 
-def convert_xliff_to_string_catalog(input_dir, output_dir, source_language, target_languages):
+def convert_xliff_to_string_catalog(input_dir, output_dir, source_language, target_languages, glossary_dict):
     string_catalog = {
         "sourceLanguage": "en",
         "strings": {},
@@ -157,7 +157,7 @@ def convert_xliff_to_string_catalog(input_dir, output_dir, source_language, targ
                 }
 
             if isinstance(translation, dict):  # It's a plural group
-                converted_translations = convert_placeholders_for_plurals(translation)
+                converted_translations = convert_placeholders_for_plurals(translation, glossary_dict)
 
                 # Check if any of the translations contain '{count}'
                 contains_count = any('{count}' in value for value in translation.values())
@@ -203,7 +203,7 @@ def convert_xliff_to_string_catalog(input_dir, output_dir, source_language, targ
                 string_catalog["strings"][resname]["localizations"][target_language] = {
                     "stringUnit": {
                         "state": "translated",
-                        "value": clean_string(translation, False, {}, {})
+                        "value": clean_string(translation, False, glossary_dict, {})
                     }
                 }
 
@@ -242,6 +242,7 @@ def convert_non_translatable_strings_to_swift(input_file, output_path):
 def convert_all_files(input_directory):
     setup_values = setup_generation(input_directory)
     source_language, rtl_languages, non_translatable_strings_file, target_languages = setup_values.values()
+    glossary_dict = load_glossary_dict(non_translatable_strings_file)
     print(f"\033[2K{Fore.WHITE}⏳ Generating static strings file...{Style.RESET_ALL}", end='\r')
 
     convert_non_translatable_strings_to_swift(non_translatable_strings_file, NON_TRANSLATABLE_STRINGS_OUTPUT_PATH)
@@ -249,7 +250,7 @@ def convert_all_files(input_directory):
 
     # Convert the XLIFF data to the desired format
     print(f"\033[2K{Fore.WHITE}⏳ Converting translations to target format...{Style.RESET_ALL}", end='\r')
-    convert_xliff_to_string_catalog(input_directory, TRANSLATIONS_OUTPUT_DIRECTORY, source_language, target_languages)
+    convert_xliff_to_string_catalog(input_directory, TRANSLATIONS_OUTPUT_DIRECTORY, source_language, target_languages,glossary_dict)
     print(f"\033[2K{Fore.GREEN}✅ All conversions complete{Style.RESET_ALL}")
 
 if __name__ == "__main__":
