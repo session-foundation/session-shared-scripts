@@ -1,5 +1,6 @@
 import os
 import json
+from typing import Dict, List
 import xml.etree.ElementTree as ET
 import sys
 import argparse
@@ -37,7 +38,6 @@ INPUT_DIRECTORY = args.raw_translations_directory
 TRANSLATIONS_OUTPUT_DIRECTORY = args.translations_output_directory
 NON_TRANSLATABLE_STRINGS_OUTPUT_PATH = args.non_translatable_strings_output_path
 
-clean_string_extra_dict = {'{count}': '#'}
 
 def parse_xliff(file_path):
     tree = ET.parse(file_path)
@@ -72,17 +72,17 @@ def parse_xliff(file_path):
     return translations
 
 
-def generate_icu_pattern(target, glossary_dict):
+def generate_icu_pattern(target, glossary_dict : Dict[str,str]):
     if isinstance(target, dict):  # It's a plural group
         pattern_parts = []
         for form, value in target.items():
             if form in ['zero', 'one', 'two', 'few', 'many', 'other', 'exact', 'fractional']:
-                value = clean_string(value, False, glossary_dict, clean_string_extra_dict)
+                value = clean_string(value, False, glossary_dict, {})
                 pattern_parts.append(f"{form} [{value}]")
 
         return "{{count, plural, {0}}}".format(" ".join(pattern_parts))
     else:  # It's a regular string
-        return clean_string(target, False, glossary_dict, clean_string_extra_dict)
+        return clean_string(target, False, glossary_dict, {})
 
 def convert_xliff_to_json(input_file, output_dir, locale, locale_two_letter_code, glossary_dict):
     if not os.path.exists(input_file):
@@ -110,7 +110,7 @@ def convert_xliff_to_json(input_file, output_dir, locale, locale_two_letter_code
 
 
 
-def convert_non_translatable_strings_to_type_script(input_file, output_path, exported_locales, rtl_languages):
+def convert_non_translatable_strings_to_type_script(input_file: str, output_path: str, exported_locales: List[str], rtl_languages: List[str]):
     glossary_dict = load_glossary_dict(input_file)
     rtl_locales = sorted([lang["twoLettersCode"] for lang in rtl_languages])
 
@@ -140,7 +140,7 @@ def convert_non_translatable_strings_to_type_script(input_file, output_path, exp
         file.write('\n')
 
 
-def convert_all_files(input_directory):
+def convert_all_files(input_directory: str):
     setup_values = setup_generation(input_directory)
     source_language, rtl_languages, non_translatable_strings_file, target_languages = setup_values.values()
 

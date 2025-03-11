@@ -1,9 +1,10 @@
+from typing import Dict, List
 import html
 import json
 import os
 from colorama import Fore, Style
 
-def clean_string(text, is_android, glossary_dict, extra_replace_dict):
+def clean_string(text: str, is_android: bool, glossary_dict: Dict[str, str], extra_replace_dict :Dict[str,str]):
     if is_android:
         # Note: any changes done for all platforms needs most likely to be done on crowdin side.
         # So we don't want to replace -&gt; with → for instance, we want the crowdin strings to not have those at all.
@@ -32,7 +33,7 @@ def clean_string(text, is_android, glossary_dict, extra_replace_dict):
     return text
 
 
-def load_glossary_dict(input_file):
+def load_glossary_dict(input_file: str) -> Dict[str, str]:
     if not os.path.exists(input_file):
         raise FileNotFoundError(f"Could not find '{input_file}' in raw translations directory")
 
@@ -50,7 +51,7 @@ def load_glossary_dict(input_file):
     return glossary_dict
 
 
-def setup_generation(input_directory):
+def setup_generation(input_directory: str):
     # Extract the project information
     print(f"\033[2K{Fore.WHITE}⏳ Processing project info...{Style.RESET_ALL}", end='\r')
     project_info_file = os.path.join(input_directory, "_project_info.json")
@@ -64,14 +65,14 @@ def setup_generation(input_directory):
     non_translatable_strings_file = os.path.join(input_directory, "_non_translatable_strings.json")
 
     # Extract the language info and sort the target languages alphabetically by locale
-    source_language = project_details['data']['sourceLanguage']
-    target_languages = project_details['data']['targetLanguages']
+    source_language: str = project_details['data']['sourceLanguage']
+    target_languages: List[str] = project_details['data']['targetLanguages']
     target_languages.sort(key=lambda x: x['locale'])
     num_languages = len(target_languages)
     print(f"\033[2K{Fore.GREEN}✅ Project info processed, {num_languages} languages will be converted{Style.RESET_ALL}")
 
     # Convert the non-translatable strings to the desired format
-    rtl_languages = [lang for lang in target_languages if lang["textDirection"] == "rtl"]
+    rtl_languages: List[str] = [lang for lang in target_languages if lang["textDirection"] == "rtl"]
 
     return {"source_language":source_language,
             "rtl_languages": rtl_languages,

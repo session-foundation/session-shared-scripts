@@ -8,6 +8,7 @@ from pathlib import Path
 from colorama import Fore, Style
 from datetime import datetime
 from generate_shared import load_glossary_dict, clean_string, setup_generation
+from typing import Dict
 
 
 # It seems that Xcode uses different language codes and doesn't support all of the languages we get from Crowdin
@@ -105,7 +106,7 @@ def parse_xliff(file_path):
 
     return translations, target_language
 
-def convert_placeholders_for_plurals(translations, glossary_dict):
+def convert_placeholders_for_plurals(translations: Dict[str,str], glossary_dict: Dict[str,str]):
     # Replace {count} with %lld for iOS
     converted_translations = {}
     for form, value in translations.items():

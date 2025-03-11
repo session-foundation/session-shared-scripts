@@ -1,5 +1,4 @@
 import os
-import json
 import xml.etree.ElementTree as ET
 import sys
 import argparse
@@ -143,7 +142,7 @@ def convert_non_translatable_strings_to_kotlin(input_file, output_path):
     if not app_name:
         raise ValueError("could not find app_name in glossary_dict")
 
-def convert_all_files(input_directory):
+def convert_all_files(input_directory: str ):
     setup_values = setup_generation(input_directory)
     source_language, rtl_languages, non_translatable_strings_file, target_languages = setup_values.values()
 
