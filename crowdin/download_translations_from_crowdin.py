@@ -43,7 +43,7 @@ def check_error(response):
             print(f"{Fore.BLUE}Response: {json.dumps(response.json(), indent=2)}{Style.RESET_ALL}")
         sys.exit(1)
 
-def download_file(url, output_path):
+def download_file(url: str, output_path: str):
     """
     Function to download a file from Crowdin
     """
