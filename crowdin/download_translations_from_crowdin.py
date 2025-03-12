@@ -102,7 +102,7 @@ def main():
         print(f"\n{Fore.BLUE}Response: {json.dumps(source_export_response.json(), indent=2)}{Style.RESET_ALL}")
 
     # Download the exported file
-    source_download_url: str = source_export_response.json()['data']['url']
+    source_download_url = source_export_response.json()['data']['url']
     source_download_path = os.path.join(DOWNLOAD_DIRECTORY, f"{source_lang_locale}.xliff")
     print(f"\033[2K{Fore.WHITE}⏳ Downloading translations for {source_lang_locale}...{Style.RESET_ALL}", end='\r')
     try:

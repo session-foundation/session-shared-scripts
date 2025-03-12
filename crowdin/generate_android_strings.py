@@ -10,6 +10,8 @@ from generate_shared import load_glossary_dict, clean_string, setup_generation
 # Variables that should be treated as numeric (using %d)
 NUMERIC_VARIABLES = ['count', 'found_count', 'total_count']
 
+AUTO_REPLACE_STATIC_STRINGS = False
+
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description='Convert a XLIFF translation files to Android XML.')
@@ -98,7 +100,7 @@ def convert_xliff_to_android_xml(input_file, output_dir, source_locale, locale, 
     is_source_language = locale == source_locale
     translations = parse_xliff(input_file)
     app_name = glossary_dict['app_name']
-    output_data = generate_android_xml(translations, app_name if is_source_language else None, glossary_dict)
+    output_data = generate_android_xml(translations, app_name if is_source_language else None, glossary_dict if AUTO_REPLACE_STATIC_STRINGS else {})
 
     # android is pretty smart to resolve resources for translations, see the example here:
     # https://developer.android.com/guide/topics/resources/multilingual-support#resource-resolution-examples

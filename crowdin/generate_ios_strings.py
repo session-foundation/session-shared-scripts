@@ -10,6 +10,7 @@ from datetime import datetime
 from generate_shared import load_glossary_dict, clean_string, setup_generation
 from typing import Dict
 
+AUTO_REPLACE_STATIC_STRINGS = False
 
 # It seems that Xcode uses different language codes and doesn't support all of the languages we get from Crowdin
 # (at least in the variants that Crowdin is specifying them in) so need to map/exclude them in order to build correctly
@@ -110,7 +111,7 @@ def convert_placeholders_for_plurals(translations: Dict[str,str], glossary_dict:
     # Replace {count} with %lld for iOS
     converted_translations = {}
     for form, value in translations.items():
-        converted_translations[form] = clean_string(value, False, glossary_dict, {'{count}': '%lld'})
+        converted_translations[form] = clean_string(value, False, glossary_dict if AUTO_REPLACE_STATIC_STRINGS else {}, {'{count}': '%lld'})
 
     return converted_translations
 
