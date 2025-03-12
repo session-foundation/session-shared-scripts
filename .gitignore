@@ -3,3 +3,8 @@
 
 # Exclude venv folder
 venv
+
+
+__pycache__
+.vscode/
+do_not_commit.sh
