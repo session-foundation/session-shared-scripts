@@ -1,14 +1,16 @@
 import os
-import json
 import xml.etree.ElementTree as ET
 import sys
 import argparse
 import re
 from pathlib import Path
 from colorama import Fore, Style
+from generate_shared import load_glossary_dict, clean_string, setup_generation
 
 # Variables that should be treated as numeric (using %d)
 NUMERIC_VARIABLES = ['count', 'found_count', 'total_count']
+
+AUTO_REPLACE_STATIC_STRINGS = False
 
 
 # Parse command-line arguments
@@ -66,22 +68,8 @@ def convert_placeholders(text):
 
     return re.sub(r'\{([^}]+)\}', repl, text)
 
-def clean_string(text):
-    # Note: any changes done for all platforms needs most likely to be done on crowdin side.
-    # So we don't want to replace -&gt; with → for instance, we want the crowdin strings to not have those at all.
-    # We can use standard XML escaped characters for most things (since XLIFF is an XML format) but
-    # want the following cases escaped in a particular way
-    text = text.replace("'", r"\'")
-    text = text.replace("&quot;", "\"")
-    text = text.replace("\"", "\\\"")
-    text = text.replace("&lt;b&gt;", "<b>")
-    text = text.replace("&lt;/b&gt;", "</b>")
-    text = text.replace("&lt;/br&gt;", "\\n")
-    text = text.replace("<br/>", "\\n")
-    text = text.replace("&", "&amp;")   # Assume any remaining ampersands are desired
-    return text.strip()                 # Strip whitespace
 
-def generate_android_xml(translations, app_name):
+def generate_android_xml(translations, app_name, glossary_dict):
     sorted_translations = sorted(translations.items())
     result = '<?xml version="1.0" encoding="utf-8"?>\n'
     result += '<resources>\n'
@@ -93,25 +81,26 @@ def generate_android_xml(translations, app_name):
         if isinstance(target, dict):  # It's a plural group
             result += f'    <plurals name="{resname}">\n'
             for form, value in target.items():
-                escaped_value = clean_string(convert_placeholders(value))
+                escaped_value = clean_string(convert_placeholders(value), True, glossary_dict, {})
                 result += f'        <item quantity="{form}">{escaped_value}</item>\n'
             result += '    </plurals>\n'
         else:  # It's a regular string (for these we DON'T want to convert the placeholders)
-            escaped_target = clean_string(target)
+            escaped_target = clean_string(target, True, glossary_dict, {})
             result += f'    <string name="{resname}">{escaped_target}</string>\n'
 
     result += '</resources>'
 
     return result
 
-def convert_xliff_to_android_xml(input_file, output_dir, source_locale, locale, app_name):
+def convert_xliff_to_android_xml(input_file, output_dir, source_locale, locale, glossary_dict):
     if not os.path.exists(input_file):
         raise FileNotFoundError(f"Could not find '{input_file}' in raw translations directory")
 
     # Parse the XLIFF and convert to XML (only include the 'app_name' entry in the source language)
     is_source_language = locale == source_locale
     translations = parse_xliff(input_file)
-    output_data = generate_android_xml(translations, app_name if is_source_language else None)
+    app_name = glossary_dict['app_name']
+    output_data = generate_android_xml(translations, app_name if is_source_language else None, glossary_dict if AUTO_REPLACE_STATIC_STRINGS else {})
 
     # android is pretty smart to resolve resources for translations, see the example here:
     # https://developer.android.com/guide/topics/resources/multilingual-support#resource-resolution-examples
@@ -131,17 +120,10 @@ def convert_xliff_to_android_xml(input_file, output_dir, source_locale, locale, 
 
 
 def convert_non_translatable_strings_to_kotlin(input_file, output_path):
-    if not os.path.exists(input_file):
-        raise FileNotFoundError(f"Could not find '{input_file}' in raw translations directory")
+    glossary_dict = load_glossary_dict(input_file)
 
-    # Process the non-translatable string input
-    non_translatable_strings_data = {}
-    with open(input_file, 'r', encoding="utf-8") as file:
-        non_translatable_strings_data = json.load(file)
-
-    entries = non_translatable_strings_data['data']
-    max_key_length = max(len(entry['data']['note'].upper()) for entry in entries)
-    app_name = None
+    max_key_length = max(len(key) for key in glossary_dict)
+    app_name = glossary_dict['app_name']
 
     # Output the file in the desired format
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -151,42 +133,24 @@ def convert_non_translatable_strings_to_kotlin(input_file, output_path):
         file.write('\n')
         file.write('// Non-translatable strings for use with the UI\n')
         file.write("object NonTranslatableStringConstants {\n")
-        for entry in entries:
-            key = entry['data']['note'].upper()
-            text = entry['data']['text']
+        for key_lowercase in glossary_dict:
+            key = key_lowercase.upper()
+            text = glossary_dict[key_lowercase]
             file.write(f'    const val {key:<{max_key_length}} = "{text}"\n')
-
-            if key == 'APP_NAME':
-                app_name = text
 
         file.write('}\n')
         file.write('\n')
 
-    return app_name
+    if not app_name:
+        raise ValueError("could not find app_name in glossary_dict")
 
-def convert_all_files(input_directory):
-    # Extract the project information
-    print(f"\033[2K{Fore.WHITE}⏳ Processing project info...{Style.RESET_ALL}", end='\r')
-    project_info_file = os.path.join(input_directory, "_project_info.json")
-    if not os.path.exists(project_info_file):
-        raise FileNotFoundError(f"Could not find '{project_info_file}' in raw translations directory")
+def convert_all_files(input_directory: str ):
+    setup_values = setup_generation(input_directory)
+    source_language, rtl_languages, non_translatable_strings_file, target_languages = setup_values.values()
 
-    project_details = {}
-    with open(project_info_file, 'r', encoding="utf-8") as file:
-        project_details = json.load(file)
-
-    # Extract the language info and sort the target languages alphabetically by locale
-    source_language = project_details['data']['sourceLanguage']
-    target_languages = project_details['data']['targetLanguages']
-    target_languages.sort(key=lambda x: x['locale'])
-    num_languages = len(target_languages)
-    print(f"\033[2K{Fore.GREEN}✅ Project info processed, {num_languages} languages will be converted{Style.RESET_ALL}")
-
-    # Convert the non-translatable strings to the desired format
-    print(f"\033[2K{Fore.WHITE}⏳ Generating static strings file...{Style.RESET_ALL}", end='\r')
-    non_translatable_strings_file = os.path.join(input_directory, "_non_translatable_strings.json")
-    app_name = convert_non_translatable_strings_to_kotlin(non_translatable_strings_file, NON_TRANSLATABLE_STRINGS_OUTPUT_PATH)
+    convert_non_translatable_strings_to_kotlin(non_translatable_strings_file, NON_TRANSLATABLE_STRINGS_OUTPUT_PATH)
     print(f"\033[2K{Fore.GREEN}✅ Static string generation complete{Style.RESET_ALL}")
+    glossary_dict = load_glossary_dict(non_translatable_strings_file)
 
     # Convert the XLIFF data to the desired format
     print(f"\033[2K{Fore.WHITE}⏳ Converting translations to target format...{Style.RESET_ALL}", end='\r')
@@ -199,7 +163,7 @@ def convert_all_files(input_directory):
             continue
         print(f"\033[2K{Fore.WHITE}⏳ Converting translations for {lang_locale} to target format...{Style.RESET_ALL}", end='\r')
         input_file = os.path.join(input_directory, f"{lang_locale}.xliff")
-        convert_xliff_to_android_xml(input_file, TRANSLATIONS_OUTPUT_DIRECTORY, source_locale, lang_locale, app_name)
+        convert_xliff_to_android_xml(input_file, TRANSLATIONS_OUTPUT_DIRECTORY, source_locale, lang_locale, glossary_dict)
     print(f"\033[2K{Fore.GREEN}✅ All conversions complete{Style.RESET_ALL}")
 
 if __name__ == "__main__":
