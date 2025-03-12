@@ -205,7 +205,7 @@ def convert_xliff_to_string_catalog(input_dir, output_dir, source_language, targ
                 string_catalog["strings"][resname]["localizations"][target_language] = {
                     "stringUnit": {
                         "state": "translated",
-                        "value": clean_string(translation, False, glossary_dict, {})
+                        "value": clean_string(translation, False, glossary_dict if AUTO_REPLACE_STATIC_STRINGS else {}, {})
                     }
                 }
 
