@@ -133,9 +133,30 @@ jobs:
           overwrite: true
           if-no-files-found: warn
           retention-days: 7
-      # It's easier to find what went wrong with some strings if we can get the files from the artefact upload step above.
-      # The job will still be marked as failed and no Pull Requests will be made.
-      - name: Prepare QA strings
+
+  build_qa:
+    name: Build QA strings
+    needs: [fetch_translations]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo Content
+        uses: actions/checkout@v4
+        with:
+          path: 'scripts'
+          # don't provide a branch (ref) so it uses the default for that event
+      - name: Setup shared
+        uses: ./scripts/actions/setup_shared
+
+      - name: Checkout Desktop
+        uses: ./scripts/actions/checkout_desktop
+
+      - name: Export QA Strings (json)
+        run: |
+          python "${{ github.workspace }}/scripts/crowdin/generate_desktop_strings.py" --qa_build \
+            "${{ github.workspace }}/raw_translations" \
+            "${{ github.workspace }}/desktop/_locales" \
+            "${{ github.workspace }}/desktop/ts/localization/constants.ts"
+      - name: Prepare QA strings (ts)
         run: |
           cd ${{ github.workspace }}/desktop/
           python ./tools/localization/generateLocales.py --generate-types --print-problems --print-problem-strings --print-problem-formatting-tag-strings --error-on-problems
