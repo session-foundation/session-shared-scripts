@@ -29,6 +29,7 @@ LOCALE_PATH_MAPPING = {
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description='Convert a XLIFF translation files to JSON.')
+parser.add_argument('--qa_build', help='Set to true to output only English strings (only used for QA)', action=argparse.BooleanOptionalAction)
 parser.add_argument('raw_translations_directory', help='Directory which contains the raw translation files')
 parser.add_argument('translations_output_directory', help='Directory to save the converted translation files')
 parser.add_argument('non_translatable_strings_output_path', help='Path to save the non-translatable strings to')
@@ -37,6 +38,7 @@ args = parser.parse_args()
 INPUT_DIRECTORY = args.raw_translations_directory
 TRANSLATIONS_OUTPUT_DIRECTORY = args.translations_output_directory
 NON_TRANSLATABLE_STRINGS_OUTPUT_PATH = args.non_translatable_strings_output_path
+IS_QA_BUILD = args.qa_build
 
 
 def parse_xliff(file_path):
@@ -140,7 +142,7 @@ def convert_non_translatable_strings_to_type_script(input_file: str, output_path
         file.write('\n')
 
 
-def convert_all_files(input_directory: str):
+def convert_all_files(input_directory: str, is_qa_build: bool):
     setup_values = setup_generation(input_directory)
     source_language, rtl_languages, non_translatable_strings_file, target_languages = setup_values.values()
 
@@ -149,7 +151,7 @@ def convert_all_files(input_directory: str):
     exported_locales = []
     glossary_dict = load_glossary_dict(non_translatable_strings_file)
 
-    for language in [source_language] + target_languages:
+    for language in [source_language] + [] if is_qa_build else target_languages:
         lang_locale = language['locale']
         lang_two_letter_code = language['twoLettersCode']
         print(f"\033[2K{Fore.WHITE}⏳ Converting translations for {lang_locale} to target format...{Style.RESET_ALL}", end='\r')
@@ -166,7 +168,7 @@ def convert_all_files(input_directory: str):
 
 if __name__ == "__main__":
     try:
-        convert_all_files(INPUT_DIRECTORY)
+        convert_all_files(INPUT_DIRECTORY, IS_QA_BUILD)
     except KeyboardInterrupt:
         print("\nProcess interrupted by user")
         sys.exit(0)
