@@ -151,7 +151,7 @@ def convert_all_files(input_directory: str, is_qa_build: bool):
     exported_locales = []
     glossary_dict = load_glossary_dict(non_translatable_strings_file)
 
-    for language in [source_language] + [] if is_qa_build else target_languages:
+    for language in [source_language] + ([] if is_qa_build else target_languages):
         lang_locale = language['locale']
         lang_two_letter_code = language['twoLettersCode']
         print(f"\033[2K{Fore.WHITE}⏳ Converting translations for {lang_locale} to target format...{Style.RESET_ALL}", end='\r')
