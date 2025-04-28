@@ -94,7 +94,8 @@ jobs:
           name: session-ios
           path: |
             ${{ github.workspace }}/ios/Session/Meta/Translations/Localizable.xcstrings
-            ${{ github.workspace }}/ios/SessionUtilitiesKit/General/Constants.swift
+            ${{ github.workspace }}/ios/SessionUIKit/Style Guide/Constants.swift
+            ${{ github.workspace }}/ios/SessionNotificationServiceExtension/NSEConstants.swift
           overwrite: true
           if-no-files-found: warn
           retention-days: 7
