@@ -86,8 +86,7 @@ jobs:
           python "${{ github.workspace }}/scripts/crowdin/generate_ios_strings.py" \
             "${{ github.workspace }}/raw_translations" \
             "${{ github.workspace }}/ios/Session/Meta/Translations" \
-            "${{ github.workspace }}/ios/SessionUIKit/Style Guide/Constants.swift" \
-            "${{ github.workspace }}/ios/SessionNotificationServiceExtension/NSEConstants.swift"
+            "${{ github.workspace }}/ios/SessionUIKit/Style Guide/Constants.swift"
       - name: Upload iOS artefacts
         uses: actions/upload-artifact@v4
         with:
@@ -95,7 +94,6 @@ jobs:
           path: |
             ${{ github.workspace }}/ios/Session/Meta/Translations/Localizable.xcstrings
             ${{ github.workspace }}/ios/SessionUIKit/Style Guide/Constants.swift
-            ${{ github.workspace }}/ios/SessionNotificationServiceExtension/NSEConstants.swift
           overwrite: true
           if-no-files-found: warn
           retention-days: 7
