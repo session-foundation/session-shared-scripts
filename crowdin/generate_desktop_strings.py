@@ -126,7 +126,8 @@ def convert_non_translatable_strings_to_type_script(input_file: str, output_path
         file.write('export enum LOCALE_DEFAULTS {\n')
         for key in glossary_dict:
             text = glossary_dict[key]
-            file.write(f"  {key} = '{text}',\n")
+            cleaned_text = clean_string(text, False, glossary_dict, {})
+            file.write(f"  {key} = '{cleaned_text}',\n")
 
         file.write('}\n')
         file.write('\n')

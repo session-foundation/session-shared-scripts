@@ -17,6 +17,10 @@ def clean_string(text: str, is_android: bool, glossary_dict: Dict[str, str], ext
         text = text.replace("&lt;/b&gt;", "</b>")
         text = text.replace("&lt;/br&gt;", "\\n")
         text = text.replace("<br/>", "\\n")
+        text = text.replace("&lt;span&gt;",  '<font color="0">')
+        text = text.replace("&lt;/span&gt;", '</font>')
+        text = text.replace("<span>",        '<font color="0">')
+        text = text.replace("</span>",       '</font>')
         text = text.replace("&", "&amp;")   # Assume any remaining ampersands are desired
     else:
         text = html.unescape(text)          # Unescape any HTML escaping

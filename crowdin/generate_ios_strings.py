@@ -244,7 +244,8 @@ def convert_non_translatable_strings_to_swift(input_file, output_paths):
             file.write(f'public enum {enum_name} {{\n')
             for key in glossary_dict:
                 text = glossary_dict[key]
-                file.write(f'    public static let {key}: String = "{text}"\n')
+                cleaned_text = clean_string(text, False, glossary_dict, {})
+                file.write(f'    public static let {key}: String = "{cleaned_text}"\n')
 
             file.write('}\n')
 
