@@ -9,6 +9,10 @@ runs:
           repository: 'session-foundation/session-desktop'
           path: 'desktop'
           ref: 'dev'
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: 'desktop/.nvmrc'
+
       - name: Remove existing strings
         shell: bash
         run: |
