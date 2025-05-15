@@ -136,7 +136,8 @@ def convert_non_translatable_strings_to_kotlin(input_file, output_path):
         for key_lowercase in glossary_dict:
             key = key_lowercase.upper()
             text = glossary_dict[key_lowercase]
-            file.write(f'    const val {key:<{max_key_length}} = "{text}"\n')
+            cleaned_text = clean_string(text, True, glossary_dict, {})
+            file.write(f'    const val {key:<{max_key_length}} = "{cleaned_text}"\n')
 
         file.write('}\n')
         file.write('\n')
