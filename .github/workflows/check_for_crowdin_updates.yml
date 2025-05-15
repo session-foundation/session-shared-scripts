@@ -123,6 +123,10 @@ jobs:
             "${{ github.workspace }}/raw_translations" \
             "${{ github.workspace }}/desktop/_locales" \
             "${{ github.workspace }}/desktop/ts/localization/constants.ts"
+
+      - name: Validate strings for Desktop
+        run: cd ${{ github.workspace }}/desktop && npm install -g yarn && yarn build:locales
+
       - name: Upload Desktop artifacts
         uses: actions/upload-artifact@v4
         with:
