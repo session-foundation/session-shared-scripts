@@ -205,18 +205,18 @@ jobs:
 
       - name: Prepare Android Strings
         run: |
-          rm -rf ${{ github.workspace }}/android/libsession/src/main/res/values*/strings.xml
+          rm -rf ${{ github.workspace }}/android/app/src/main/res/values*/strings.xml
           python "${{ github.workspace }}/scripts/crowdin/generate_android_strings.py" \
             "${{ github.workspace }}/raw_translations" \
-            "${{ github.workspace }}/android/libsession/src/main/res" \
-            "${{ github.workspace }}/android/libsession/src/main/java/org/session/libsession/utilities/NonTranslatableStringConstants.kt"
+            "${{ github.workspace }}/android/app/src/main/res" \
+            "${{ github.workspace }}/android/app/src/main/java/org/session/libsession/utilities/NonTranslatableStringConstants.kt"
       - name: Upload Android artefacts
         uses: actions/upload-artifact@v4
         with:
           name: session-android
           path: |
-            ${{ github.workspace }}/android/libsession/src/main/res/values*/strings.xml
-            ${{ github.workspace }}/android/libsession/src/main/java/org/session/libsession/utilities/NonTranslatableStringConstants.kt
+            ${{ github.workspace }}/android/app/src/main/res/values*/strings.xml
+            ${{ github.workspace }}/android/app/src/main/java/org/session/libsession/utilities/NonTranslatableStringConstants.kt
           overwrite: true
           if-no-files-found: warn
           retention-days: 7
@@ -253,7 +253,7 @@ jobs:
         with:
           name: session-android
           # this has to be the first shared parent on the upload artefact task for Android
-          path: "${{ github.workspace }}/android/libsession/src/main"
+          path: "${{ github.workspace }}/android/app/src/main"
 
       - name: Create Android Pull Request
         uses: peter-evans/create-pull-request@v6
