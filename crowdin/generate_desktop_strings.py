@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from typing import Dict, List
 import xml.etree.ElementTree as ET
 import sys
@@ -27,6 +28,7 @@ LOCALE_PATH_MAPPING = {
     # Add more mappings as needed
 }
 
+
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description='Convert a XLIFF translation files to JSON.')
 parser.add_argument('--qa_build', help='Set to true to output only English strings (only used for QA)', action=argparse.BooleanOptionalAction)
@@ -40,6 +42,13 @@ TRANSLATIONS_OUTPUT_DIRECTORY = args.translations_output_directory
 NON_TRANSLATABLE_STRINGS_OUTPUT_PATH = args.non_translatable_strings_output_path
 IS_QA_BUILD = args.qa_build
 
+
+def matches_braced_pattern(string):
+    return re.search(r"\{(.+?)\}", string) is not None
+
+def snake_to_camel(snake_str: str) -> str:
+    parts = snake_str.split('_')
+    return parts[0].lower() + ''.join(word.capitalize() for word in parts[1:])
 
 def parse_xliff(file_path):
     tree = ET.parse(file_path)
@@ -98,6 +107,12 @@ def convert_xliff_to_json(input_file, output_dir, locale, locale_two_letter_code
     for resname, target in sorted_translations:
         converted_translations[resname] = generate_icu_pattern(target, glossary_dict)
 
+
+    for resname in glossary_dict:
+        target = glossary_dict[resname]
+        if(matches_braced_pattern(target)):
+            converted_translations[snake_to_camel(resname)] = generate_icu_pattern(target, glossary_dict)
+
     # Generate output files
     output_locale = LOCALE_PATH_MAPPING.get(locale, LOCALE_PATH_MAPPING.get(locale_two_letter_code, locale_two_letter_code))
     locale_output_dir = os.path.join(output_dir, output_locale)
@@ -126,8 +141,11 @@ def convert_non_translatable_strings_to_type_script(input_file: str, output_path
         file.write('export enum LOCALE_DEFAULTS {\n')
         for key in glossary_dict:
             text = glossary_dict[key]
-            cleaned_text = clean_string(text, False, glossary_dict, {})
-            file.write(f"  {key} = '{cleaned_text}',\n")
+            # constant strings that have braces in them are not constants. We add them to the localised strings output
+            # for easy replacing of their variables
+            if(not matches_braced_pattern(text)):
+                cleaned_text = clean_string(text, False, glossary_dict, {})
+                file.write(f"  {key} = '{cleaned_text}',\n")
 
         file.write('}\n')
         file.write('\n')
