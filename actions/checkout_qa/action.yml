@@ -1,0 +1,11 @@
+name: 'Checkout QA'
+description: 'Checks out the Session Appium repository'
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout Session Appium
+      uses: actions/checkout@v4
+      with:
+        repository: session-foundation/session-appium  
+        path: 'appium'
+        ref: 'main' 
