@@ -228,7 +228,7 @@ jobs:
   jobs_sync:
     name: Waiting for build jobs
 
-    needs: [build_android, build_ios, build_desktop]
+    needs: [build_android, build_ios, build_desktop, build_qa]
     runs-on: ubuntu-latest
 
     steps:
@@ -327,3 +327,31 @@ jobs:
           commit-message: ${{ env.PR_TITLE }}
           delete-branch: true
 
+  make_qa_pr:
+    needs: [jobs_sync]
+    name: Make QA PR (Appium)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo Content
+        uses: actions/checkout@v4
+        with:
+          path: 'scripts'
+      
+      - name: Checkout Session Appium
+        uses: ./scripts/actions/checkout_qa
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: session-qa
+          path: "${{ github.workspace }}/appium/run/localizer"
+
+      - name: Create QA Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          path: 'appium'
+          token: ${{ secrets.CROWDIN_PR_TOKEN }}
+          title: ${{ env.PR_TITLE }}
+          body: ${{ env.PR_DESCRIPTION }}
+          branch: ${{ env.PR_TARGET_BRANCH }}
+          commit-message: ${{ env.PR_TITLE }}
+          delete-branch: true
