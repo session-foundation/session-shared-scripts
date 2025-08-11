@@ -8,6 +8,12 @@ on:
   schedule:
     - cron: '0 0 * * 1'  # Every Monday at 12:00 AM UTC, which is 10:00 AM Melbourne time (AEST)
   workflow_dispatch:
+    inputs:
+      UPDATE_PULL_REQUESTS:
+        description: 'Create/update PR for QA/Desktop/iOS/Android'
+        required: true
+        type: boolean
+        default: true
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -240,6 +246,7 @@ jobs:
     name: Make Android PR
     needs: [jobs_sync]
     runs-on: ubuntu-latest
+    if: ${{ inputs.UPDATE_PULL_REQUESTS == 'true' }}
     steps:
       - name: Checkout Repo Content
         uses: actions/checkout@v4
@@ -270,6 +277,7 @@ jobs:
     needs: [jobs_sync]
     name: Make Desktop PR
     runs-on: ubuntu-latest
+    if: ${{ inputs.UPDATE_PULL_REQUESTS == 'true' }}
     steps:
       - name: Checkout Repo Content
         uses: actions/checkout@v4
@@ -301,6 +309,7 @@ jobs:
     needs: [jobs_sync]
     name: Make iOS PR
     runs-on: ubuntu-latest
+    if: ${{ inputs.UPDATE_PULL_REQUESTS == 'true' }}
     steps:
       - name: Checkout Repo Content
         uses: actions/checkout@v4
@@ -331,6 +340,7 @@ jobs:
     needs: [jobs_sync]
     name: Make QA PR (Appium)
     runs-on: ubuntu-latest
+    if: ${{ inputs.UPDATE_PULL_REQUESTS == 'true' }}
     steps:
       - name: Checkout Repo Content
         uses: actions/checkout@v4
