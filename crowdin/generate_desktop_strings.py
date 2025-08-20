@@ -110,8 +110,9 @@ def convert_xliff_to_json(input_file, output_dir, locale, locale_two_letter_code
 
     for resname in glossary_dict:
         target = glossary_dict[resname]
-        if(matches_braced_pattern(target)):
-            converted_translations[snake_to_camel(resname)] = generate_icu_pattern(target, glossary_dict)
+        # Note: this adds the glossary dict items to the translated strings.
+        # This way, we can use desktop <Localiser /> and tr function with them directly
+        converted_translations[snake_to_camel(resname)] = generate_icu_pattern(target, glossary_dict)
 
     # Generate output files
     output_locale = LOCALE_PATH_MAPPING.get(locale, LOCALE_PATH_MAPPING.get(locale_two_letter_code, locale_two_letter_code))
@@ -120,7 +121,7 @@ def convert_xliff_to_json(input_file, output_dir, locale, locale_two_letter_code
     os.makedirs(locale_output_dir, exist_ok=True)
 
     with open(output_file, 'w', encoding='utf-8') as file:
-        json.dump(converted_translations, file, ensure_ascii=False, indent=2)
+        json.dump(converted_translations, file, ensure_ascii=False, indent=2, sort_keys=True)
         file.write('\n')
         file.write('\n')
     return output_locale
