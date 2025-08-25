@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       UPDATE_PULL_REQUESTS:
-        description: 'Create/update PR for QA/Desktop/iOS/Android'
+        description: 'Create/update PRs for all platforms'
         required: true
         type: boolean
         default: true
@@ -39,6 +39,12 @@ jobs:
         with:
           path: 'scripts'
           # don't provide a branch (ref) so it uses the default for that event
+      - name: Debug inputs
+        run: |
+          echo "UPDATE_PULL_REQUESTS: '${{ inputs.UPDATE_PULL_REQUESTS }}'"
+          echo "Event name: ${{ github.event_name }}"
+          echo "All inputs: ${{ toJSON(inputs) }}"
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -246,7 +252,7 @@ jobs:
     name: Make Android PR
     needs: [jobs_sync]
     runs-on: ubuntu-latest
-    if: ${{ inputs.UPDATE_PULL_REQUESTS == 'true' }}
+    if: ${{ github.event_name == 'schedule' || inputs.UPDATE_PULL_REQUESTS == true }}
     steps:
       - name: Checkout Repo Content
         uses: actions/checkout@v4
@@ -277,7 +283,7 @@ jobs:
     needs: [jobs_sync]
     name: Make Desktop PR
     runs-on: ubuntu-latest
-    if: ${{ inputs.UPDATE_PULL_REQUESTS == 'true' }}
+    if: ${{ github.event_name == 'schedule' || inputs.UPDATE_PULL_REQUESTS == true }}
     steps:
       - name: Checkout Repo Content
         uses: actions/checkout@v4
@@ -309,7 +315,7 @@ jobs:
     needs: [jobs_sync]
     name: Make iOS PR
     runs-on: ubuntu-latest
-    if: ${{ inputs.UPDATE_PULL_REQUESTS == 'true' }}
+    if: ${{ github.event_name == 'schedule' || inputs.UPDATE_PULL_REQUESTS == true }}
     steps:
       - name: Checkout Repo Content
         uses: actions/checkout@v4
@@ -340,13 +346,13 @@ jobs:
     needs: [jobs_sync]
     name: Make QA PR (Appium)
     runs-on: ubuntu-latest
-    if: ${{ inputs.UPDATE_PULL_REQUESTS == 'true' }}
+    if: ${{ github.event_name == 'schedule' || inputs.UPDATE_PULL_REQUESTS == true }}
     steps:
       - name: Checkout Repo Content
         uses: actions/checkout@v4
         with:
           path: 'scripts'
-      
+
       - name: Checkout Session Appium
         uses: ./scripts/actions/checkout_qa
 
