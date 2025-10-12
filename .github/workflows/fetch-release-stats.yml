@@ -1,0 +1,54 @@
+name: Fetch Release Stats
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch-stats:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          cd release_stats && npm install -D typescript @types/node tsx
+
+      - name: Run stats script
+        run: |
+          cd release_stats && npx tsx fetch-release-stats.ts
+
+      - name: Display CSV in summary
+        run: |
+          echo "# Release Download Statistics" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Snapshot Date:** $(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Convert CSV to markdown table
+          awk -F',' 'NR==1 {
+            print "| " $1 " | " $2 " | " $3 " | " $4 " | " $5 " | " $6 " | " $7 " | " $8 " | " $9 " | " $10 " | " $11 " |"
+            print "|---|---|---|---|---|---|---|---|---|---|---|"
+          } NR>1 {
+            print "| " $1 " | " $2 " | " $3 " | " $4 " | " $5 " | " $6 " | " $7 " | " $8 " | " $9 " | " $10 " | " $11 " |"
+          }' session-desktop-release-stats.csv >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload CSV artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-stats-${{ github.run_number }}
+          path: session-desktop-release-stats.csv
+          retention-days: 5
+
+      - name: Display CSV preview
+        run: |
+          echo "CSV Preview:"
+          head -n 5 session-desktop-release-stats.csv
