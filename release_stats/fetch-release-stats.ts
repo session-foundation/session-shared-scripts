@@ -2,8 +2,8 @@ import https from 'https';
 import fs from 'fs';
 
 // GitHub API configuration
-const REPO = 'session-foundation/session-desktop';
-const API_URL = `https://api.github.com/repos/${REPO}/releases`;
+const DESKTOP_API_URL = `https://api.github.com/repos/session-foundation/session-desktop/releases`;
+const ANDROID_API_URL = `https://api.github.com/repos/session-foundation/session-android/releases`;
 
 // Types
 interface Asset {
@@ -17,7 +17,7 @@ interface Release {
   assets: Asset[];
 }
 
-interface ReleaseStats {
+interface DesktopReleaseStats {
   version: string;
   snapshotDate: string;
   dateCaptured: string;
@@ -90,10 +90,10 @@ function getCurrentDate(): string {
 }
 
 // Main function
-async function generateReleaseStatsCSV(): Promise<void> {
+async function generateDesktopReleaseStatsCSV(): Promise<void> {
   try {
     console.log('Fetching releases from GitHub...');
-    const releases = await fetchJSON(API_URL);
+    const releases = await fetchJSON(DESKTOP_API_URL);
 
     // Take only the last 10 releases
     const last10Releases = releases.slice(0, 10);
@@ -113,7 +113,7 @@ async function generateReleaseStatsCSV(): Promise<void> {
 
     // Data rows
     for (const release of last10Releases) {
-      const stats: ReleaseStats = {
+      const stats: DesktopReleaseStats = {
         version: release.tag_name.replace(/^v/, ''), // Remove 'v' prefix
         snapshotDate: snapshotDate,
         dateCaptured: release.published_at.split('T')[0], // Get YYYY-MM-DD
@@ -174,5 +174,164 @@ async function generateReleaseStatsCSV(): Promise<void> {
   }
 }
 
-// Run the script
-generateReleaseStatsCSV();
+// Android-specific types
+interface AndroidReleaseStats {
+  version: string;
+  snapshotDate: string;
+  dateCaptured: string;
+  aabDownloads: number;
+  apkArm64Downloads: number;
+  apkArmv7aDownloads: number;
+  apkUniversalHuaweiDownloads: number;
+  apkUniversalPlayDownloads: number;
+  apkX86Downloads: number;
+  apkX86_64Downloads: number;
+}
+
+// Helper function to count downloads for Android APKs with specific architecture
+function countAndroidDownloadsByPattern(
+  assets: any[],
+  extension: string,
+  architecture: string,
+  buildType: string = 'play-release'
+): number {
+  return assets
+    .filter(
+      (asset) =>
+        asset.name.endsWith(extension) &&
+        asset.name.includes(architecture) &&
+        asset.name.includes(buildType)
+    )
+    .reduce((sum, asset) => sum + asset.download_count, 0);
+}
+
+// Helper function for AAB files
+function countAABDownloads(assets: any[]): number {
+  return assets
+    .filter(
+      (asset) =>
+        asset.name.endsWith('.aab') && asset.name.includes('play-release')
+    )
+    .reduce((sum, asset) => sum + asset.download_count, 0);
+}
+
+// Helper function for universal APKs
+function countUniversalAPKDownloads(
+  assets: any[],
+  storeType: 'play' | 'huawei'
+): number {
+  return assets
+    .filter(
+      (asset) =>
+        asset.name.endsWith('.apk') &&
+        asset.name.includes('universal') &&
+        asset.name.includes(`${storeType}-release`)
+    )
+    .reduce((sum, asset) => sum + asset.download_count, 0);
+}
+
+// Helper function to count downloads for x86 (excluding x86_64)
+function countX86Downloads(assets: any[]): number {
+  return assets
+    .filter(
+      (asset) =>
+        asset.name.endsWith('.apk') &&
+        asset.name.includes('x86') &&
+        !asset.name.includes('x86_64') && // Explicitly exclude x86_64
+        asset.name.includes('play-release')
+    )
+    .reduce((sum, asset) => sum + asset.download_count, 0);
+}
+
+// Main function for Android releases
+async function generateAndroidReleaseStatsCSV(): Promise<void> {
+  try {
+    console.log('Fetching releases from GitHub...');
+    const releases = await fetchJSON(ANDROID_API_URL);
+
+    // Take only the last 10 releases
+    const last10Releases = releases.slice(0, 10);
+
+    console.log(`Processing ${last10Releases.length} releases...`);
+
+    const snapshotDate = getCurrentDate();
+    console.log(`Snapshot date: ${snapshotDate}`);
+
+    // Build CSV data
+    const csvRows: string[] = [];
+
+    // Header row
+    csvRows.push(
+      'version,snapshot_date,release_date,.aab,.apk_arm64,.apk_armv7a,.apk_universal_huawei,.apk_universal_play,.apk_x86,.apk_x86_64'
+    );
+
+    // Data rows
+    for (const release of last10Releases) {
+      const stats: AndroidReleaseStats = {
+        version: release.tag_name.replace(/^v/, ''),
+        snapshotDate: snapshotDate,
+        dateCaptured: release.published_at.split('T')[0],
+        aabDownloads: countAABDownloads(release.assets),
+        apkArm64Downloads: countAndroidDownloadsByPattern(
+          release.assets,
+          '.apk',
+          'arm64-v8a'
+        ),
+        apkArmv7aDownloads: countAndroidDownloadsByPattern(
+          release.assets,
+          '.apk',
+          'armeabi-v7a'
+        ),
+        apkUniversalHuaweiDownloads: countUniversalAPKDownloads(
+          release.assets,
+          'huawei'
+        ),
+        apkUniversalPlayDownloads: countUniversalAPKDownloads(
+          release.assets,
+          'play'
+        ),
+        apkX86Downloads: countX86Downloads(release.assets), // Use the dedicated function
+        apkX86_64Downloads: countAndroidDownloadsByPattern(
+          release.assets,
+          '.apk',
+          'x86_64'
+        ),
+      };
+
+      csvRows.push(
+        [
+          stats.version,
+          stats.snapshotDate,
+          stats.dateCaptured,
+          stats.aabDownloads,
+          stats.apkArm64Downloads,
+          stats.apkArmv7aDownloads,
+          stats.apkUniversalHuaweiDownloads,
+          stats.apkUniversalPlayDownloads,
+          stats.apkX86Downloads,
+          stats.apkX86_64Downloads,
+        ].join(',')
+      );
+    }
+
+    // Write to file
+    const csvContent = csvRows.join('\n');
+    const filename = 'session-android-release-stats.csv';
+
+    fs.writeFileSync(filename, csvContent);
+
+    console.log(`\nCSV file generated: ${filename}`);
+    console.log(`Total releases processed: ${last10Releases.length}`);
+    console.log('\nFull content:');
+    console.log(csvRows.join('\n'));
+  } catch (error) {
+    console.error(
+      'Error:',
+      error instanceof Error ? error.message : 'Unknown error'
+    );
+    process.exit(1);
+  }
+}
+
+generateDesktopReleaseStatsCSV();
+generateAndroidReleaseStatsCSV();
