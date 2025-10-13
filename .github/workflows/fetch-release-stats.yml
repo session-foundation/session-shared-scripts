@@ -26,9 +26,9 @@ jobs:
         run: |
           cd release_stats && npx tsx fetch-release-stats.ts
 
-      - name: Display CSV in summary
+      - name: Display Desktop CSV in summary
         run: |
-          echo "# Release Download Statistics" >> $GITHUB_STEP_SUMMARY
+          echo "# Desktop Release Download Statistics" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Snapshot Date:** $(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -41,14 +41,17 @@ jobs:
             print "| " $1 " | " $2 " | " $3 " | " $4 " | " $5 " | " $6 " | " $7 " | " $8 " | " $9 " | " $10 " | " $11 " |"
           }' release_stats/session-desktop-release-stats.csv >> $GITHUB_STEP_SUMMARY
 
-      - name: Upload CSV artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-stats-${{ github.run_number }}
-          path: release_stats/session-desktop-release-stats.csv
-          retention-days: 5
-
-      - name: Display CSV preview
+      - name: Display Android CSV in summary
         run: |
-          echo "CSV Preview:"
-          head -n 5 release_stats/session-desktop-release-stats.csv
+          echo "# Android Release Download Statistics" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Snapshot Date:** $(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Convert CSV to markdown table
+          awk -F',' 'NR==1 {
+            print "| " $1 " | " $2 " | " $3 " | " $4 " | " $5 " | " $6 " | " $7 " | " $8 " | " $9 " | " $10 " | " $11 " |"
+            print "|---|---|---|---|---|---|---|---|---|---|---|"
+          } NR>1 {
+            print "| " $1 " | " $2 " | " $3 " | " $4 " | " $5 " | " $6 " | " $7 " | " $8 " | " $9 " | " $10 " | " $11 " |"
+          }' release_stats/session-android-release-stats.csv >> $GITHUB_STEP_SUMMARY
