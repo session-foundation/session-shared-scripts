@@ -269,7 +269,7 @@ jobs:
           path: "${{ github.workspace }}/android/app/src/main"
 
       - name: Create Android Pull Request
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v7
         with:
           path: 'android'
           token: ${{ secrets.CROWDIN_PR_TOKEN }}
@@ -300,7 +300,7 @@ jobs:
           path: "${{ github.workspace }}/desktop"
 
       - name: Create Desktop Pull Request
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v7
         with:
           path: 'desktop'
           token: ${{ secrets.CROWDIN_PR_TOKEN }}
@@ -332,7 +332,7 @@ jobs:
           path: "${{ github.workspace }}/ios"
 
       - name: Create iOS Pull Request
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v7
         with:
           path: 'ios'
           token: ${{ secrets.CROWDIN_PR_TOKEN }}
@@ -362,7 +362,7 @@ jobs:
           path: "${{ github.workspace }}/appium/run/localizer"
 
       - name: Create QA Pull Request
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v7
         with:
           path: 'appium'
           token: ${{ secrets.CROWDIN_PR_TOKEN }}
