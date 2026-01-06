@@ -1,0 +1,34 @@
+name: Discord Failure Notification
+
+on:
+  workflow_run:
+    workflows: 
+      - "Check for Crowdin Updates"
+      - "Test Failure Notification"
+    types:
+      - completed
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    steps:
+      - name: Send Discord notification
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_ROLE_ID: ${{ secrets.DISCORD_ROLE_ID }}
+        run: |
+          curl -H "Content-Type: application/json" \
+            -d '{
+              "content": "<@&'"$DISCORD_ROLE_ID"'> ⚠️ GitHub Action failed!",
+              "embeds": [{
+                "title": "Workflow Failed: ${{ github.event.workflow_run.name }}",
+                "url": "${{ github.event.workflow_run.html_url }}",
+                "color": 15158332,
+                "fields": [
+                  {"name": "Repository", "value": "${{ github.repository }}", "inline": true},
+                  {"name": "Branch", "value": "${{ github.event.workflow_run.head_branch }}", "inline": true}
+                ]
+              }]
+            }' \
+            "$DISCORD_WEBHOOK_URL"
