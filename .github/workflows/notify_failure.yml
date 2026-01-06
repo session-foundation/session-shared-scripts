@@ -17,12 +17,19 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_ROLE_ID: ${{ secrets.DISCORD_ROLE_ID }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
         run: |
+          if [ "$WORKFLOW_NAME" = "Test Failure Notification" ]; then
+            FLAGS=4096
+          else
+            FLAGS=0
+          fi
           curl -H "Content-Type: application/json" \
             -d '{
               "content": "<@&'"$DISCORD_ROLE_ID"'> ⚠️ GitHub Action failed!",
+              "flags": '"$FLAGS"',
               "embeds": [{
-                "title": "Workflow Failed: ${{ github.event.workflow_run.name }}",
+                "title": "Workflow Failed: '"$WORKFLOW_NAME"'",
                 "url": "${{ github.event.workflow_run.html_url }}",
                 "color": 15158332,
                 "fields": [
