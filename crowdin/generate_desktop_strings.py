@@ -1,13 +1,16 @@
 import os
 import json
 import re
-from typing import Dict, List
-import xml.etree.ElementTree as ET
-import sys
 import argparse
 from pathlib import Path
-from colorama import Fore, Style
-from generate_shared import clean_string, load_glossary_dict, setup_generation
+from typing import Dict, List, Any
+from generate_shared import (
+    load_parsed_translations,
+    clean_string,
+    print_progress,
+    print_success,
+    run_main
+)
 
 # Customizable mapping for output folder hierarchy
 # Add entries here to customize the output path for specific locales
@@ -29,110 +32,91 @@ LOCALE_PATH_MAPPING = {
 }
 
 
-# Parse command-line arguments
-parser = argparse.ArgumentParser(description='Convert a XLIFF translation files to JSON.')
-parser.add_argument('--qa_build', help='Set to true to output only English strings (only used for QA)', action=argparse.BooleanOptionalAction)
-parser.add_argument('raw_translations_directory', help='Directory which contains the raw translation files')
-parser.add_argument('translations_output_directory', help='Directory to save the converted translation files')
-parser.add_argument('non_translatable_strings_output_path', help='Path to save the non-translatable strings to')
-args = parser.parse_args()
-
-INPUT_DIRECTORY = args.raw_translations_directory
-TRANSLATIONS_OUTPUT_DIRECTORY = args.translations_output_directory
-NON_TRANSLATABLE_STRINGS_OUTPUT_PATH = args.non_translatable_strings_output_path
-IS_QA_BUILD = args.qa_build
-
-
-def matches_braced_pattern(string):
+def matches_braced_pattern(string: str) -> bool:
     return re.search(r"\{(.+?)\}", string) is not None
+
 
 def snake_to_camel(snake_str: str) -> str:
     parts = snake_str.split('_')
     return parts[0].lower() + ''.join(word.capitalize() for word in parts[1:])
 
-def parse_xliff(file_path):
-    tree = ET.parse(file_path)
-    root = tree.getroot()
-    namespace = {'ns': 'urn:oasis:names:tc:xliff:document:1.2'}
-    translations = {}
 
-    # Handle plural groups
-    for group in root.findall('.//ns:group[@restype="x-gettext-plurals"]', namespaces=namespace):
-        plural_forms = {}
-        resname = None
-        for trans_unit in group.findall('ns:trans-unit', namespaces=namespace):
-            if resname is None:
-                resname = trans_unit.get('resname')
-            target = trans_unit.find('ns:target', namespaces=namespace)
-            context_group = trans_unit.find('ns:context-group', namespaces=namespace)
-            plural_form = context_group.find('ns:context[@context-type="x-plural-form"]', namespaces=namespace)
-            if target is not None and target.text and plural_form is not None:
-                form = plural_form.text.split(':')[-1].strip().lower()
-                plural_forms[form] = target.text
-        if resname and plural_forms:
-            translations[resname] = plural_forms
-
-    # Handle non-plural translations
-    for trans_unit in root.findall('.//ns:trans-unit', namespaces=namespace):
-        resname = trans_unit.get('resname')
-        if resname not in translations:  # This is not part of a plural group
-            target = trans_unit.find('ns:target', namespaces=namespace)
-            if target is not None and target.text:
-                translations[resname] = target.text
-
-    return translations
-
-
-def generate_icu_pattern(target, glossary_dict : Dict[str,str]):
-    if isinstance(target, dict):  # It's a plural group
+def generate_icu_pattern(trans_data: Dict[str, Any] | str, glossary_dict: Dict[str, str]) -> str:
+    """
+    Generate an ICU pattern from translation data.
+    Args:
+        trans_data: Either a dict with 'type' and 'forms'/'value', or a raw string
+        glossary_dict: Dictionary of non-translatable strings
+    Returns:
+        ICU-formatted string
+    """
+    # Handle raw strings (from glossary)
+    if isinstance(trans_data, str):
+        return clean_string(trans_data, False, glossary_dict, {})
+    if trans_data['type'] == 'plural':
         pattern_parts = []
-        for form, value in target.items():
+        for form, value in trans_data['forms'].items():
             if form in ['zero', 'one', 'two', 'few', 'many', 'other', 'exact', 'fractional']:
-                value = clean_string(value, False, glossary_dict, {})
-                pattern_parts.append(f"{form} [{value}]")
-
+                cleaned_value = clean_string(value, False, glossary_dict, {})
+                pattern_parts.append(f"{form} [{cleaned_value}]")
         return "{{count, plural, {0}}}".format(" ".join(pattern_parts))
-    else:  # It's a regular string
-        return clean_string(target, False, glossary_dict, {})
+    else:
+        return clean_string(trans_data['value'], False, glossary_dict, {})
 
-def convert_xliff_to_json(input_file, output_dir, locale, locale_two_letter_code, glossary_dict):
-    if not os.path.exists(input_file):
-        raise FileNotFoundError(f"Could not find '{input_file}' in raw translations directory")
 
-    # Parse the XLIFF and convert to XML
-    translations = parse_xliff(input_file)
+def get_output_locale(locale: str, two_letter_code: str) -> str:
+    return LOCALE_PATH_MAPPING.get(locale, LOCALE_PATH_MAPPING.get(two_letter_code, two_letter_code))
+
+
+def convert_locale_to_json(
+    translations: Dict[str, Any],
+    glossary_dict: Dict[str, str],
+    output_dir: str,
+    locale: str,
+    two_letter_code: str
+) -> str:
+    """
+    Convert translations for a single locale to JSON format.
+    Args:
+        translations: Dictionary of translations for this locale
+        glossary_dict: Dictionary of non-translatable strings
+        output_dir: Base output directory
+        locale: Full locale code
+        two_letter_code: Two-letter language code
+    Returns:
+        The output locale name used
+    """
     sorted_translations = sorted(translations.items())
     converted_translations = {}
 
-    for resname, target in sorted_translations:
-        converted_translations[resname] = generate_icu_pattern(target, glossary_dict)
+    for resname, trans_data in sorted_translations:
+        converted_translations[resname] = generate_icu_pattern(trans_data, glossary_dict)
 
+    # Add glossary items (converted to camelCase)
+    for resname, text in glossary_dict.items():
+        converted_translations[snake_to_camel(resname)] = generate_icu_pattern(text, glossary_dict)
 
-    for resname in glossary_dict:
-        target = glossary_dict[resname]
-        # Note: this adds the glossary dict items to the translated strings.
-        # This way, we can use desktop <Localiser /> and tr function with them directly
-        converted_translations[snake_to_camel(resname)] = generate_icu_pattern(target, glossary_dict)
-
-    # Generate output files
-    output_locale = LOCALE_PATH_MAPPING.get(locale, LOCALE_PATH_MAPPING.get(locale_two_letter_code, locale_two_letter_code))
+    # Write output
+    output_locale = get_output_locale(locale, two_letter_code)
     locale_output_dir = os.path.join(output_dir, output_locale)
     output_file = os.path.join(locale_output_dir, 'messages.json')
     os.makedirs(locale_output_dir, exist_ok=True)
 
     with open(output_file, 'w', encoding='utf-8') as file:
         json.dump(converted_translations, file, ensure_ascii=False, indent=2, sort_keys=True)
-        file.write('\n')
-        file.write('\n')
+        file.write('\n\n')
+
     return output_locale
 
 
-
-def convert_non_translatable_strings_to_type_script(input_file: str, output_path: str, exported_locales: List[str], rtl_languages: List[str]):
-    glossary_dict = load_glossary_dict(input_file)
+def generate_typescript_constants(
+    glossary_dict: Dict[str, str],
+    output_path: str,
+    exported_locales: List[str],
+    rtl_languages: List[Dict]
+):
     rtl_locales = sorted([lang["twoLettersCode"] for lang in rtl_languages])
 
-    # Output the file in the desired format
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
     joined_exported_locales = ",".join(f"\n  '{locale}'" for locale in exported_locales)
@@ -140,58 +124,85 @@ def convert_non_translatable_strings_to_type_script(input_file: str, output_path
 
     with open(output_path, 'w', encoding='utf-8') as file:
         file.write('export enum LOCALE_DEFAULTS {\n')
-        for key in glossary_dict:
-            text = glossary_dict[key]
-            # constant strings that have braces in them are not constants. We add them to the localised strings output
-            # for easy replacing of their variables
-            if(not matches_braced_pattern(text)):
+
+        for key, text in glossary_dict.items():
+            if not matches_braced_pattern(text):
                 cleaned_text = clean_string(text, False, glossary_dict, {})
                 file.write(f"  {key} = '{cleaned_text}',\n")
 
-        file.write('}\n')
-        file.write('\n')
-        file.write(f"export const rtlLocales = [{joined_rtl_locales}];\n")
-        file.write('\n')
-        file.write(f"export const crowdinLocales = [{joined_exported_locales},\n] as const;\n")
-        file.write('\n')
-        file.write("export type CrowdinLocale = (typeof crowdinLocales)[number];\n")
-        file.write('\n')
+        file.write('}\n\n')
+        file.write(f"export const rtlLocales = [{joined_rtl_locales}];\n\n")
+        file.write(f"export const crowdinLocales = [{joined_exported_locales},\n] as const;\n\n")
+        file.write("export type CrowdinLocale = (typeof crowdinLocales)[number];\n\n")
         file.write('export function isCrowdinLocale(locale: string): locale is CrowdinLocale {\n')
         file.write('  return crowdinLocales.includes(locale as CrowdinLocale);\n')
-        file.write('}\n')
-        file.write('\n')
+        file.write('}\n\n')
 
 
-def convert_all_files(input_directory: str, is_qa_build: bool):
-    setup_values = setup_generation(input_directory)
-    source_language, rtl_languages, non_translatable_strings_file, target_languages = setup_values.values()
+def main():
+    parser = argparse.ArgumentParser(description='Convert parsed translations to JSON.')
+    parser.add_argument(
+        '--qa_build',
+        help='Set to true to output only English strings (only used for QA)',
+        action=argparse.BooleanOptionalAction
+    )
+    parser.add_argument(
+        'parsed_translations_file',
+        help='Path to the parsed translations JSON file'
+    )
+    parser.add_argument(
+        'translations_output_directory',
+        help='Directory to save the converted translation files'
+    )
+    parser.add_argument(
+        'non_translatable_strings_output_path',
+        help='Path to save the non-translatable strings to'
+    )
+    args = parser.parse_args()
+    is_qa_build = args.qa_build or False
 
-    # Convert the XLIFF data to the desired format
-    print(f"\033[2K{Fore.WHITE}⏳ Converting translations to target format...{Style.RESET_ALL}", end='\r')
+    parsed_data = load_parsed_translations(args.parsed_translations_file)
+    glossary_dict = parsed_data['glossary']
+    source_language = parsed_data['source_language']
+    target_languages = parsed_data['target_languages']
+    rtl_languages = parsed_data['rtl_languages']
+    locales = parsed_data['locales']
+
+    print_progress("Converting translations to target format...")
     exported_locales = []
-    glossary_dict = load_glossary_dict(non_translatable_strings_file)
 
-    for language in [source_language] + ([] if is_qa_build else target_languages):
+    languages_to_process = [source_language] + ([] if is_qa_build else target_languages)
+
+    for language in languages_to_process:
         lang_locale = language['locale']
         lang_two_letter_code = language['twoLettersCode']
-        print(f"\033[2K{Fore.WHITE}⏳ Converting translations for {lang_locale} to target format...{Style.RESET_ALL}", end='\r')
-        input_file = os.path.join(input_directory, f"{lang_locale}.xliff")
-        exported_as = convert_xliff_to_json(input_file, TRANSLATIONS_OUTPUT_DIRECTORY, lang_locale, lang_two_letter_code, glossary_dict)
+
+        print_progress(f"Converting translations for {lang_locale} to target format...")
+
+        locale_data = locales.get(lang_locale)
+        if locale_data is None:
+            raise ValueError(f"Missing locale data for {lang_locale}")
+
+        exported_as = convert_locale_to_json(
+            locale_data['translations'],
+            glossary_dict,
+            args.translations_output_directory,
+            lang_locale,
+            lang_two_letter_code
+        )
         exported_locales.append(exported_as)
-    print(f"\033[2K{Fore.GREEN}✅ All conversions complete{Style.RESET_ALL}")
 
-    # Convert the non-translatable strings to the desired format
-    print(f"\033[2K{Fore.WHITE}⏳ Generating static strings file...{Style.RESET_ALL}", end='\r')
+    print_success("All conversions complete")
 
-    convert_non_translatable_strings_to_type_script(non_translatable_strings_file, NON_TRANSLATABLE_STRINGS_OUTPUT_PATH, exported_locales, rtl_languages)
-    print(f"\033[2K{Fore.GREEN}✅ Static string generation complete{Style.RESET_ALL}")
+    print_progress("Generating static strings file...")
+    generate_typescript_constants(
+        glossary_dict,
+        args.non_translatable_strings_output_path,
+        exported_locales,
+        rtl_languages
+    )
+    print_success("Static string generation complete")
+
 
 if __name__ == "__main__":
-    try:
-        convert_all_files(INPUT_DIRECTORY, IS_QA_BUILD)
-    except KeyboardInterrupt:
-        print("\nProcess interrupted by user")
-        sys.exit(0)
-    except Exception as e:
-        print(f"\033[2K{Fore.RED}❌ An error occurred: {str(e)}")
-        sys.exit(1)
+    run_main(main)

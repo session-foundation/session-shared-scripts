@@ -1,14 +1,16 @@
 import os
 import json
-import xml.etree.ElementTree as ET
-import sys
 import argparse
-import html
 from pathlib import Path
-from colorama import Fore, Style
 from datetime import datetime
-from generate_shared import load_glossary_dict, clean_string, setup_generation
-from typing import Dict
+from typing import Dict, Any
+from generate_shared import (
+    load_parsed_translations,
+    clean_string,
+    print_progress,
+    print_success,
+    run_main
+)
 
 AUTO_REPLACE_STATIC_STRINGS = False
 
@@ -21,103 +23,26 @@ LANGUAGE_MAPPING = {
     'tl': None,             # Tagalog (not supported, we have Filipino which might have to be enough for now)
 }
 
-# Parse command-line arguments
-parser = argparse.ArgumentParser(description='Convert a XLIFF translation files to Apple String Catalog.')
-parser.add_argument('raw_translations_directory', help='Directory which contains the raw translation files')
-parser.add_argument('translations_output_directory', help='Directory to save the converted translation files')
-parser.add_argument(
-    'non_translatable_strings_output_paths',
-    nargs='+',  # Expect one or more arguments
-    help='Paths to save the non-translatable strings to'
-)
-args = parser.parse_args()
 
-INPUT_DIRECTORY = args.raw_translations_directory
-TRANSLATIONS_OUTPUT_DIRECTORY = args.translations_output_directory
-NON_TRANSLATABLE_STRINGS_OUTPUT_PATHS = args.non_translatable_strings_output_paths
+def get_mapped_language(lang_id: str) -> str | None:
+    """Map a language ID to its iOS equivalent, or return None if unsupported."""
+    if lang_id in LANGUAGE_MAPPING:
+        return LANGUAGE_MAPPING[lang_id]
+    return lang_id
 
-def filter_and_map_language_ids(target_languages):
-    result = []
-    for lang in target_languages:
-        if lang['id'] in LANGUAGE_MAPPING:
-            mapped_value = LANGUAGE_MAPPING[lang['id']]
-            if mapped_value is not None:
-                lang['mapped_id'] = mapped_value
-                result.append(lang)
-        else:
-            lang['mapped_id'] = lang['id']
-            result.append(lang)
-    return result
 
-def parse_xliff(file_path):
-    tree = ET.parse(file_path)
-    root = tree.getroot()
-    namespace = {'ns': 'urn:oasis:names:tc:xliff:document:1.2'}
-    translations = {}
+def convert_placeholders_for_plurals(forms: Dict[str, str], glossary_dict: Dict[str, str]) -> Dict[str, str]:
+    """Replace {count} with %lld for iOS plural forms."""
+    converted = {}
+    for form, value in forms.items():
+        converted[form] = clean_string(
+            value,
+            False,
+            glossary_dict if AUTO_REPLACE_STATIC_STRINGS else {},
+            {'{count}': '%lld'}
+        )
+    return converted
 
-    file_elem = root.find('ns:file', namespaces=namespace)
-    if file_elem is None:
-        raise ValueError(f"Invalid XLIFF structure in file: {file_path}")
-
-    target_language = file_elem.get('target-language')
-    if target_language is None:
-        raise ValueError(f"Missing target-language in file: {file_path}")
-
-    if target_language in LANGUAGE_MAPPING:
-        target_language = LANGUAGE_MAPPING[target_language]
-
-    # Handle plural groups first (want to make sure any warnings shown are correctly attributed to plurals or non-plurals)
-    for group in root.findall('.//ns:group[@restype="x-gettext-plurals"]', namespaces=namespace):
-        plural_forms = {}
-        resname = None
-        for trans_unit in group.findall('ns:trans-unit', namespaces=namespace):
-            if resname is None:
-                resname = trans_unit.get('resname') or trans_unit.get('id')
-
-            target = trans_unit.find('ns:target', namespaces=namespace)
-            source = trans_unit.find('ns:source', namespaces=namespace)
-            context_group = trans_unit.find('ns:context-group', namespaces=namespace)
-
-            if context_group is not None:
-                plural_form = context_group.find('ns:context[@context-type="x-plural-form"]', namespaces=namespace)
-                if plural_form is not None:
-                    form = plural_form.text.split(':')[-1].strip().lower()
-
-                    if target is not None and target.text:
-                        plural_forms[form] = target.text
-                    elif source is not None and source.text:
-                        # If target is missing or empty, use source as a fallback
-                        plural_forms[form]  = source.text
-                        print(f"Warning: Using source text for plural form '{form}' of '{resname}' in '{target_language}' as target is missing or empty")
-
-        if resname and plural_forms:
-            translations[resname] = plural_forms
-
-    # Then handle non-plurals (ignore any existing values as they are plurals)
-    for trans_unit in root.findall('.//ns:trans-unit', namespaces=namespace):
-        resname = trans_unit.get('resname') or trans_unit.get('id')
-        if resname is None or resname in translations:
-            continue  # Skip entries without a resname/id and entries which already exist (ie. plurals)
-
-        target = trans_unit.find('ns:target', namespaces=namespace)
-        source = trans_unit.find('ns:source', namespaces=namespace)
-
-        if target is not None and target.text:
-            translations[resname] = target.text
-        elif source is not None and source.text:
-            # If target is missing or empty, use source as a fallback
-            translations[resname] = source.text
-            print(f"Warning: Using source text for '{resname}' in '{target_language}' as target is missing or empty")
-
-    return translations, target_language
-
-def convert_placeholders_for_plurals(translations: Dict[str,str], glossary_dict: Dict[str,str]):
-    # Replace {count} with %lld for iOS
-    converted_translations = {}
-    for form, value in translations.items():
-        converted_translations[form] = clean_string(value, False, glossary_dict if AUTO_REPLACE_STATIC_STRINGS else {}, {'{count}': '%lld'})
-
-    return converted_translations
 
 def sort_dict_case_insensitive(data):
     if isinstance(data, dict):
@@ -127,49 +52,58 @@ def sort_dict_case_insensitive(data):
     else:
         return data
 
-def convert_xliff_to_string_catalog(input_dir, output_dir, source_language, target_languages, glossary_dict):
+
+def build_string_catalog(parsed_data: Dict[str, Any], glossary_dict: Dict[str, str]) -> Dict[str, Any]:
+    """
+    Build an Xcode String Catalog from pre-parsed translation data.
+    Args:
+        parsed_data: The pre-parsed translation data
+        glossary_dict: Dictionary of non-translatable strings
+    Returns:
+        String catalog dictionary ready for JSON serialization
+    """
     string_catalog = {
         "sourceLanguage": "en",
         "strings": {},
         "version": "1.0"
     }
-    target_mapped_languages = filter_and_map_language_ids(target_languages)
-    source_language['mapped_id'] = source_language['id']
 
-    # We need to sort the full language list (if the source language comes first rather than in alphabetical order
-    # then the output will differ from what Xcode generates)
-    all_languages = [source_language] + target_mapped_languages
-    sorted_languages = sorted(all_languages, key=lambda x: x['mapped_id'])
+    locales = parsed_data['locales']
+    # Build list of languages with mapped IDs, filtering out unsupported ones
+    languages_with_mapping = []
+    for locale, locale_data in locales.items():
+        lang_info = locale_data['language_info']
+        mapped_id = get_mapped_language(lang_info['id'])
+        if mapped_id is not None:
+            languages_with_mapping.append({
+                'locale': locale,
+                'mapped_id': mapped_id,
+                'data': locale_data
+            })
 
-    for language in sorted_languages:
-        lang_locale = language['locale']
-        input_file = os.path.join(input_dir, f"{lang_locale}.xliff")
+    # Sort languages alphabetically by mapped_id (Xcode does this)
+    languages_with_mapping.sort(key=lambda x: x['mapped_id'])
 
-        if not os.path.exists(input_file):
-            raise FileNotFoundError(f"Could not find '{input_file}' in raw translations directory")
+    for lang in languages_with_mapping:
+        locale = lang['locale']
+        target_language = lang['mapped_id']
+        translations = lang['data']['translations']
+        print_progress(f"Converting translations for {target_language} to target format...")
 
-        try:
-            translations, target_language = parse_xliff(input_file)
-        except Exception as e:
-            raise ValueError(f"Error processing locale {lang_locale}: {str(e)}")
-
-        print(f"\033[2K{Fore.WHITE}⏳ Converting translations for {target_language} to target format...{Style.RESET_ALL}", end='\r')
-
-        for resname, translation in translations.items():
+        for resname, trans_data in translations.items():
             if resname not in string_catalog["strings"]:
                 string_catalog["strings"][resname] = {
                     "extractionState": "manual",
                     "localizations": {}
                 }
 
-            if isinstance(translation, dict):  # It's a plural group
-                converted_translations = convert_placeholders_for_plurals(translation, glossary_dict)
+            if trans_data['type'] == 'plural':
+                forms = trans_data['forms']
+                converted_forms = convert_placeholders_for_plurals(forms, glossary_dict)
 
-                # Check if any of the translations contain '{count}'
-                contains_count = any('{count}' in value for value in translation.values())
-
+                contains_count = any('{count}' in value for value in forms.values())
                 if contains_count:
-                    # It's a standard plural which the code can switch off of using `{count}`
+                    # Standard plural using {count}
                     variations = {
                         "plural": {
                             form: {
@@ -177,12 +111,14 @@ def convert_xliff_to_string_catalog(input_dir, output_dir, source_language, targ
                                     "state": "translated",
                                     "value": value
                                 }
-                            } for form, value in converted_translations.items()
+                            } for form, value in converted_forms.items()
                         }
                     }
-                    string_catalog["strings"][resname]["localizations"][target_language] = {"variations": variations}
+                    string_catalog["strings"][resname]["localizations"][target_language] = {
+                        "variations": variations
+                    }
                 else:
-                    # Otherwise we need to use a custom format which uses just the `{count}` and replaces it with an entire string
+                    # Custom format using substitutions
                     string_catalog["strings"][resname]["localizations"][target_language] = {
                         "stringUnit": {
                             "state": "translated",
@@ -199,41 +135,46 @@ def convert_xliff_to_string_catalog(input_dir, output_dir, source_language, targ
                                                 "state": "translated",
                                                 "value": value
                                             }
-                                        } for form, value in converted_translations.items()
+                                        } for form, value in converted_forms.items()
                                     }
                                 }
                             }
                         }
                     }
             else:
+                # Regular string
+                value = trans_data['value']
                 string_catalog["strings"][resname]["localizations"][target_language] = {
                     "stringUnit": {
                         "state": "translated",
-                        "value": clean_string(translation, False, glossary_dict if AUTO_REPLACE_STATIC_STRINGS else {}, {})
+                        "value": clean_string(
+                            value,
+                            False,
+                            glossary_dict if AUTO_REPLACE_STATIC_STRINGS else {},
+                            {}
+                        )
                     }
                 }
 
-    # Note: Xcode sorts the strings in a case insensitive way so do the same here, apparently some versions of
-    # Python won't maintain insertion order once a dict is manipulated so we need to finalise the dict and then
-    # generate a correctly sorted one to be saved to disk
-    sorted_string_catalog = sort_dict_case_insensitive(string_catalog)
+    return sort_dict_case_insensitive(string_catalog)
 
+
+def write_string_catalog(string_catalog: Dict[str, Any], output_dir: str):
+    """Write the string catalog to disk."""
     output_file = os.path.join(output_dir, 'Localizable.xcstrings')
     os.makedirs(output_dir, exist_ok=True)
 
     with open(output_file, 'w', encoding='utf-8') as f:
-        # We need to add spaces around the `:` in the output beacuse Xcode inserts one when opening
-        # the `xcstrings` so if we don't then there is an absurd number of diffs...
-        json.dump(sorted_string_catalog, f, ensure_ascii=False, indent=2, separators=(',', ' : '))
+        # Add spaces around ':' to match Xcode's format
+        json.dump(string_catalog, f, ensure_ascii=False, indent=2, separators=(',', ' : '))
 
-def convert_non_translatable_strings_to_swift(input_file, output_paths):
-    glossary_dict = load_glossary_dict(input_file)
 
-    # Output the file in the desired format
+def generate_swift_constants(glossary_dict: Dict[str, str], output_paths: list):
+    """Generate Swift file with non-translatable string constants."""
     for path in output_paths:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         filename = os.path.basename(path)
-        enum_name, ext = os.path.splitext(filename)
+        enum_name, _ = os.path.splitext(filename)
 
         with open(path, 'w', encoding='utf-8') as file:
             file.write(f'// Copyright © {datetime.now().year} Rangeproof Pty Ltd. All rights reserved.\n')
@@ -242,33 +183,45 @@ def convert_non_translatable_strings_to_swift(input_file, output_paths):
             file.write('// stringlint:disable\n')
             file.write('\n')
             file.write(f'public enum {enum_name} {{\n')
-            for key in glossary_dict:
-                text = glossary_dict[key]
+
+            for key, text in glossary_dict.items():
                 cleaned_text = clean_string(text, False, glossary_dict, {})
                 file.write(f'    public static let {key}: String = "{cleaned_text}"\n')
 
             file.write('}\n')
 
-def convert_all_files(input_directory):
-    setup_values = setup_generation(input_directory)
-    source_language, rtl_languages, non_translatable_strings_file, target_languages = setup_values.values()
-    glossary_dict = load_glossary_dict(non_translatable_strings_file)
-    print(f"\033[2K{Fore.WHITE}⏳ Generating static strings file...{Style.RESET_ALL}", end='\r')
 
-    convert_non_translatable_strings_to_swift(non_translatable_strings_file, NON_TRANSLATABLE_STRINGS_OUTPUT_PATHS)
-    print(f"\033[2K{Fore.GREEN}✅ Static string generation complete{Style.RESET_ALL}")
+def main():
+    parser = argparse.ArgumentParser(
+        description='Convert parsed translations to Apple String Catalog.'
+    )
+    parser.add_argument(
+        'parsed_translations_file',
+        help='Path to the parsed translations JSON file'
+    )
+    parser.add_argument(
+        'translations_output_directory',
+        help='Directory to save the converted translation files'
+    )
+    parser.add_argument(
+        'non_translatable_strings_output_paths',
+        nargs='+',
+        help='Paths to save the non-translatable strings to'
+    )
+    args = parser.parse_args()
 
-    # Convert the XLIFF data to the desired format
-    print(f"\033[2K{Fore.WHITE}⏳ Converting translations to target format...{Style.RESET_ALL}", end='\r')
-    convert_xliff_to_string_catalog(input_directory, TRANSLATIONS_OUTPUT_DIRECTORY, source_language, target_languages,glossary_dict)
-    print(f"\033[2K{Fore.GREEN}✅ All conversions complete{Style.RESET_ALL}")
+    parsed_data = load_parsed_translations(args.parsed_translations_file)
+    glossary_dict = parsed_data['glossary']
+
+    print_progress("Generating static strings file...")
+    generate_swift_constants(glossary_dict, args.non_translatable_strings_output_paths)
+    print_success("Static string generation complete")
+
+    print_progress("Converting translations to target format...")
+    string_catalog = build_string_catalog(parsed_data, glossary_dict)
+    write_string_catalog(string_catalog, args.translations_output_directory)
+    print_success("All conversions complete")
+
 
 if __name__ == "__main__":
-    try:
-        convert_all_files(INPUT_DIRECTORY)
-    except KeyboardInterrupt:
-        print("\nProcess interrupted by user")
-        sys.exit(0)
-    except Exception as e:
-        print(f"\033[2K{Fore.RED}❌ An error occurred: {str(e)}")
-        sys.exit(1)
+    run_main(main)

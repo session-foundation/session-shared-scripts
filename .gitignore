@@ -4,6 +4,7 @@
 # Exclude venv folder
 venv
 
+.env
 
 __pycache__
 .vscode/

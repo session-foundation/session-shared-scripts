@@ -14,6 +14,11 @@ on:
         required: true
         type: boolean
         default: true
+      SKIP_VALIDATION_ERRORS:
+        description: 'Continue even if string validation fails'
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -77,10 +82,56 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  parse_translations:
+    name: Parse and validate translations
+    runs-on: ubuntu-latest
+    needs: [fetch_translations]
+    steps:
+      - name: Checkout Repo Content
+        uses: actions/checkout@v4
+        with:
+          path: 'scripts'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.12
+          cache: 'pip'
+
+      - name: Install Dependencies
+        shell: bash
+        run: |
+          pip install -r ${{ github.workspace }}/scripts/crowdin/requirements.txt
+
+      - name: Download raw translations
+        uses: actions/download-artifact@v4
+        with:
+          name: session-download
+          path: "${{ github.workspace }}/raw_translations"
+
+      - name: Parse and validate XLIFF files
+        run: |
+          python "${{ github.workspace }}/scripts/crowdin/parse_xliff.py" \
+            "${{ github.workspace }}/raw_translations" \
+            "${{ github.workspace }}/parsed_translations.json" \
+            ${{ inputs.SKIP_VALIDATION_ERRORS != true && '--error-on-validation-failure' || '' }} \
+            --validation-report "${{ github.workspace }}/validation_report.json"
+
+      - name: Upload parsed translations
+        uses: actions/upload-artifact@v4
+        with:
+          name: session-parsed
+          path: |
+            ${{ github.workspace }}/parsed_translations.json
+            ${{ github.workspace }}/validation_report.json
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 7
+
   build_ios:
     name: Build iOS strings
     runs-on: ubuntu-latest
-    needs: [fetch_translations]
+    needs: [parse_translations]
     steps:
       - name: Checkout Repo Content
         uses: actions/checkout@v4
@@ -93,10 +144,16 @@ jobs:
       - name: Setup shared
         uses: ./scripts/actions/setup_shared
 
+      - name: Download parsed translations
+        uses: actions/download-artifact@v4
+        with:
+          name: session-parsed
+          path: "${{ github.workspace }}"
+
       - name: Prepare iOS Strings
         run: |
           python "${{ github.workspace }}/scripts/crowdin/generate_ios_strings.py" \
-            "${{ github.workspace }}/raw_translations" \
+            "${{ github.workspace }}/parsed_translations.json" \
             "${{ github.workspace }}/ios/Session/Meta/Translations" \
             "${{ github.workspace }}/ios/SessionUIKit/Style Guide/Constants.swift"
       - name: Upload iOS artefacts
@@ -114,7 +171,7 @@ jobs:
 
   build_desktop:
     name: Build Desktop strings
-    needs: [fetch_translations]
+    needs: [parse_translations]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repo Content
@@ -128,11 +185,16 @@ jobs:
       - name: Checkout Desktop
         uses: ./scripts/actions/checkout_desktop
 
+      - name: Download parsed translations
+        uses: actions/download-artifact@v4
+        with:
+          name: session-parsed
+          path: "${{ github.workspace }}"
 
       - name: Prepare Desktop Strings
         run: |
           python "${{ github.workspace }}/scripts/crowdin/generate_desktop_strings.py" \
-            "${{ github.workspace }}/raw_translations" \
+            "${{ github.workspace }}/parsed_translations.json" \
             "${{ github.workspace }}/desktop/_locales" \
             "${{ github.workspace }}/desktop/ts/localization/constants.ts"
 
@@ -152,7 +214,7 @@ jobs:
 
   build_qa:
     name: Build QA strings
-    needs: [fetch_translations]
+    needs: [parse_translations]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repo Content
@@ -166,10 +228,16 @@ jobs:
       - name: Checkout Desktop
         uses: ./scripts/actions/checkout_desktop
 
+      - name: Download parsed translations
+        uses: actions/download-artifact@v4
+        with:
+          name: session-parsed
+          path: "${{ github.workspace }}"
+
       - name: Export QA Strings (json)
         run: |
           python "${{ github.workspace }}/scripts/crowdin/generate_desktop_strings.py" --qa_build \
-            "${{ github.workspace }}/raw_translations" \
+            "${{ github.workspace }}/parsed_translations.json" \
             "${{ github.workspace }}/desktop/_locales" \
             "${{ github.workspace }}/desktop/ts/localization/constants.ts"
       - name: Prepare QA strings (ts)
@@ -191,7 +259,7 @@ jobs:
   build_android:
     name: Build Android strings
     runs-on: ubuntu-latest
-    needs: [fetch_translations]
+    needs: [parse_translations]
 
     steps:
       - name: Checkout Repo Content
@@ -210,16 +278,24 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: 17
-          cache: gradle
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: wrapper
+          cache-read-only: false
+
+      - name: Download parsed translations
+        uses: actions/download-artifact@v4
+        with:
+          name: session-parsed
+          path: "${{ github.workspace }}"
 
       - name: Prepare Android Strings
         run: |
           rm -rf ${{ github.workspace }}/android/app/src/main/res/values*/strings.xml
           python "${{ github.workspace }}/scripts/crowdin/generate_android_strings.py" \
-            "${{ github.workspace }}/raw_translations" \
+            "${{ github.workspace }}/parsed_translations.json" \
             "${{ github.workspace }}/android/app/src/main/res" \
             "${{ github.workspace }}/android/app/src/main/java/org/session/libsession/utilities/NonTranslatableStringConstants.kt"
       - name: Upload Android artefacts
@@ -234,7 +310,16 @@ jobs:
           retention-days: 7
 
       - name: Validate strings for Android
-        run: cd ${{ github.workspace }}/android && ${{ github.workspace }}/android/gradlew app:mergePlayDebugResources
+        run: |
+          cd ${{ github.workspace }}/android
+          ./gradlew app:generatePlayDebugResValues \
+            --parallel \
+            --build-cache \
+            --configuration-cache \
+            -Dorg.gradle.jvmargs="-Xmx2g -XX:+UseParallelGC" \
+            -Dorg.gradle.caching=true \
+            -x lint \
+            -x test
 
 
   jobs_sync:
