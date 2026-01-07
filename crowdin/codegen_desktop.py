@@ -433,13 +433,13 @@ def generate_english_ts(
     content = f"""{DISCLAIMER_GENERATED}{DISCLAIMER_ENGLISH}import type {{ TokenSimpleNoArgs, TokenSimpleWithArgs, TokenPluralWithArgs, PluralForms }} from './locales';
 
 /** English strings without dynamic arguments */
-export const enSimpleNoArgs: Record<TokenSimpleNoArgs, string> = {simple_no_args_dict} as const;
+export const enSimpleNoArgs = {simple_no_args_dict} as const satisfies Record<TokenSimpleNoArgs, string>;
 
 /** English strings with dynamic arguments */
-export const enSimpleWithArgs: Record<TokenSimpleWithArgs, string> = {simple_with_args_dict} as const;
+export const enSimpleWithArgs = {simple_with_args_dict} as const satisfies Record<TokenSimpleWithArgs, string>;
 
 /** English plural strings */
-export const enPlurals: Record<TokenPluralWithArgs, PluralForms> = {plural_dict} as const;
+export const enPlurals = {plural_dict} as const satisfies Record<TokenPluralWithArgs, PluralForms>;
 """
 
     os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
@@ -500,11 +500,11 @@ def generate_locales_ts(
 ):
     """Generate locales.ts - types, constants, and utility functions."""
     # Token type strings
-    tokens_no_args_str = "\n    '" + \
-        "' |\n    '".join(tokens_no_args) + "'" if tokens_no_args else "never"
-    tokens_simple_with_args_str = "\n    '" + "' |\n    '".join(list(
+    tokens_no_args_str = "\n  '" + \
+        "' |\n  '".join(tokens_no_args) + "'" if tokens_no_args else "never"
+    tokens_simple_with_args_str = "\n  '" + "' |\n  '".join(list(
         tokens_simple_with_args.keys())) + "'" if tokens_simple_with_args else "never"
-    tokens_plural_with_args_str = "\n    '" + "' |\n    '".join(list(
+    tokens_plural_with_args_str = "\n  '" + "' |\n  '".join(list(
         tokens_plural_with_args.keys())) + "'" if tokens_plural_with_args else "never"
 
     tokens_union_simple_args = format_tokens_with_named_args(
@@ -557,30 +557,6 @@ export type TokensSimpleAndArgs = {tokens_union_simple_args};
 
 /** Argument types for plural strings */
 export type TokensPluralAndArgs = {tokens_union_plural_args};
-
-// ============================================================================
-// Locale Constants
-// ============================================================================
-
-/** Non-translatable string constants */
-export enum LOCALE_DEFAULTS {{
-{locale_defaults_str},
-}}
-
-/** Right-to-left locale codes */
-export const rtlLocales = [{rtl_locales_str}];
-
-/** All supported Crowdin locale codes */
-export const crowdinLocales = [{crowdin_locales_str},
-] as const;
-
-/** Crowdin locale type */
-export type CrowdinLocale = (typeof crowdinLocales)[number];
-
-/** Type guard for CrowdinLocale */
-export function isCrowdinLocale(locale: string): locale is CrowdinLocale {{
-  return crowdinLocales.indexOf(locale as CrowdinLocale) !== -1;
-}}
 """
 
     os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
@@ -603,19 +579,7 @@ def generate_constants_ts(
     crowdin_locales_str = ",".join(f"\n  '{locale}'" for locale in all_locales)
     rtl_locales_str = ", ".join(f"'{locale}'" for locale in rtl_locales)
 
-    # LOCALE_DEFAULTS enum (only for strings without variables)
-    locale_defaults_entries = []
-    for key, text in sorted(glossary_dict.items()):
-        if not re.search(r"\{.+?\}", text):
-            escaped_text = text.replace("'", "\\'")
-            locale_defaults_entries.append(f"  {key} = '{escaped_text}'")
-    locale_defaults_str = ",\n".join(locale_defaults_entries)
-
-    content = f"""{DISCLAIMER_GENERATED}/** Non-translatable string constants */
-export enum LOCALE_DEFAULTS {{
-{locale_defaults_str},
-}}
-
+    content = f"""{DISCLAIMER_GENERATED}
 /** Right-to-left locale codes */
 export const rtlLocales = [{rtl_locales_str}];
 
