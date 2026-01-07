@@ -182,32 +182,27 @@ jobs:
       - name: Setup shared
         uses: ./scripts/actions/setup_shared
 
-      - name: Checkout Desktop
-        uses: ./scripts/actions/checkout_desktop
-
       - name: Download parsed translations
         uses: actions/download-artifact@v4
         with:
           name: session-parsed
           path: "${{ github.workspace }}"
 
-      - name: Prepare Desktop Strings
+      - name: Generate Desktop TypeScript
         run: |
-          python "${{ github.workspace }}/scripts/crowdin/generate_desktop_strings.py" \
+          python "${{ github.workspace }}/scripts/crowdin/codegen_desktop.py" \
             "${{ github.workspace }}/parsed_translations.json" \
-            "${{ github.workspace }}/desktop/_locales" \
-            "${{ github.workspace }}/desktop/ts/localization/constants.ts"
-
-      - name: Validate strings for Desktop
-        run: cd ${{ github.workspace }}/desktop && npm install -g yarn && yarn build:locales
+            "${{ github.workspace }}/output/ts/localization/generated"
 
       - name: Upload Desktop artifacts
         uses: actions/upload-artifact@v4
         with:
           name: session-desktop
           path: |
-            ${{ github.workspace }}/desktop/_locales
-            ${{ github.workspace }}/desktop/ts/localization/constants.ts
+            ${{ github.workspace }}/output/ts/localization/generated/locales.ts
+            ${{ github.workspace }}/output/ts/localization/generated/english.ts
+            ${{ github.workspace }}/output/ts/localization/generated/translations.ts
+            ${{ github.workspace }}/output/ts/localization/generated/constants.ts
           overwrite: true
           if-no-files-found: warn
           retention-days: 7
@@ -225,33 +220,27 @@ jobs:
       - name: Setup shared
         uses: ./scripts/actions/setup_shared
 
-      - name: Checkout Desktop
-        uses: ./scripts/actions/checkout_desktop
-
       - name: Download parsed translations
         uses: actions/download-artifact@v4
         with:
           name: session-parsed
           path: "${{ github.workspace }}"
 
-      - name: Export QA Strings (json)
+      - name: Generate QA TypeScript (English only)
         run: |
-          python "${{ github.workspace }}/scripts/crowdin/generate_desktop_strings.py" --qa_build \
+          python "${{ github.workspace }}/scripts/crowdin/codegen_desktop.py" --qa-build \
             "${{ github.workspace }}/parsed_translations.json" \
-            "${{ github.workspace }}/desktop/_locales" \
-            "${{ github.workspace }}/desktop/ts/localization/constants.ts"
-      - name: Prepare QA strings (ts)
-        run: |
-          cd ${{ github.workspace }}/desktop/
-          python ./tools/localization/generateLocales.py --generate-types --print-problems --print-problem-strings --print-problem-formatting-tag-strings --error-on-problems
-          cd -
+            "${{ github.workspace }}/output"
+
       - name: Upload QA artefacts
         uses: actions/upload-artifact@v4
         with:
           name: session-qa
           path: |
-            ${{ github.workspace }}/desktop/ts/localization/locales.ts
-            ${{ github.workspace }}/desktop/ts/localization/constants.ts
+            ${{ github.workspace }}/output/locales.ts
+            ${{ github.workspace }}/output/english.ts
+            ${{ github.workspace }}/output/translations.ts
+            ${{ github.workspace }}/output/constants.ts
           overwrite: true
           if-no-files-found: warn
           retention-days: 7
@@ -381,8 +370,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: session-desktop
-          # this has to be the first shared parent on the upload artefact task for Desktop
-          path: "${{ github.workspace }}/desktop"
+          # Download to ts/localization folder in desktop repo
+          path: "${{ github.workspace }}/desktop/ts/localization"
 
       - name: Create Desktop Pull Request
         uses: peter-evans/create-pull-request@v6
