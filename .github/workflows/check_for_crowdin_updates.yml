@@ -230,17 +230,17 @@ jobs:
         run: |
           python "${{ github.workspace }}/scripts/crowdin/codegen_desktop.py" --qa-build \
             "${{ github.workspace }}/parsed_translations.json" \
-            "${{ github.workspace }}/output"
+            "${{ github.workspace }}/output/ts/localization/generated"
 
       - name: Upload QA artefacts
         uses: actions/upload-artifact@v4
         with:
           name: session-qa
           path: |
-            ${{ github.workspace }}/output/locales.ts
-            ${{ github.workspace }}/output/english.ts
-            ${{ github.workspace }}/output/translations.ts
-            ${{ github.workspace }}/output/constants.ts
+            ${{ github.workspace }}/output/ts/localization/generated/locales.ts
+            ${{ github.workspace }}/output/ts/localization/generated/english.ts
+            ${{ github.workspace }}/output/ts/localization/generated/translations.ts
+            ${{ github.workspace }}/output/ts/localization/generated/constants.ts
           overwrite: true
           if-no-files-found: warn
           retention-days: 7
@@ -370,8 +370,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: session-desktop
-          # Download to ts/localization folder in desktop repo
-          path: "${{ github.workspace }}/desktop/ts/localization"
+          # Download to ts/localization/generated folder in desktop repo
+          path: "${{ github.workspace }}/desktop/ts/localization/generated"
 
       - name: Create Desktop Pull Request
         uses: peter-evans/create-pull-request@v6

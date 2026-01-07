@@ -261,7 +261,6 @@ def categorize_strings(
 def generate_english_dictionary(
     en_locale: Dict[str, str],
     glossary_dict: Dict[str, str],
-    dict_name: str,
     keys: List[str]
 ) -> str:
     """Generate a TypeScript dictionary for English strings."""
@@ -296,11 +295,9 @@ def generate_english_plural_dictionary(
         for token, localized_string in plurals_with_token:
             replaced_string = replace_glossary_variables(
                 localized_string, glossary_dict)
-            form_lines.append(f"    {token}: \'{
-                              escape_str(replaced_string)}\'")
+            form_lines.append(f"    {token}: \'{escape_str(replaced_string)}\'")
 
-        entries.append(f"  {wrap_value(
-            key)}: {{\n" + ",\n".join(form_lines) + ",\n  }")
+        entries.append(f"  {wrap_value(key)}: {{\n" + ",\n".join(form_lines) + ",\n  }")
 
     return "{\n" + ",\n".join(entries) + ",\n}"
 
@@ -377,8 +374,7 @@ def generate_sparse_translations(
             for key in sorted(translations.keys()):
                 value = escape_str(translations[key])
                 string_entries.append(f"    {wrap_value(key)}: \'{value}\'")
-            locale_entries.append(f"  {wrap_value(
-                locale)}: {{\n" + ",\n".join(string_entries) + ",\n  }")
+            locale_entries.append(f"  {wrap_value(locale)}: {{\n" + ",\n".join(string_entries) + ",\n  }")
         if not locale_entries:
             return "{}"
         return "{\n" + ",\n".join(locale_entries) + ",\n}"
@@ -395,12 +391,9 @@ def generate_sparse_translations(
                 form_entries = []
                 for form in ['zero', 'one', 'two', 'few', 'many', 'other']:
                     if form in forms:
-                        form_entries.append(f"      {form}: \'{
-                                            escape_str(forms[form])}\'")
-                key_entries.append(f"    {wrap_value(
-                    key)}: {{\n" + ",\n".join(form_entries) + ",\n    }")
-            locale_entries.append(f"  {wrap_value(
-                locale)}: {{\n" + ",\n".join(key_entries) + ",\n  }")
+                        form_entries.append(f"      {form}: \'{escape_str(forms[form])}\'")
+                key_entries.append(f"    {wrap_value(key)}: {{\n" + ",\n".join(form_entries) + ",\n    }")
+            locale_entries.append(f"  {wrap_value(locale)}: {{\n" + ",\n".join(key_entries) + ",\n  }")
         if not locale_entries:
             return "{}"
         return "{\n" + ",\n".join(locale_entries) + ",\n}"
@@ -421,10 +414,10 @@ def generate_english_ts(
     output_path: str
 ):
     simple_no_args_dict = generate_english_dictionary(
-        en_locale, glossary_dict, "en", tokens_no_args
+        en_locale, glossary_dict, tokens_no_args
     )
     simple_with_args_dict = generate_english_dictionary(
-        en_locale, glossary_dict, "en", list(tokens_simple_with_args.keys())
+        en_locale, glossary_dict, list(tokens_simple_with_args.keys())
     )
     plural_dict = generate_english_plural_dictionary(
         en_locale, glossary_dict, list(tokens_plural_with_args.keys())
@@ -498,7 +491,7 @@ def generate_locales_ts(
     glossary_dict: Dict[str, str],
     output_path: str
 ):
-    """Generate locales.ts - types, constants, and utility functions."""
+    """Generate locales.ts - types, and utility functions."""
     # Token type strings
     tokens_no_args_str = "\n  '" + \
         "' |\n  '".join(tokens_no_args) + "'" if tokens_no_args else "never"
@@ -511,21 +504,6 @@ def generate_locales_ts(
         tokens_simple_with_args)
     tokens_union_plural_args = format_tokens_with_named_args(
         tokens_plural_with_args)
-
-    # Locale lists
-    all_locales = sorted(locales.keys())
-    rtl_locales = sorted([lang["twoLettersCode"] for lang in rtl_languages])
-
-    crowdin_locales_str = ",".join(f"\n  '{locale}'" for locale in all_locales)
-    rtl_locales_str = ", ".join(f"'{locale}'" for locale in rtl_locales)
-
-    # LOCALE_DEFAULTS enum (only for strings without variables)
-    locale_defaults_entries = []
-    for key, text in sorted(glossary_dict.items()):
-        if not re.search(r"\{.+?\}", text):
-            escaped_text = text.replace("'", "\\'")
-            locale_defaults_entries.append(f"  {key} = '{escaped_text}'")
-    locale_defaults_str = ",\n".join(locale_defaults_entries)
 
     content = f"""{DISCLAIMER_GENERATED}// Re-export English strings and translations
 export {{ enSimpleNoArgs, enSimpleWithArgs, enPlurals }} from './english';
@@ -569,10 +547,8 @@ export type TokensPluralAndArgs = {tokens_union_plural_args};
 def generate_constants_ts(
     locales: Dict[str, Dict[str, str]],
     rtl_languages: List[Dict],
-    glossary_dict: Dict[str, str],
     output_path: str
 ):
-    """Generate constants.ts - locale constants and non-translatable strings (kept for backwards compatibility)."""
     all_locales = sorted(locales.keys())
     rtl_locales = sorted([lang["twoLettersCode"] for lang in rtl_languages])
 
@@ -678,7 +654,7 @@ def main():
     # Generate constants.ts (for backwards compatibility)
     print_progress("Generating constants.ts...")
     generate_constants_ts(
-        locales, rtl_languages, glossary_dict,
+        locales, rtl_languages,
         os.path.join(output_dir, 'constants.ts')
     )
 
