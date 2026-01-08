@@ -176,7 +176,7 @@ def convert_parsed_to_flat_locales(parsed_data: Dict[str, Any], is_qa_build: boo
     glossary_dict = parsed_data.get('glossary', {})
 
     languages_to_process = [source_language] + \
-        (['en'] if is_qa_build else target_languages)
+        ([] if is_qa_build else target_languages)
 
     result = {}
 
@@ -635,13 +635,16 @@ def main():
         os.path.join(output_dir, 'english.ts')
     )
 
-    # Generate translations.ts
-    print_progress("Generating translations.ts...")
-    generate_translations_ts(
-        locales, en_locale, glossary_dict,
-        tokens_no_args, tokens_simple_with_args, tokens_plural_with_args,
-        os.path.join(output_dir, 'translations.ts')
-    )
+    if args.qa_build:
+        print_progress("Skipping translations.ts as this is a qa build...")
+    else:
+        # Generate translations.ts
+        print_progress("Generating translations.ts...")
+        generate_translations_ts(
+            locales, en_locale, glossary_dict,
+            tokens_no_args, tokens_simple_with_args, tokens_plural_with_args,
+            os.path.join(output_dir, 'translations.ts')
+        )
 
     # Generate locales.ts
     print_progress("Generating locales.ts...")

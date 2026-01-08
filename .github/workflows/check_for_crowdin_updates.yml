@@ -239,7 +239,6 @@ jobs:
           path: |
             ${{ github.workspace }}/output/ts/localization/generated/locales.ts
             ${{ github.workspace }}/output/ts/localization/generated/english.ts
-            ${{ github.workspace }}/output/ts/localization/generated/translations.ts
             ${{ github.workspace }}/output/ts/localization/generated/constants.ts
           overwrite: true
           if-no-files-found: warn
