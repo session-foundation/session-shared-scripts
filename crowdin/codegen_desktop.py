@@ -176,7 +176,7 @@ def convert_parsed_to_flat_locales(parsed_data: Dict[str, Any], is_qa_build: boo
     glossary_dict = parsed_data.get('glossary', {})
 
     languages_to_process = [source_language] + \
-        ([] if is_qa_build else target_languages)
+        (['en'] if is_qa_build else target_languages)
 
     result = {}
 
