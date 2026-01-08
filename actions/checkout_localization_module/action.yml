@@ -8,7 +8,7 @@ runs:
         with:
           repository: 'session-foundation/session-localization'
           path: 'module'
-          ref: 'dev'
+          ref: 'main'
 
       - name: Remove existing strings
         shell: bash
