@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Desktop Localization Code Generator
+Localization Module Typescript Code Generator
 
 Generates TypeScript files for Session Desktop localization `ts/localization/generated/`:
 - locales.ts: Types, utility functions, and re-exports

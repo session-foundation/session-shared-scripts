@@ -1,0 +1,16 @@
+name: 'Setup for all'
+description: "Setup shared for all jobs"
+runs:
+  using: 'composite'
+  steps:
+      - name: Checkout Localization Module
+        uses: actions/checkout@v4
+        with:
+          repository: 'session-foundation/session-localization'
+          path: 'module'
+          ref: 'dev'
+
+      - name: Remove existing strings
+        shell: bash
+        run: |
+          rm -rf ${{ github.workspace }}/generated/*
