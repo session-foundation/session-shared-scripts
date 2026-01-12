@@ -4,7 +4,7 @@ This repo houses scripts which are shared between the different platform repos f
 
 ## Crowdin Translation Workflow
 
-Automated workflow that downloads translations from Crowdin, validates them, and creates PRs for iOS, Android, and Desktop platforms.
+Automated workflow that downloads translations from Crowdin, validates them, and creates PRs for iOS and Android platforms and for the Typescript Localization Module for Desktop and QA.
 
 ### Required Secrets
 

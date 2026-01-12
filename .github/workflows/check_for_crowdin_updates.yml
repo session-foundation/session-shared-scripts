@@ -169,8 +169,8 @@ jobs:
 
 
 
-  build_desktop:
-    name: Build Desktop strings
+  build_localization_module:
+    name: Build localization module strings
     needs: [parse_translations]
     runs-on: ubuntu-latest
     steps:
@@ -182,76 +182,27 @@ jobs:
       - name: Setup shared
         uses: ./scripts/actions/setup_shared
 
-      - name: Checkout Desktop
-        uses: ./scripts/actions/checkout_desktop
-
       - name: Download parsed translations
         uses: actions/download-artifact@v4
         with:
           name: session-parsed
           path: "${{ github.workspace }}"
 
-      - name: Prepare Desktop Strings
+      - name: Generate TypeScript
         run: |
-          python "${{ github.workspace }}/scripts/crowdin/generate_desktop_strings.py" \
+          python "${{ github.workspace }}/scripts/crowdin/codegen_localization.py" \
             "${{ github.workspace }}/parsed_translations.json" \
-            "${{ github.workspace }}/desktop/_locales" \
-            "${{ github.workspace }}/desktop/ts/localization/constants.ts"
+            "${{ github.workspace }}/output/generated"
 
-      - name: Validate strings for Desktop
-        run: cd ${{ github.workspace }}/desktop && npm install -g yarn && yarn build:locales
-
-      - name: Upload Desktop artifacts
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: session-desktop
+          name: session-localization
           path: |
-            ${{ github.workspace }}/desktop/_locales
-            ${{ github.workspace }}/desktop/ts/localization/constants.ts
-          overwrite: true
-          if-no-files-found: warn
-          retention-days: 7
-
-  build_qa:
-    name: Build QA strings
-    needs: [parse_translations]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Repo Content
-        uses: actions/checkout@v4
-        with:
-          path: 'scripts'
-          # don't provide a branch (ref) so it uses the default for that event
-      - name: Setup shared
-        uses: ./scripts/actions/setup_shared
-
-      - name: Checkout Desktop
-        uses: ./scripts/actions/checkout_desktop
-
-      - name: Download parsed translations
-        uses: actions/download-artifact@v4
-        with:
-          name: session-parsed
-          path: "${{ github.workspace }}"
-
-      - name: Export QA Strings (json)
-        run: |
-          python "${{ github.workspace }}/scripts/crowdin/generate_desktop_strings.py" --qa_build \
-            "${{ github.workspace }}/parsed_translations.json" \
-            "${{ github.workspace }}/desktop/_locales" \
-            "${{ github.workspace }}/desktop/ts/localization/constants.ts"
-      - name: Prepare QA strings (ts)
-        run: |
-          cd ${{ github.workspace }}/desktop/
-          python ./tools/localization/generateLocales.py --generate-types --print-problems --print-problem-strings --print-problem-formatting-tag-strings --error-on-problems
-          cd -
-      - name: Upload QA artefacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: session-qa
-          path: |
-            ${{ github.workspace }}/desktop/ts/localization/locales.ts
-            ${{ github.workspace }}/desktop/ts/localization/constants.ts
+            ${{ github.workspace }}/output/generated/locales.ts
+            ${{ github.workspace }}/output/generated/english.ts
+            ${{ github.workspace }}/output/generated/translations.ts
+            ${{ github.workspace }}/output/generated/constants.ts
           overwrite: true
           if-no-files-found: warn
           retention-days: 7
@@ -325,7 +276,7 @@ jobs:
   jobs_sync:
     name: Waiting for build jobs
 
-    needs: [build_android, build_ios, build_desktop, build_qa]
+    needs: [build_android, build_ios, build_localization_module]
     runs-on: ubuntu-latest
 
     steps:
@@ -364,9 +315,9 @@ jobs:
           commit-message: ${{ env.PR_TITLE }}
           delete-branch: true
 
-  make_desktop_pr:
+  make_localization_module_pr:
     needs: [jobs_sync]
-    name: Make Desktop PR
+    name: Make Localization Module PR
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'schedule' || inputs.UPDATE_PULL_REQUESTS == true }}
     steps:
@@ -375,19 +326,19 @@ jobs:
         with:
           path: 'scripts'
           # don't provide a branch (ref) so it uses the default for that event
-      - name: Checkout Desktop
-        uses: ./scripts/actions/checkout_desktop
+      - name: Checkout Localization Module
+        uses: ./scripts/actions/checkout_localization_module
 
       - uses: actions/download-artifact@v4
         with:
-          name: session-desktop
-          # this has to be the first shared parent on the upload artefact task for Desktop
-          path: "${{ github.workspace }}/desktop"
+          name: session-localization
+          # Download to /generated folder in localization module repo
+          path: "${{ github.workspace }}/module/generated"
 
-      - name: Create Desktop Pull Request
+      - name: Create Localization Module Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
-          path: 'desktop'
+          path: 'module'
           token: ${{ secrets.CROWDIN_PR_TOKEN }}
           title: ${{ env.PR_TITLE }}
           body: ${{ env.PR_DESCRIPTION }}
@@ -427,32 +378,3 @@ jobs:
           commit-message: ${{ env.PR_TITLE }}
           delete-branch: true
 
-  make_qa_pr:
-    needs: [jobs_sync]
-    name: Make QA PR (Appium)
-    runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'schedule' || inputs.UPDATE_PULL_REQUESTS == true }}
-    steps:
-      - name: Checkout Repo Content
-        uses: actions/checkout@v4
-        with:
-          path: 'scripts'
-
-      - name: Checkout Session Appium
-        uses: ./scripts/actions/checkout_qa
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: session-qa
-          path: "${{ github.workspace }}/appium/run/localizer"
-
-      - name: Create QA Pull Request
-        uses: peter-evans/create-pull-request@v6
-        with:
-          path: 'appium'
-          token: ${{ secrets.CROWDIN_PR_TOKEN }}
-          title: ${{ env.PR_TITLE }}
-          body: ${{ env.PR_DESCRIPTION }}
-          branch: ${{ env.PR_TARGET_BRANCH }}
-          commit-message: ${{ env.PR_TITLE }}
-          delete-branch: true
