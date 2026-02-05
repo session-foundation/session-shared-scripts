@@ -263,7 +263,7 @@ jobs:
       - name: Validate strings for Android
         run: |
           cd ${{ github.workspace }}/android
-          ./gradlew app:generatePlayDebugResValues \
+          ./gradlew app:generatePlayDebugResources \
             --parallel \
             --build-cache \
             --configuration-cache \
