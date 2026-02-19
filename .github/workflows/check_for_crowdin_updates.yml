@@ -335,16 +335,20 @@ jobs:
           # Download to /generated folder in localization module repo
           path: "${{ github.workspace }}/module/generated"
 
-      - name: Create Localization Module Pull Request
-        uses: peter-evans/create-pull-request@v6
-        with:
-          path: 'module'
-          token: ${{ secrets.CROWDIN_PR_TOKEN }}
-          title: ${{ env.PR_TITLE }}
-          body: ${{ env.PR_DESCRIPTION }}
-          branch: ${{ env.PR_TARGET_BRANCH }}
-          commit-message: ${{ env.PR_TITLE }}
-          delete-branch: true
+      - name: Push directly to main
+        shell: bash
+        run: |
+          cd ${{ github.workspace }}/module
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${{ secrets.CROWDIN_PR_TOKEN }}@github.com/session-foundation/session-localization.git
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "${{ env.PR_TITLE }}"
+            git push origin main
+          fi
 
 
   make_ios_pr:
