@@ -69,6 +69,11 @@ WITH_MAP = {
     ("percent", "string"): "WithPercent",
     ("monthly_price", "string"): "WithMonthlyPrice",
     ("build_variant", "string"): "WithBuildVariant",
+    ("activation_type", "string"): "WithActivationType",
+    ("entity", "string"): "WithEntity",
+    ("selected_plan_length_singular", "string"): "WithSelectedPlanLengthSingular",
+    ("selected_plan_length", "string"): "WithSelectedPlanLength",
+
 }
 
 LOCALE_KEY_MAPPING = {

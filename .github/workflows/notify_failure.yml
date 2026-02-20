@@ -2,7 +2,7 @@ name: Discord Failure Notification
 
 on:
   workflow_run:
-    workflows: 
+    workflows:
       - "Check for Crowdin Updates"
       - "Test Failure Notification"
     types:
