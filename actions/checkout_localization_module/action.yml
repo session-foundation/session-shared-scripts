@@ -1,5 +1,10 @@
 name: 'Setup for all'
 description: "Setup shared for all jobs"
+inputs:
+  token:
+    description: 'Token to use for checkout (required for push access)'
+    required: false
+    default: ${{ github.token }}
 runs:
   using: 'composite'
   steps:
@@ -9,6 +14,7 @@ runs:
           repository: 'session-foundation/session-localization'
           path: 'module'
           ref: 'main'
+          token: ${{ inputs.token }}
 
       - name: Remove existing strings
         shell: bash

@@ -58,6 +58,22 @@ WITH_MAP = {
     ("storevariant", "string"): "WithStoreVariant",
     ("min", "string"): "WithMin",
     ("max", "string"): "WithMax",
+    ("platform", "string"): "WithPlatform",
+    ("platform_account", "string"): "WithPlatformAccount",
+    ("platform_store", "string"): "WithPlatformStore",
+    ("device_type", "string"): "WithDeviceType",
+    ("action_type", "string"): "WithActionType",
+    ("current_plan_length", "string"): "WithCurrentPlanLength",
+    ("platform_store_other", "string"): "WithPlatformStoreOther",
+    ("price", "string"): "WithPrice",
+    ("percent", "string"): "WithPercent",
+    ("monthly_price", "string"): "WithMonthlyPrice",
+    ("build_variant", "string"): "WithBuildVariant",
+    ("activation_type", "string"): "WithActivationType",
+    ("entity", "string"): "WithEntity",
+    ("selected_plan_length_singular", "string"): "WithSelectedPlanLengthSingular",
+    ("selected_plan_length", "string"): "WithSelectedPlanLength",
+
 }
 
 LOCALE_KEY_MAPPING = {

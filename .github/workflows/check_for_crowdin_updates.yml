@@ -6,7 +6,7 @@ name: Check for Crowdin Updates
 
 on:
   schedule:
-    - cron: '0 0 * * 1'  # Every Monday at 12:00 AM UTC, which is 10:00 AM Melbourne time (AEST)
+    - cron: '0 0 * * 1' # Every Monday at 12:00 AM UTC, which is 10:00 AM Melbourne time (AEST)
   workflow_dispatch:
     inputs:
       UPDATE_PULL_REQUESTS:
@@ -31,10 +31,8 @@ env:
     This PR includes the latest translations from Crowdin
 
     Session uses the community-driven translation platform Crowdin for localization, anyone can contribute at https://getsession.org/translate
-  PR_TARGET_BRANCH: feature/update-crowdin-translations
 
 jobs:
-
   fetch_translations:
     name: Download translations from crowdin
     runs-on: ubuntu-latest
@@ -167,8 +165,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-
-
   build_localization_module:
     name: Build localization module strings
     needs: [parse_translations]
@@ -272,7 +268,6 @@ jobs:
             -x lint \
             -x test
 
-
   jobs_sync:
     name: Waiting for build jobs
 
@@ -285,6 +280,9 @@ jobs:
         run: echo "Nothing to do here"
 
   make_android_pr:
+    env:
+      PR_TARGET_BRANCH: feature/update-crowdin-translations
+
     name: Make Android PR
     needs: [jobs_sync]
     runs-on: ubuntu-latest
@@ -316,6 +314,8 @@ jobs:
           delete-branch: true
 
   make_localization_module_pr:
+    env:
+      PR_TARGET_BRANCH: main
     needs: [jobs_sync]
     name: Make Localization Module PR
     runs-on: ubuntu-latest
@@ -328,6 +328,8 @@ jobs:
           # don't provide a branch (ref) so it uses the default for that event
       - name: Checkout Localization Module
         uses: ./scripts/actions/checkout_localization_module
+        with:
+          token: ${{ secrets.CROWDIN_PR_TOKEN }}
 
       - uses: actions/download-artifact@v4
         with:
@@ -335,19 +337,19 @@ jobs:
           # Download to /generated folder in localization module repo
           path: "${{ github.workspace }}/module/generated"
 
-      - name: Create Localization Module Pull Request
-        uses: peter-evans/create-pull-request@v6
+      - name: Push directly to ${{ env.PR_TARGET_BRANCH }}
+        uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          path: 'module'
-          token: ${{ secrets.CROWDIN_PR_TOKEN }}
-          title: ${{ env.PR_TITLE }}
-          body: ${{ env.PR_DESCRIPTION }}
+          repository: module
+          commit_message: ${{ env.PR_TITLE }}
           branch: ${{ env.PR_TARGET_BRANCH }}
-          commit-message: ${{ env.PR_TITLE }}
-          delete-branch: true
-
+          commit_author: "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+          commit_user_name: github-actions[bot]
+          commit_user_email: github-actions[bot]@users.noreply.github.com
 
   make_ios_pr:
+    env:
+      PR_TARGET_BRANCH: feature/update-crowdin-translations
     needs: [jobs_sync]
     name: Make iOS PR
     runs-on: ubuntu-latest
@@ -370,11 +372,10 @@ jobs:
       - name: Create iOS Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
-          path: 'ios'
+          path: "ios"
           token: ${{ secrets.CROWDIN_PR_TOKEN }}
           title: ${{ env.PR_TITLE }}
           body: ${{ env.PR_DESCRIPTION }}
           branch: ${{ env.PR_TARGET_BRANCH }}
           commit-message: ${{ env.PR_TITLE }}
           delete-branch: true
-
