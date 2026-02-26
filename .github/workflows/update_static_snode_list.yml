@@ -17,6 +17,11 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      - name: Checkout Repo Content
+        uses: actions/checkout@v4
+        with:
+          path: 'scripts'
+          # don't provide a branch (ref) so it uses the default for that event
       - name: Checkout iOS
         uses: ./scripts/actions/checkout_ios
       - name: Fetch latest service-nodes-cache.json from dynamic assets repo
