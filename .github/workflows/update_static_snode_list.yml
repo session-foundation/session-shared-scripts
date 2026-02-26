@@ -1,0 +1,37 @@
+name: Update Static Snode List
+
+on:
+  schedule:
+    - cron: '30 10 * * *' # Runs daily at 10:30am UTC (after source repo updates at 10am UTC)
+  workflow_dispatch: # Allow manual trigger
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: Copy service-nodes-cache.json and open PR if changed
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout iOS
+        uses: ./scripts/actions/checkout_ios
+      - name: Fetch latest service-nodes-cache.json from dynamic assets repo
+        run: |
+          curl -fsSL \
+            "https://raw.githubusercontent.com/session-foundation/session-desktop-dynamic-assets/main/service-nodes-cache.json" \
+            -o ${{ github.workspace }}/ios/Session/Meta/service-nodes-cache.json
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.CROWDIN_PR_TOKEN }}
+          title: "[Automated] Update fallback static snode list"
+          body: |
+            [Automated]
+            This PR updates the static service node list which is used as a fallback when a new client is unable to contact the seed nodes
+          branch: feature/update-static-snode-list
+          commit-message: "[Automated] Update fallback static snode list"
+          delete-branch: true
