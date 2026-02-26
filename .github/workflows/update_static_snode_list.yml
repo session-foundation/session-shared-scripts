@@ -17,6 +17,11 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      - name: Checkout Repo Content
+        uses: actions/checkout@v4
+        with:
+          path: 'scripts'
+          # don't provide a branch (ref) so it uses the default for that event
       - name: Checkout iOS
         uses: ./scripts/actions/checkout_ios
       - name: Fetch latest service-nodes-cache.json from dynamic assets repo
@@ -27,6 +32,7 @@ jobs:
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
+          path: "ios"
           token: ${{ secrets.CROWDIN_PR_TOKEN }}
           title: "[Automated] Update fallback static snode list"
           body: |
