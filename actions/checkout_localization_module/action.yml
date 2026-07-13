@@ -9,7 +9,7 @@ runs:
   using: 'composite'
   steps:
       - name: Checkout Localization Module
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: 'session-foundation/session-localization'
           path: 'module'
