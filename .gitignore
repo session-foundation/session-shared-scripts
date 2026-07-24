@@ -9,3 +9,6 @@ venv
 __pycache__
 .vscode/
 do_not_commit.sh
+
+# Local Crowdin audit outputs (persist across sessions, not for commit)
+.crowdin_audit/
