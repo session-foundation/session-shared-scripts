@@ -55,9 +55,11 @@ DEFAULT_PROJECT = "618696"
 KEYRING_ATTRS = ["service", "crowdin", "key", "translation-api-token"]
 
 # Discord limits: 10 embeds/message, 4096 chars/description, 25 fields, 6000
-# chars total/message. We stay well under these.
+# chars total/message. We keep each description under MAX_DESC_CHARS and pack
+# messages under both MAX_EMBEDS_PER_MESSAGE and MAX_MESSAGE_CHARS.
 MAX_EMBEDS_PER_MESSAGE = 10
 MAX_DESC_CHARS = 3800
+MAX_MESSAGE_CHARS = 6000
 # Hard cap on how many slots we enumerate in Discord (the rest are summarised as
 # an overflow count -- run with --json to get the complete list).
 MAX_SLOTS_LISTED = 200
@@ -278,7 +280,7 @@ def build_messages(findings, scanned_locales, note=""):
     embeds = [summary]
 
     if not findings:
-        return [{"embeds": embeds}]
+        return pack_embeds(embeds)
 
     # Per-locale breakdown embeds, capped so we never exceed Discord limits.
     listed = 0
@@ -313,9 +315,35 @@ def build_messages(findings, scanned_locales, note=""):
             "color": 0x95A5A6,
         })
 
+    return pack_embeds(embeds)
+
+
+def embed_len(e):
+    """Chars Discord counts toward the 6000/message budget: title + description
+    + every field name/value."""
+    total = len(e.get("title") or "") + len(e.get("description") or "")
+    for fld in e.get("fields", []):
+        total += len(fld.get("name") or "") + len(fld.get("value") or "")
+    return total
+
+
+def pack_embeds(embeds):
+    """Split embeds into message payloads, respecting BOTH Discord's per-message
+    embed count (MAX_EMBEDS_PER_MESSAGE) and cumulative char budget
+    (MAX_MESSAGE_CHARS). Each individual embed already fits under the budget
+    (descriptions are capped at MAX_DESC_CHARS), so this never stalls."""
     messages = []
-    for i in range(0, len(embeds), MAX_EMBEDS_PER_MESSAGE):
-        messages.append({"embeds": embeds[i:i + MAX_EMBEDS_PER_MESSAGE]})
+    chunk, chunk_chars = [], 0
+    for e in embeds:
+        e_len = embed_len(e)
+        if chunk and (len(chunk) >= MAX_EMBEDS_PER_MESSAGE
+                      or chunk_chars + e_len > MAX_MESSAGE_CHARS):
+            messages.append({"embeds": chunk})
+            chunk, chunk_chars = [], 0
+        chunk.append(e)
+        chunk_chars += e_len
+    if chunk:
+        messages.append({"embeds": chunk})
     return messages
 
 
