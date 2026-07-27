@@ -40,6 +40,7 @@ import argparse
 import collections
 import concurrent.futures
 import datetime as dt
+import email.utils
 import json
 import os
 import subprocess
@@ -78,6 +79,29 @@ def get_token(cli_token):
              "or store it via secret-tool).")
 
 
+def parse_retry_after(value, fallback, cap=30):
+    """Seconds to wait for a Retry-After header, parsed defensively.
+
+    Supports both numeric-seconds and HTTP-date forms (RFC 7231); falls back to
+    `fallback` when the header is missing or unparseable, and clamps the result
+    to `cap` so a bogus/huge value can't stall the run."""
+    wait = fallback
+    if value is not None:
+        try:
+            wait = float(value)
+        except (TypeError, ValueError):
+            try:
+                when = email.utils.parsedate_to_datetime(value)
+                if when.tzinfo is None:
+                    when = when.replace(tzinfo=dt.timezone.utc)
+                wait = (when - dt.datetime.now(dt.timezone.utc)).total_seconds()
+            except (TypeError, ValueError):
+                wait = fallback
+    if wait < 0:
+        wait = fallback
+    return min(wait, cap)
+
+
 def request_with_retry(session, method, url, max_retries=10, **kw):
     """Request with backoff on 429/5xx AND on network errors (flaky DNS/connection)."""
     delay = 0.5
@@ -91,7 +115,7 @@ def request_with_retry(session, method, url, max_retries=10, **kw):
             delay = min(delay * 2, 30)
             continue
         if r.status_code == 429 or r.status_code >= 500:
-            time.sleep(float(r.headers.get("Retry-After", delay)))
+            time.sleep(parse_retry_after(r.headers.get("Retry-After"), delay))
             delay = min(delay * 2, 30)
             continue
         r.raise_for_status()
