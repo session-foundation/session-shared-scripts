@@ -295,11 +295,34 @@ def build_messages(findings, scanned_locales, note=""):
     return messages
 
 
-def post_to_discord(session, webhook_url, messages):
-    for payload in messages:
-        resp = request_with_retry(session, "POST", webhook_url, json=payload)
-        if resp.status_code >= 400:
-            sys.exit(f"Discord webhook failed ({resp.status_code}): {resp.text[:300]}")
+def post_to_discord(webhook_url, messages):
+    # Use a fresh, unauthenticated session -- the Crowdin Bearer token must never
+    # be sent to Discord. request_with_retry raises on any non-retryable 4xx, so
+    # we translate that into the concise failure message here.
+    with requests.Session() as webhook_session:
+        for payload in messages:
+            try:
+                request_with_retry(webhook_session, "POST", webhook_url, json=payload)
+            except requests.exceptions.RequestException as e:
+                resp = getattr(e, "response", None)
+                if resp is not None:
+                    detail = f"Discord webhook failed ({resp.status_code}): {resp.text[:300]}"
+                else:
+                    detail = f"Discord webhook failed: {e}"
+                # A rich payload can be rejected outright (e.g. an embed exceeded
+                # Discord's size limits). Before crashing, best-effort post a plain
+                # warning so the failure is at least visible in the channel; if even
+                # that fails, fall through to the sys.exit below.
+                try:
+                    request_with_retry(webhook_session, "POST", webhook_url, json={
+                        "content": "⚠️ Crowdin multiple-translations report failed to post "
+                                   "its results (a message was rejected by Discord). "
+                                   "Re-run `report_multiple_translations.py --json` for the "
+                                   "full list.",
+                    })
+                except requests.exceptions.RequestException:
+                    pass
+                sys.exit(detail)
 
 
 # --------------------------------------------------------------------------- #
@@ -398,7 +421,7 @@ def main():
     if args.dry_run:
         print(json.dumps(messages, indent=2, ensure_ascii=False))
         return
-    post_to_discord(session, webhook, messages)
+    post_to_discord(webhook, messages)
     print(f"Posted {len(messages)} Discord message(s).", file=sys.stderr)
 
 
