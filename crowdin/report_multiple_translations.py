@@ -351,7 +351,7 @@ def main():
     else:
         shards = max(1, args.shards)
         idx = args.shard_index if args.shard_index is not None else \
-            dt.date.today().timetuple().tm_yday % shards
+            dt.datetime.now(dt.timezone.utc).date().timetuple().tm_yday % shards
         idx %= shards
         locales = pick_locales(all_targets, shards, idx)
         shard_note = f" (rotation shard {idx + 1}/{shards})"
