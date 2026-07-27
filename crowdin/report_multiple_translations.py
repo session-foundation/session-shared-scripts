@@ -288,21 +288,28 @@ def build_messages(findings, scanned_locales, note=""):
     for loc, _ in sorted(per_loc.items(), key=lambda kv: (-kv[1], kv[0])):
         loc_findings = [f for f in findings if f["locale"] == loc]
         lines, desc_len = [], 0
+        first_chunk = True  # first embed gets the real title; overflow ones get "(cont.)"
+
+        def loc_title():
+            return (f"{loc} — {len(loc_findings)} slot(s)" if first_chunk
+                    else f"{loc} (cont.)")
+
         for f in loc_findings:
             if listed >= MAX_SLOTS_LISTED:
                 truncated = True
                 break
             line = slot_line(f)
             if desc_len + len(line) + 1 > MAX_DESC_CHARS:
-                # Start a fresh embed for the remaining slots of this locale.
-                embeds.append({"title": f"{loc} (cont.)", "description": "\n".join(lines),
+                # Flush the accumulated slots as one embed and continue in a new one.
+                embeds.append({"title": loc_title(), "description": "\n".join(lines),
                                "color": 0xE67E22})
+                first_chunk = False
                 lines, desc_len = [], 0
             lines.append(line)
             desc_len += len(line) + 1
             listed += 1
         if lines:
-            embeds.append({"title": f"{loc} — {len(loc_findings)} slot(s)",
+            embeds.append({"title": loc_title(),
                            "description": "\n".join(lines), "color": 0xE67E22})
         if truncated:
             break
