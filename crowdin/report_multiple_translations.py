@@ -227,9 +227,20 @@ def scan_locale(session, pid, lang, string_ids, strings, editor_url, max_workers
         return local
 
     found = []
+    failed = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
-        for res in ex.map(process, string_ids):
-            found.extend(res)
+        futures = {ex.submit(process, sid): sid for sid in string_ids}
+        for fut in concurrent.futures.as_completed(futures):
+            sid = futures[fut]
+            try:
+                found.extend(fut.result())
+            except Exception as e:
+                # One string failing (e.g. a persistent non-retryable API error)
+                # must not abort the whole locale -- log it and keep the rest.
+                failed += 1
+                print(f"[{lang}] string {sid} failed, skipping: {e!r}", file=sys.stderr)
+    if failed:
+        print(f"[{lang}] {failed} string(s) failed and were skipped", file=sys.stderr)
     print(f"[{lang}] {len(found)} slot(s) with 2+ translations", file=sys.stderr)
     return found
 
