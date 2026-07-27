@@ -44,6 +44,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 
 import requests
@@ -152,8 +153,21 @@ def scan_locale(session, pid, lang, string_ids, strings, editor_url, max_workers
     print(f"[{lang}] scanning {len(string_ids)} strings "
           f"({len(approved_here)} with approvals) …", file=sys.stderr)
 
+    # requests.Session is not guaranteed thread-safe, so instead of sharing the
+    # caller's session across the pool, give each worker its own (lazily created,
+    # carrying the same auth header).
+    tls = threading.local()
+
+    def worker_session():
+        s = getattr(tls, "session", None)
+        if s is None:
+            s = requests.Session()
+            s.headers.update(session.headers)
+            tls.session = s
+        return s
+
     def process(sid):
-        trans = list(paged(session, f"/projects/{pid}/translations",
+        trans = list(paged(worker_session(), f"/projects/{pid}/translations",
                            stringId=sid, languageId=lang))
         approved_tids = approved_here.get(sid, set())
         by_cat = collections.defaultdict(list)
