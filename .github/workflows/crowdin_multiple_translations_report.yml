@@ -1,0 +1,79 @@
+name: Crowdin Multiple Translations Report
+
+# Reports Crowdin string slots (per plural form) that have more than one
+# translation, so a human can pick the keeper and delete the rest.
+#
+# Detecting per-plural-form duplicates needs one API request per (string, locale)
+# and Crowdin rate-limits at ~40 req/s, so scanning all ~80 locales at once takes
+# ~40 min. To stay under a ~10 min daily budget the script ROTATES: each run scans
+# one shard of the locales (default 1/8, ~10 locales, ~8 min) and the shard is
+# picked from the date, so every locale is covered over an 8-day cycle.
+
+on:
+  schedule:
+    # Every day at 06:00 UTC (rotates through one locale shard per run)
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      locales:
+        description: "Scan exactly these locales (space-separated; disables rotation)"
+        required: false
+      all_locales:
+        description: "Scan every target locale in one run (~40 min)"
+        required: false
+        type: boolean
+        default: false
+      shards:
+        description: "Number of daily rotation shards (default 8)"
+        required: false
+        default: "8"
+      dry_run:
+        description: "Scan and print the payload instead of posting to Discord"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crowdin-multiple-translations
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r crowdin/requirements.txt
+
+      - name: Report strings with multiple translations
+        env:
+          CROWDIN_API_TOKEN: ${{ secrets.CROWDIN_API_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          # Free-text dispatch inputs go through env (never inlined into the shell)
+          # so a value can't be interpreted as shell syntax.
+          SHARDS: ${{ github.event.inputs.shards || '8' }}
+          LOCALES: ${{ github.event.inputs.locales }}
+        run: |
+          args=(--shards "$SHARDS")
+          if [ -n "$LOCALES" ]; then
+            # Whitespace-split into separate --locales values without glob/metachar
+            # interpretation (env vars are not re-scanned for $(...) either).
+            read -ra locale_args <<< "$LOCALES"
+            args+=(--locales "${locale_args[@]}")
+          fi
+          python crowdin/report_multiple_translations.py \
+            "${args[@]}" \
+            ${{ github.event.inputs.all_locales == 'true' && '--all-locales' || '' }} \
+            ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}

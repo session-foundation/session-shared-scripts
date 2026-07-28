@@ -5,6 +5,7 @@ on:
     workflows:
       - "Check for Crowdin Updates"
       - "Test Failure Notification"
+      - "Crowdin Multiple Translations Report"
     types:
       - completed
 
