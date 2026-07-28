@@ -8,10 +8,28 @@ Automated workflow that downloads translations from Crowdin, validates them, and
 
 ### Required Secrets
 
-| Secret              | Description                               |
-| ------------------- | ----------------------------------------- |
-| `CROWDIN_API_TOKEN` | Crowdin API token with project access     |
-| `CROWDIN_PR_TOKEN`  | GitHub token with PR creation permissions |
+| Secret              | Description                                             |
+| ------------------- | ------------------------------------------------------- |
+| `CROWDIN_API_TOKEN` | Crowdin personal access token (see scopes below)         |
+| `CROWDIN_PR_TOKEN`  | GitHub token with PR creation permissions                |
+
+#### Crowdin token scopes
+
+Crowdin scopes personal access tokens per endpoint family, so a token missing one
+scope returns `403 Forbidden` on just those endpoints while every other call keeps
+working. The scripts in this repo need:
+
+| Scope                  | Value                | Needed for                                                              |
+| ---------------------- | -------------------- | ----------------------------------------------------------------------- |
+| Projects               | `project`            | Project details and the target-language list                            |
+| Source files & strings | `project.source`     | Listing source strings (`approve_strings.py`, multiple-translations report) |
+| Translations           | `project.translation` | Translation exports, plus reading/adding approvals and translations     |
+| Glossaries             | `glossary`           | Non-translatable strings (glossary terms)                               |
+
+> **Note:** Scopes only cap what a token may do — they don't grant anything the
+> token's Crowdin account can't already do, so the account also needs a project
+> role that allows it (manager/proofreader for anything that writes, e.g. the
+> approvals `POST` in `approve_strings.py`).
 
 ### Workflow Inputs
 

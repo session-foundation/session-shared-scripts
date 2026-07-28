@@ -2,7 +2,10 @@
 """
 Bulk-approve specific Crowdin source strings across all target languages.
 
-Crowdin.com (API v2). Approval requires a Proofreader/Manager token.
+Crowdin.com (API v2). Approval requires a Proofreader/Manager token, scoped with
+`project` + `project.source` (listing strings) + `project.translation` (reading
+translations, adding approvals) -- a missing scope shows up as a 403 on just the
+endpoints it covers.
 
 The Crowdin API token is read from the system keyring via libsecret's
 `secret-tool`. Store it once with:
