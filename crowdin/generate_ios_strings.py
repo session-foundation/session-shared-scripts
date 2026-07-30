@@ -12,7 +12,9 @@ from generate_shared import (
     run_main
 )
 
-AUTO_REPLACE_STATIC_STRINGS = False
+# Note: The client code no longer substitutes these constants at runtime, so turning this back
+# off would leave `{app_name}` etc. visible in the UI
+AUTO_REPLACE_STATIC_STRINGS = True
 
 # It seems that Xcode uses different language codes and doesn't support all of the languages we get from Crowdin
 # (at least in the variants that Crowdin is specifying them in) so need to map/exclude them in order to build correctly

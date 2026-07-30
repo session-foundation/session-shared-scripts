@@ -8,13 +8,16 @@ from generate_shared import (
     clean_string,
     print_progress,
     print_success,
+    replace_glossary_variables,
     run_main
 )
 
 # Variables that should be treated as numeric (using %d)
 NUMERIC_VARIABLES = ['count', 'found_count', 'total_count']
 
-AUTO_REPLACE_STATIC_STRINGS = False
+# Note: The client code no longer substitutes these constants at runtime, so turning this back
+# off would leave `{app_name}` etc. visible in the UI
+AUTO_REPLACE_STATIC_STRINGS = True
 
 
 def convert_placeholders(text: str) -> str:
@@ -56,7 +59,15 @@ def generate_android_xml(
         if trans_data['type'] == 'plural':
             result += f'    <plurals name="{resname}">\n'
             for form, value in trans_data['forms'].items():
-                escaped_value = clean_string(convert_placeholders(value), True, glossary_dict, {})
+                # Note: the glossary has to be applied *before* converting placeholders, otherwise
+                # `{app_name}` has already become `%1$s` and can never be replaced (which would
+                # also shift the positional indexes of the remaining placeholders)
+                escaped_value = clean_string(
+                    convert_placeholders(replace_glossary_variables(value, glossary_dict)),
+                    True,
+                    {},
+                    {}
+                )
                 result += f'        <item quantity="{form}">{escaped_value}</item>\n'
             result += '    </plurals>\n'
         else:
