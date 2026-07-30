@@ -54,7 +54,18 @@ def load_parsed_translations(input_file: str) -> Dict[str, Any]:
         return json.load(f)
 
 
+def replace_glossary_variables(text: str, glossary_dict: Dict[str, str]) -> str:
+    """Replace glossary variables like {app_name} with their actual values."""
+    for glossary_key, glossary_value in glossary_dict.items():
+        text = text.replace("{" + glossary_key + "}", glossary_value)
+    return text
+
+
 def clean_string(text: str, is_android: bool, glossary_dict: Dict[str, str], extra_replace_dict: Dict[str, str]):
+    # Replace the constants (from crowdin's glossary) before any escaping so that the values
+    # themselves get escaped the same way the rest of the string does
+    text = replace_glossary_variables(text, glossary_dict)
+
     if is_android:
         # Note: any changes done for all platforms needs most likely to be done on crowdin side.
         # So we don't want to replace -&gt; with → for instance, we want the crowdin strings to not have those at all.
@@ -77,11 +88,6 @@ def clean_string(text: str, is_android: bool, glossary_dict: Dict[str, str], ext
         text = html.unescape(text)          # Unescape any HTML escaping
 
     text = text.strip()               # Strip whitespace
-
-    # replace all the defined constants (from crowdin's glossary) in the string
-    for glossary_key in glossary_dict:
-        text = text.replace("{" + glossary_key + "}",
-                            glossary_dict[glossary_key])
 
     # if extra_replace_dict has keys, replace those too
     for extra_key in extra_replace_dict:

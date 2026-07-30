@@ -17,6 +17,7 @@ from generate_shared import (
     load_parsed_translations,
     print_progress,
     print_success,
+    replace_glossary_variables,
     run_main
 )
 
@@ -168,13 +169,6 @@ def generate_with_types() -> str:
     for (arg_name, arg_type), type_name in WITH_MAP.items():
         lines.append(f"type {type_name} = {{{arg_name}: {arg_type}}};")
     return "\n".join(lines)
-
-
-def replace_glossary_variables(text: str, glossary_dict: Dict[str, str]) -> str:
-    """Replace glossary variables like {app_name} with their actual values."""
-    for glossary_key, glossary_value in glossary_dict.items():
-        text = text.replace("{" + glossary_key + "}", glossary_value)
-    return text
 
 
 def snake_to_camel(snake_str: str) -> str:
