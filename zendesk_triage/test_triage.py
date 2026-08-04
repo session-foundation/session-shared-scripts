@@ -15,6 +15,8 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 
+import requests
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import triage  # noqa: E402  (needs the path insert above)
 
@@ -56,6 +58,11 @@ def finding(ticket_id, **extra):
     return row
 
 
+def build_messages(*args, **kwargs):
+    """triage.build_messages returns (messages, coverage); most tests want messages."""
+    return triage.build_messages(*args, **kwargs)[0]
+
+
 class FakeResponse:
     # retry-after: 0 keeps the retry tests instant instead of sleeping through
     # the real backoff, and exercises the header-honoring path while it's at it.
@@ -70,7 +77,11 @@ class FakeResponse:
 
 
 class FakeSession:
-    """Returns queued responses in order and records the requests made."""
+    """Returns queued responses in order and records the requests made.
+
+    A queued Exception is raised instead of returned, so transport failures can be
+    exercised alongside HTTP status codes.
+    """
 
     def __init__(self, responses):
         self._responses = list(responses)
@@ -78,7 +89,24 @@ class FakeSession:
 
     def request(self, method, url, **kwargs):
         self.calls.append((method, url, kwargs))
-        return self._responses.pop(0)
+        item = self._responses.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+class NoSleep:
+    """Patch out time.sleep so retry tests assert on delays without waiting."""
+
+    def __enter__(self):
+        self.slept = []
+        self._real = triage.time.sleep
+        triage.time.sleep = self.slept.append
+        return self
+
+    def __exit__(self, *exc):
+        triage.time.sleep = self._real
+        return False
 
 
 # ---- Window construction ---------------------------------------------------
@@ -253,6 +281,28 @@ class TestStateDegradation(unittest.TestCase):
             triage.load_state(self._write("w.json", '{"seen": []}')), triage.empty_state()
         )
 
+    def test_absent_version_is_a_cache_miss(self):
+        """Without a version we can't know the fields mean what we think."""
+        path = self._write("v.json", '{"seen": {"1": {"updated_at": "A"}}}')
+        self.assertEqual(triage.load_state(path), triage.empty_state())
+
+    def test_unknown_version_is_a_cache_miss(self):
+        path = self._write("v2.json", '{"version": 99, "seen": {"1": {"updated_at": "A"}}}')
+        self.assertEqual(triage.load_state(path), triage.empty_state())
+
+    def test_matching_version_loads_normally(self):
+        path = self._write(
+            "ok.json",
+            json.dumps({"version": triage.STATE_VERSION, "seen": {"1": {"updated_at": "A"}}}),
+        )
+        self.assertEqual(list(triage.load_state(path)["seen"]), ["1"])
+
+    def test_state_written_by_save_state_round_trips_the_version(self):
+        """Guards against save_state and load_state disagreeing on the version."""
+        path = os.path.join(self.dir.name, "rt.json")
+        triage.save_state(path, triage.empty_state(), [ticket(1)], 30)
+        self.assertEqual(list(triage.load_state(path)["seen"]), ["1"])
+
 
 # ---- Discord rendering -----------------------------------------------------
 
@@ -326,25 +376,25 @@ class TestHighlightEmbed(unittest.TestCase):
 class TestBuildMessages(unittest.TestCase):
     def test_only_tickets_worth_looking_into_get_their_own_embed(self):
         findings = [finding(1), finding(2, worth_looking_into=False)]
-        messages = triage.build_messages(findings, "acme")
+        messages = build_messages(findings, "acme")
         self.assertEqual(len(messages[0]["embeds"]), 2)  # summary + one highlight
 
     def test_highlights_are_ordered_by_priority_rank(self):
         findings = [finding(1, priority_rank=3), finding(2, priority_rank=1)]
-        embeds = triage.build_messages(findings, "acme")[0]["embeds"]
+        embeds = build_messages(findings, "acme")[0]["embeds"]
         self.assertIn("#2", embeds[1]["title"])
         self.assertIn("#1", embeds[2]["title"])
 
     def test_updated_ids_reach_the_right_embed(self):
         findings = [finding(1), finding(2)]
-        embeds = triage.build_messages(findings, "acme", {}, updated_ids={2})[0]["embeds"]
+        embeds = build_messages(findings, "acme", {}, updated_ids={2})[0]["embeds"]
         titles = {e["title"].lstrip("🔄 ").split(" ")[0]: e["title"] for e in embeds[1:]}
         self.assertFalse(titles["#1"].startswith("🔄"))
         self.assertTrue(titles["#2"].startswith("🔄"))
 
     def test_embeds_are_chunked_to_the_discord_per_message_limit(self):
         findings = [finding(i, priority_rank=i) for i in range(triage.MAX_HIGHLIGHTS)]
-        messages = triage.build_messages(findings, "acme")
+        messages = build_messages(findings, "acme")
         for message in messages:
             self.assertLessEqual(len(message["embeds"]), triage.MAX_EMBEDS_PER_MESSAGE)
         total = sum(len(m["embeds"]) for m in messages)
@@ -353,15 +403,374 @@ class TestBuildMessages(unittest.TestCase):
     def test_highlights_beyond_the_cap_are_dropped_but_announced(self):
         over = triage.MAX_HIGHLIGHTS + 5
         findings = [finding(i, priority_rank=i) for i in range(over)]
-        messages = triage.build_messages(findings, "acme")
+        messages = build_messages(findings, "acme")
         self.assertIn(f"top {triage.MAX_HIGHLIGHTS} of {over}", messages[0]["content"])
 
     def test_no_content_line_when_nothing_was_dropped(self):
-        messages = triage.build_messages([finding(1)], "acme")
+        messages = build_messages([finding(1)], "acme")
         self.assertNotIn("content", messages[0])
 
 
 # ---- Parsing helpers -------------------------------------------------------
+
+
+class TestTaxonomyIsDerived(unittest.TestCase):
+    """CATEGORY_SPECS is the single source of truth. These caught a real bug: a stale
+    hardcoded CATEGORY_LABEL further down the module was shadowing the derived one,
+    so seven new categories silently rendered as raw enum values."""
+
+    def test_every_category_has_a_discord_label(self):
+        missing = [c for c in triage.CATEGORIES if c not in triage.CATEGORY_LABEL]
+        self.assertEqual(missing, [])
+
+    def test_every_category_is_explained_in_the_system_prompt(self):
+        missing = [c for c in triage.CATEGORIES if c not in triage.SYSTEM_PROMPT]
+        self.assertEqual(missing, [])
+
+    def test_every_category_is_listed_in_the_cli_instructions(self):
+        missing = [c for c in triage.CATEGORIES if c not in triage.CLI_JSON_INSTRUCTIONS]
+        self.assertEqual(missing, [])
+
+    def test_every_schema_field_is_listed_in_the_cli_instructions(self):
+        """The CLI backend has no structured-output enforcement, so a field absent
+        from these instructions comes back empty — which is how platform, app_version
+        and reported_session_id silently went unpopulated."""
+        fields = triage.SCHEMA["properties"]["tickets"]["items"]["properties"]
+        missing = [f for f in fields if f not in triage.CLI_JSON_INSTRUCTIONS]
+        self.assertEqual(missing, [])
+
+    def test_every_enum_value_is_listed_in_the_cli_instructions(self):
+        for values in (triage.CATEGORIES, triage.SEVERITIES, triage.PLATFORMS):
+            for value in values:
+                self.assertIn(value, triage.CLI_JSON_INSTRUCTIONS)
+
+    def test_schema_enum_matches_the_category_list(self):
+        item = triage.SCHEMA["properties"]["tickets"]["items"]
+        self.assertEqual(item["properties"]["category"]["enum"], triage.CATEGORIES)
+
+    def test_schema_requires_every_property(self):
+        """Structured outputs reject a schema whose fields aren't all required."""
+        item = triage.SCHEMA["properties"]["tickets"]["items"]
+        self.assertEqual(sorted(item["required"]), sorted(item["properties"]))
+
+    def test_category_names_are_unique(self):
+        self.assertEqual(len(triage.CATEGORIES), len(set(triage.CATEGORIES)))
+
+    def test_urgent_categories_are_real_categories(self):
+        self.assertTrue(triage.URGENT_CATEGORIES.issubset(set(triage.CATEGORIES)))
+
+    def test_platform_enum_is_wired_into_the_schema(self):
+        item = triage.SCHEMA["properties"]["tickets"]["items"]
+        self.assertEqual(item["properties"]["platform"]["enum"], triage.PLATFORMS)
+
+
+class TestUrgency(unittest.TestCase):
+    def test_urgent_category_beats_a_benign_severity(self):
+        """An abuse report is not a bug, so severity is not_applicable — which used to
+        paint the most serious ticket in the digest the calmest colour."""
+        abuse = finding(1, category="abuse_report", severity="not_applicable")
+        self.assertEqual(triage.embed_color(abuse), triage.CATEGORY_COLOR["abuse_report"])
+        self.assertNotEqual(triage.embed_color(abuse),
+                            triage.SEVERITY_COLOR["not_applicable"])
+
+    def test_non_urgent_category_still_uses_severity(self):
+        self.assertEqual(triage.embed_color(finding(1, category="bug_report", severity="crash")),
+                         triage.SEVERITY_COLOR["crash"])
+
+    def test_unknown_severity_falls_back_to_grey(self):
+        self.assertEqual(triage.embed_color({"category": "other", "severity": "???"}), 0x95A5A6)
+
+    def test_urgent_tickets_are_highlighted_even_if_not_flagged(self):
+        abuse = finding(1, category="abuse_report", worth_looking_into=False)
+        shown, _ = triage.select_highlights([abuse])
+        self.assertEqual([f["id"] for f in shown], [1])
+
+    def test_urgent_tickets_sort_ahead_of_better_ranked_ordinary_ones(self):
+        ordinary = finding(1, category="bug_report", priority_rank=1)
+        abuse = finding(2, category="abuse_report", priority_rank=99)
+        shown, _ = triage.select_highlights([ordinary, abuse])
+        self.assertEqual([f["id"] for f in shown], [2, 1])
+
+    def test_urgent_tickets_cannot_be_pushed_out_by_the_display_cap(self):
+        ordinary = [finding(i, priority_rank=i) for i in range(triage.MAX_HIGHLIGHTS + 5)]
+        abuse = finding(9999, category="abuse_report", priority_rank=9999)
+        shown, omitted = triage.select_highlights(ordinary + [abuse])
+        self.assertIn(9999, [f["id"] for f in shown])
+        self.assertNotIn(9999, [f["id"] for f in omitted])
+
+
+class TestReviewFiltering(unittest.TestCase):
+    def review(self, ticket_id, stars, channel="any_channel"):
+        return ticket(ticket_id, subject="★" * stars + "☆" * (5 - stars) + " \n\tGreat app",
+                      via={"channel": channel})
+
+    def test_star_count_is_read_from_the_subject(self):
+        self.assertEqual(triage.review_stars(self.review(1, 5)), 5)
+        self.assertEqual(triage.review_stars(self.review(2, 1)), 1)
+
+    def test_non_review_subject_has_no_stars(self):
+        self.assertIsNone(triage.review_stars(ticket(1, subject="Notifications broken")))
+
+    def test_channel_identifies_a_review_without_stars_in_the_subject(self):
+        """The channel is the reliable signal: only 287 of 2,656 sampled reviews
+        carried the app-store tag, so tag-based filtering would miss most."""
+        self.assertTrue(triage.is_store_review(
+            ticket(1, subject="no stars here", via={"channel": "any_channel"})))
+
+    def test_web_tickets_are_not_reviews(self):
+        self.assertFalse(triage.is_store_review(ticket(1, via={"channel": "web"})))
+
+    def test_positive_reviews_are_skipped(self):
+        keep, skipped = triage.partition_reviews(
+            [self.review(1, 5), self.review(2, 4)], star_floor=3)
+        self.assertEqual(keep, [])
+        self.assertEqual(len(skipped), 2)
+
+    def test_low_star_reviews_are_kept_because_they_hide_bugs(self):
+        keep, skipped = triage.partition_reviews(
+            [self.review(1, 1), self.review(2, 2), self.review(3, 3)], star_floor=3)
+        self.assertEqual(len(keep), 3)
+        self.assertEqual(skipped, [])
+
+    def test_real_support_tickets_are_never_skipped(self):
+        support = ticket(1, subject="Cannot send messages", via={"channel": "web"})
+        keep, skipped = triage.partition_reviews([support], star_floor=3)
+        self.assertEqual(keep, [support])
+        self.assertEqual(skipped, [])
+
+    def test_a_review_with_an_unparseable_rating_is_kept(self):
+        """Better to spend a few tokens than silently drop a real complaint."""
+        odd = ticket(1, subject="loved it", via={"channel": "any_channel"})
+        keep, skipped = triage.partition_reviews([odd], star_floor=3)
+        self.assertEqual(keep, [odd])
+        self.assertEqual(skipped, [])
+
+    def test_the_floor_is_configurable(self):
+        keep, skipped = triage.partition_reviews([self.review(1, 4)], star_floor=4)
+        self.assertEqual(len(keep), 1)
+        self.assertEqual(skipped, [])
+
+
+class TestContentFreeTickets(unittest.TestCase):
+    """Twitter DM tickets arrive with subject and body both 'Conversation with
+    <handle>' — 15% of non-review tickets, unclassifiable as fetched."""
+
+    def test_detects_a_description_that_repeats_the_subject(self):
+        self.assertTrue(triage.is_content_free(
+            ticket(1, subject="Conversation with x", description="Conversation with x")))
+
+    def test_tolerates_whitespace_differences(self):
+        self.assertTrue(triage.is_content_free(
+            ticket(1, subject="Conversation  with x", description="Conversation with x\n")))
+
+    def test_a_real_description_is_not_content_free(self):
+        self.assertFalse(triage.is_content_free(
+            ticket(1, subject="Notifications", description="I get no notifications")))
+
+    def test_hydration_pulls_the_first_informative_comment(self):
+        row = ticket(1, subject="Conversation with x", description="Conversation with x")
+        session = FakeSession([FakeResponse({"comments": [
+            {"body": "Conversation with x"},
+            {"body": "My messages will not send since the update"},
+        ]})])
+        self.assertEqual(triage.hydrate_descriptions(session, "acme", [row]), 1)
+        self.assertIn("will not send", row["description"])
+
+    def test_hydration_skips_tickets_that_already_have_content(self):
+        row = ticket(1, subject="Notifications", description="No notifications at all")
+        session = FakeSession([])
+        self.assertEqual(triage.hydrate_descriptions(session, "acme", [row]), 0)
+        self.assertEqual(session.calls, [])  # no wasted API call
+
+    def test_hydration_survives_an_api_failure(self):
+        row = ticket(1, subject="Conversation with x", description="Conversation with x")
+        session = FakeSession([FakeResponse({}, status_code=404)])
+        self.assertEqual(triage.hydrate_descriptions(session, "acme", [row]), 0)
+        self.assertEqual(row["description"], "Conversation with x")  # left as-is
+
+    def test_hydration_survives_a_transport_failure(self):
+        """An unreachable comments endpoint must not abort the whole digest."""
+        row = ticket(1, subject="Conversation with x", description="Conversation with x")
+        session = FakeSession([requests.ConnectionError("unreachable")] * 2)
+        with NoSleep():
+            self.assertEqual(triage.hydrate_descriptions(session, "acme", [row]), 0)
+        self.assertEqual(row["description"], "Conversation with x")
+
+    def test_one_unreachable_ticket_does_not_block_the_next(self):
+        rows = [
+            ticket(1, subject="Conversation with a", description="Conversation with a"),
+            ticket(2, subject="Conversation with b", description="Conversation with b"),
+        ]
+        session = FakeSession([
+            requests.ConnectionError("unreachable"), requests.ConnectionError("unreachable"),
+            FakeResponse({"comments": [{"body": "Cannot log in since the update"}]}),
+        ])
+        with NoSleep():
+            self.assertEqual(triage.hydrate_descriptions(session, "acme", rows), 1)
+        self.assertIn("Cannot log in", rows[1]["description"])
+
+    def test_hydration_joins_every_informative_comment(self):
+        """It joins all bodies differing from the subject within the fetched page,
+        not just the first — later replies often carry the detail."""
+        row = ticket(1, subject="Conversation with x", description="Conversation with x")
+        session = FakeSession([FakeResponse({"comments": [
+            {"body": "Conversation with x"},
+            {"body": "first detail"},
+            {"body": "second detail"},
+        ]})])
+        triage.hydrate_descriptions(session, "acme", [row])
+        self.assertIn("first detail", row["description"])
+        self.assertIn("second detail", row["description"])
+
+    def test_hydration_requests_a_bounded_page_of_comments(self):
+        row = ticket(1, subject="Conversation with x", description="Conversation with x")
+        session = FakeSession([FakeResponse({"comments": [{"body": "detail"}]})])
+        triage.hydrate_descriptions(session, "acme", [row])
+        _, _, kwargs = session.calls[0]
+        self.assertEqual(kwargs["params"], {"per_page": 10})
+
+    def test_hydration_leaves_the_ticket_alone_when_no_comment_adds_anything(self):
+        row = ticket(1, subject="Conversation with x", description="Conversation with x")
+        session = FakeSession([FakeResponse({"comments": [{"body": "Conversation with x"}]})])
+        self.assertEqual(triage.hydrate_descriptions(session, "acme", [row]), 0)
+
+
+class TestEmbedCharLimit(unittest.TestCase):
+    """Discord caps a message at 10 embeds *and* 6,000 chars across them; chunking on
+    count alone can build a payload Discord rejects."""
+
+    def fat(self, ticket_id):
+        # ~1,300 chars of field text: 10 of these would be ~13,000, over the limit.
+        return finding(ticket_id, summary="s" * 200, likely_root_cause="r" * 300,
+                       affected_component="c" * 100, language="l" * 40)
+
+    def test_every_message_respects_both_limits(self):
+        findings = [self.fat(i) for i in range(triage.MAX_HIGHLIGHTS)]
+        for message in build_messages(findings, "acme"):
+            self.assertLessEqual(len(message["embeds"]), triage.MAX_EMBEDS_PER_MESSAGE)
+            total = sum(triage.embed_char_count(e) for e in message["embeds"])
+            self.assertLessEqual(total, triage.MAX_EMBED_CHARS_PER_MESSAGE)
+
+    def test_char_limit_splits_where_the_count_limit_would_not(self):
+        """9 fat highlights + summary = 10 embeds: within the count limit, over 6,000 chars."""
+        messages = build_messages([self.fat(i) for i in range(9)], "acme")
+        embeds = sum(len(m["embeds"]) for m in messages)
+        self.assertLessEqual(embeds, triage.MAX_EMBEDS_PER_MESSAGE)  # count alone: 1 message
+        self.assertGreater(len(messages), 1)                         # chars forced the split
+
+    def test_lean_embeds_are_not_split_early(self):
+        """The char limit must not fragment ordinary digests."""
+        messages = build_messages([finding(i, priority_rank=i) for i in range(9)], "acme")
+        self.assertEqual(len(messages), 1)
+
+    def test_no_embed_is_dropped_while_chunking(self):
+        findings = [self.fat(i) for i in range(15)]
+        messages = build_messages(findings, "acme")
+        self.assertEqual(sum(len(m["embeds"]) for m in messages), 16)  # 15 + summary
+
+    def test_char_count_covers_titles_descriptions_and_fields(self):
+        embed = {"title": "abc", "description": "de",
+                 "fields": [{"name": "fg", "value": "hij"}]}
+        self.assertEqual(triage.embed_char_count(embed), 3 + 2 + 2 + 3)
+
+    def test_char_count_tolerates_missing_keys(self):
+        self.assertEqual(triage.embed_char_count({}), 0)
+
+
+class TestCoverage(unittest.TestCase):
+    """coverage[i] is what message i accounts for, so a partial post failure records
+    exactly the tickets that reached Discord."""
+
+    def test_summary_message_covers_non_highlighted_tickets(self):
+        findings = [finding(1), finding(2, worth_looking_into=False)]
+        _, coverage = triage.build_messages(findings, "acme")
+        self.assertIn(2, coverage[0])   # counted by the summary
+        self.assertIn(1, coverage[0])   # its own embed is in the same message
+
+    def test_highlights_omitted_by_the_cap_are_covered_by_nothing(self):
+        over = triage.MAX_HIGHLIGHTS + 3
+        findings = [finding(i, priority_rank=i) for i in range(over)]
+        _, coverage = triage.build_messages(findings, "acme")
+        covered = set().union(*coverage)
+        shown, omitted = triage.select_highlights(findings)
+        self.assertEqual(len(omitted), 3)
+        for f in omitted:
+            self.assertNotIn(f["id"], covered)
+        for f in shown:
+            self.assertIn(f["id"], covered)
+
+    def test_coverage_has_one_entry_per_message(self):
+        findings = [finding(i, priority_rank=i) for i in range(triage.MAX_HIGHLIGHTS)]
+        messages, coverage = triage.build_messages(findings, "acme")
+        self.assertEqual(len(messages), len(coverage))
+
+    def test_no_ticket_is_covered_twice(self):
+        findings = [finding(i, priority_rank=i) for i in range(20)]
+        _, coverage = triage.build_messages(findings, "acme")
+        flat = [tid for ids in coverage for tid in ids]
+        self.assertEqual(len(flat), len(set(flat)))
+
+
+class TestPostToDiscord(unittest.TestCase):
+    """Returns the accepted count rather than exiting, so main can record exactly the
+    tickets that landed before signalling the failure."""
+
+    def test_all_accepted(self):
+        session = FakeSession([FakeResponse({}, status_code=204)] * 3)
+        self.assertEqual(triage.post_to_discord(session, "https://hook", [{}, {}, {}]), 3)
+        self.assertEqual(len(session.calls), 3)
+
+    def test_stops_at_the_first_failure_and_reports_the_prefix(self):
+        session = FakeSession([
+            FakeResponse({}, status_code=204),
+            FakeResponse({}, status_code=400),
+        ])
+        self.assertEqual(triage.post_to_discord(session, "https://hook", [{}, {}, {}]), 1)
+
+    def test_does_not_post_after_a_failure(self):
+        session = FakeSession([FakeResponse({}, status_code=404)])
+        triage.post_to_discord(session, "https://hook", [{}, {}, {}])
+        self.assertEqual(len(session.calls), 1)
+
+    def test_first_message_failing_reports_zero(self):
+        session = FakeSession([FakeResponse({}, status_code=500)] * 6)
+        with NoSleep():
+            self.assertEqual(triage.post_to_discord(session, "https://hook", [{}]), 0)
+
+    def test_no_messages_is_zero(self):
+        self.assertEqual(triage.post_to_discord(FakeSession([]), "https://hook", []), 0)
+
+
+class TestSelectHighlights(unittest.TestCase):
+    def test_splits_at_the_display_cap(self):
+        findings = [finding(i, priority_rank=i) for i in range(triage.MAX_HIGHLIGHTS + 4)]
+        shown, omitted = triage.select_highlights(findings)
+        self.assertEqual(len(shown), triage.MAX_HIGHLIGHTS)
+        self.assertEqual(len(omitted), 4)
+
+    def test_orders_by_priority_rank(self):
+        shown, _ = triage.select_highlights(
+            [finding(1, priority_rank=5), finding(2, priority_rank=1)]
+        )
+        self.assertEqual([f["id"] for f in shown], [2, 1])
+
+    def test_ignores_tickets_not_worth_looking_into(self):
+        shown, omitted = triage.select_highlights([finding(1, worth_looking_into=False)])
+        self.assertEqual((shown, omitted), ([], []))
+
+
+class TestTicketsFromPayload(unittest.TestCase):
+    def test_returns_the_list(self):
+        self.assertEqual(triage.tickets_from_payload({"tickets": [{"id": 1}]}, "x"), [{"id": 1}])
+
+    def test_missing_key_exits_instead_of_raising_keyerror(self):
+        with self.assertRaises(SystemExit):
+            triage.tickets_from_payload({"results": []}, "x")
+
+    def test_wrong_type_exits(self):
+        for payload in ({"tickets": {}}, [], "nope", None):
+            with self.assertRaises(SystemExit):
+                triage.tickets_from_payload(payload, "x")
 
 
 class TestExtractJsonObject(unittest.TestCase):
@@ -452,15 +861,34 @@ class TestLoadFindings(unittest.TestCase):
             fh.write(content)
         return path
 
+    MINIMAL = {"id": 1, "category": "bug_report", "severity": "major"}
+
     def test_accepts_an_object_with_a_tickets_list(self):
-        self.assertEqual(triage.load_findings(self._write('{"tickets": [{"id": 1}]}')), [{"id": 1}])
+        payload = json.dumps({"tickets": [self.MINIMAL]})
+        self.assertEqual(triage.load_findings(self._write(payload)), [self.MINIMAL])
 
     def test_accepts_a_bare_list(self):
-        self.assertEqual(triage.load_findings(self._write('[{"id": 1}]')), [{"id": 1}])
+        payload = json.dumps([self.MINIMAL])
+        self.assertEqual(triage.load_findings(self._write(payload)), [self.MINIMAL])
 
     def test_rejects_anything_else(self):
         with self.assertRaises(SystemExit):
             triage.load_findings(self._write('{"nope": 1}'))
+
+    def test_rejects_a_finding_missing_keys_the_renderer_indexes(self):
+        """build_summary_embed does f["category"] / f["severity"] directly."""
+        for payload in ('[{"id": 1}]',
+                        '[{"id": 1, "category": "bug_report"}]',
+                        '[{"category": "bug_report", "severity": "major"}]'):
+            with self.assertRaises(SystemExit):
+                triage.load_findings(self._write(payload))
+
+    def test_rejects_a_non_object_entry(self):
+        with self.assertRaises(SystemExit):
+            triage.load_findings(self._write('[["not", "an", "object"]]'))
+
+    def test_an_empty_list_is_valid(self):
+        self.assertEqual(triage.load_findings(self._write("[]")), [])
 
 
 class TestCompactTicket(unittest.TestCase):
@@ -576,6 +1004,93 @@ class TestRequestWithRetry(unittest.TestCase):
         resp = triage.request_with_retry(session, "GET", "https://x", attempts=3)
         self.assertEqual(resp.status_code, 503)
         self.assertEqual(len(session.calls), 3)
+
+    def test_transport_failures_retry_then_raise_when_exhausted(self):
+        session = FakeSession([requests.ConnectionError("boom")] * 3)
+        with NoSleep():
+            with self.assertRaises(requests.ConnectionError):
+                triage.request_with_retry(session, "GET", "https://x", attempts=3)
+        self.assertEqual(len(session.calls), 3)
+
+    def test_a_transport_failure_can_recover_on_a_later_attempt(self):
+        session = FakeSession([requests.Timeout("slow"), FakeResponse({"ok": True})])
+        with NoSleep():
+            resp = triage.request_with_retry(session, "GET", "https://x", attempts=3)
+        self.assertEqual(resp.json(), {"ok": True})
+        self.assertEqual(len(session.calls), 2)
+
+    def test_no_sleep_after_the_final_attempt(self):
+        """Sleeping after the last try only delays the caller — nothing follows it."""
+        session = FakeSession([FakeResponse({}, status_code=503)] * 3)
+        with NoSleep() as clock:
+            triage.request_with_retry(session, "GET", "https://x", attempts=3)
+        self.assertEqual(len(clock.slept), 2)  # 3 attempts, 2 gaps
+
+    def test_numeric_retry_after_is_honoured(self):
+        session = FakeSession([
+            FakeResponse({}, status_code=429, retry_after="7"),
+            FakeResponse({"ok": True}),
+        ])
+        with NoSleep() as clock:
+            triage.request_with_retry(session, "GET", "https://x", attempts=3)
+        self.assertEqual(clock.slept, [7.0])
+
+    def test_retry_after_is_capped(self):
+        session = FakeSession([
+            FakeResponse({}, status_code=429, retry_after="9999"),
+            FakeResponse({"ok": True}),
+        ])
+        with NoSleep() as clock:
+            triage.request_with_retry(session, "GET", "https://x", attempts=3)
+        self.assertEqual(clock.slept, [60])
+
+    def test_http_date_retry_after_falls_back_instead_of_crashing(self):
+        """RFC 9110 allows an HTTP-date here; float() on it used to raise ValueError."""
+        session = FakeSession([
+            FakeResponse({}, status_code=503, retry_after="Wed, 21 Oct 2026 07:28:00 GMT"),
+            FakeResponse({"ok": True}),
+        ])
+        with NoSleep() as clock:
+            resp = triage.request_with_retry(session, "GET", "https://x", attempts=3)
+        self.assertEqual(resp.json(), {"ok": True})
+        self.assertEqual(clock.slept, [1.0])  # fell back to the backoff delay
+
+    def test_zero_attempts_is_rejected_rather_than_unbound(self):
+        with self.assertRaises(ValueError):
+            triage.request_with_retry(FakeSession([]), "GET", "https://x", attempts=0)
+
+
+class TestRetryAfterSeconds(unittest.TestCase):
+    def test_missing_header_uses_the_default(self):
+        self.assertEqual(triage.retry_after_seconds(FakeResponse({}, retry_after=None), 4.0), 4.0)
+
+    def test_numeric_header_wins(self):
+        self.assertEqual(triage.retry_after_seconds(FakeResponse({}, retry_after="12"), 4.0), 12.0)
+
+    def test_unparseable_header_uses_the_default(self):
+        for raw in ("Wed, 21 Oct 2026 07:28:00 GMT", "", "soon", "12s"):
+            self.assertEqual(triage.retry_after_seconds(FakeResponse({}, retry_after=raw), 4.0), 4.0)
+
+    def test_negative_and_non_finite_values_use_the_default(self):
+        """time.sleep() rejects a negative or NaN duration, so passing one through
+        would crash the run on a hostile or buggy Retry-After header."""
+        for raw in ("-30", "-0.5", "nan", "inf", "-inf"):
+            self.assertEqual(triage.retry_after_seconds(FakeResponse({}, retry_after=raw), 4.0),
+                             4.0, msg=f"retry-after={raw!r}")
+
+    def test_zero_is_honoured_rather_than_replaced(self):
+        """Zero is a valid instruction to retry immediately, not a missing value."""
+        self.assertEqual(triage.retry_after_seconds(FakeResponse({}, retry_after="0"), 4.0), 0.0)
+
+    def test_a_negative_retry_after_does_not_crash_a_real_retry_loop(self):
+        session = FakeSession([
+            FakeResponse({}, status_code=503, retry_after="-30"),
+            FakeResponse({"ok": True}),
+        ])
+        with NoSleep() as clock:
+            resp = triage.request_with_retry(session, "GET", "https://x", attempts=3)
+        self.assertEqual(resp.json(), {"ok": True})
+        self.assertTrue(all(s >= 0 for s in clock.slept), clock.slept)
 
 
 if __name__ == "__main__":

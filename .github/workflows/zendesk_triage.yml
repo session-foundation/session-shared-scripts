@@ -35,6 +35,11 @@ concurrency:
   group: zendesk-triage
   cancel-in-progress: false
 
+# The job only reads the repo; everything it writes goes to Zendesk/Discord over
+# their own credentials. Nothing needs a writable GITHUB_TOKEN.
+permissions:
+  contents: read
+
 jobs:
   triage:
     runs-on: ubuntu-latest
@@ -50,11 +55,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r zendesk_triage/requirements.txt
 
-      # Unique key so every run writes a fresh entry; the restore-keys prefix
-      # pulls in the most recent previous one. Saved at job end, and only when
-      # the job succeeds — a failed post therefore leaves state untouched.
+      # Unique key so every run writes a fresh entry; the restore-keys prefix pulls
+      # in the most recent previous one. Restore and save are split (rather than the
+      # combined actions/cache) so the save can run with if: always() — the script
+      # records partially-delivered tickets even when a later Discord POST fails, and
+      # the combined action would discard that on a failed job.
       - name: Restore triage state
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: .triage-state
           key: zendesk-triage-state-${{ github.run_id }}
@@ -95,7 +102,17 @@ jobs:
           ZENDESK_QUERY: ${{ github.event.inputs.query }}
           ZENDESK_TRIAGE_MODEL: ${{ vars.ZENDESK_TRIAGE_MODEL }}
         run: |
+          mkdir -p .triage-state
           python zendesk_triage/triage.py \
             --window-hours "${{ steps.cfg.outputs.window }}" \
             --max-tickets "${{ steps.cfg.outputs.max }}" \
             --state .triage-state/seen.json
+
+      # always(): the script writes state for tickets Discord accepted even when a
+      # later message fails, and that must survive the job's non-zero exit.
+      - name: Save triage state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .triage-state
+          key: zendesk-triage-state-${{ github.run_id }}

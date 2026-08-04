@@ -51,7 +51,9 @@ Usage:
 """
 import argparse
 import json
+import math
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -98,16 +100,62 @@ DESCRIPTION_CHARS = 1500  # per-ticket description sent to Claude (triage only)
 DEFAULT_BATCH_SIZE = 400
 MAX_OUTPUT_TOKENS = 128000
 
-CATEGORIES = [
-    "bug_report",
-    "low_star_review",
-    "legal_request",
-    "security_or_legislation",
-    "question",
-    "feature_request",
-    "other",
-]
+# ---- Taxonomy --------------------------------------------------------------
+#
+# Single source of truth. The schema enum, the Discord labels, the urgency colours,
+# and the system-prompt guidance are all derived from this table, so adding a
+# category is one edit and the model can never be given an enum value that the
+# prompt never explains.
+#
+# Percentages come from a 3,662-ticket sample of the 13 months to 2026-08.
+# Columns: (name, Discord label, urgency colour or None, guidance for the model)
+CATEGORY_SPECS = (
+    ("abuse_report", "🚨 Abuse report", 0xC0392B,
+     "One user reporting another account for illegal or abusive content (CSAM, "
+     "harassment, drugs, impersonation). Usually quotes the offending Session ID. "
+     "~11% of non-review tickets. Always set worth_looking_into."),
+    ("security_report", "🔒 Security report", 0xC0392B,
+     "A vulnerability, exploit, or account-compromise disclosure. Not the same as a "
+     "policy question. Always set worth_looking_into."),
+    ("legal_or_data_request", "⚖️ Legal / data request", 0xC0392B,
+     "GDPR or data-deletion request, subpoena, law-enforcement or court order. "
+     "Always set worth_looking_into."),
+    ("bug_report", "🐞 Bug report", None,
+     "Something in the app is broken or misbehaving."),
+    ("account_access", "🔑 Account access", None,
+     "Lost recovery phrase, locked out, or asking to restore an account. Usually "
+     "irreversible by design, but track the volume."),
+    ("policy_question", "📜 Policy question", None,
+     "Questions about law, regulation, or policy — 'Chat Control', encryption "
+     "backdoors, whether Session complies with something."),
+    ("low_star_review", "⭐ Low-star review", None,
+     "An app-store review of 3 stars or fewer. These often hide a real bug — put "
+     "the underlying problem in `summary`."),
+    ("positive_review", "👍 Positive review", None,
+     "An app-store review of 4-5 stars with no actionable content."),
+    ("feature_request", "💡 Feature request", None,
+     "Asking for something the app does not do yet."),
+    ("question", "❓ Question", None,
+     "A how-do-I or usage question that is not a bug."),
+    ("spam_or_solicitation", "🗑️ Spam / solicitation", None,
+     "Marketing, token or OTC investment offers, partnership pitches, listing spam."),
+    ("other", "• Other", None,
+     "Genuinely none of the above. Prefer a specific category wherever one fits."),
+)
+CATEGORIES = [name for name, _, _, _ in CATEGORY_SPECS]
+CATEGORY_LABEL = {name: label for name, label, _, _ in CATEGORY_SPECS}
+# Categories whose urgency `severity` cannot express. They are not bugs, so the model
+# rates them not_applicable — which would otherwise paint the most serious ticket in
+# the batch the calmest colour and sort it last.
+CATEGORY_COLOR = {name: color for name, _, color, _ in CATEGORY_SPECS if color}
+URGENT_CATEGORIES = frozenset(CATEGORY_COLOR)
+CATEGORY_GUIDANCE = "\n".join(f"- {name}: {desc}" for name, _, _, desc in CATEGORY_SPECS)
+
 SEVERITIES = ["crash", "data_loss", "major", "minor", "cosmetic", "not_applicable"]
+PLATFORMS = [
+    "ios", "android", "desktop_windows", "desktop_macos", "desktop_linux",
+    "multiple", "unknown",
+]
 
 # Structured-output schema. Kept within the structured-output constraints:
 # additionalProperties:false everywhere, every field required, enums for the
@@ -142,11 +190,24 @@ TICKET_PROPERTIES = {
     },
     "worth_looking_into": {
         "type": "boolean",
-        "description": "True if a human should review this soon (major bug, legal, security/legislation, or otherwise notable).",
+        "description": "True if a human should review this soon. Always true for abuse_report, security_report, and legal_or_data_request.",
     },
     "cluster": {
         "type": "string",
         "description": "Short label grouping tickets with the same likely root cause; identical labels mean likely duplicates/clusters. Empty string if standalone.",
+    },
+    "platform": {
+        "type": "string",
+        "enum": PLATFORMS,
+        "description": "Platform the ticket is about. 'multiple' if several, 'unknown' if not stated.",
+    },
+    "app_version": {
+        "type": "string",
+        "description": "App version if the ticket states one, e.g. '2.15.2'. Empty string otherwise.",
+    },
+    "reported_session_id": {
+        "type": "string",
+        "description": "For abuse reports: the reported account's Session ID (66 hex chars, starts with 05), copied exactly. Empty string if the ticket gives none.",
     },
 }
 SCHEMA = {
@@ -166,17 +227,18 @@ SCHEMA = {
     },
 }
 
-SYSTEM_PROMPT = textwrap.dedent(
+_SYSTEM_PROMPT_TEMPLATE = textwrap.dedent(
     """
     You are a senior support-triage engineer. You are given a batch of Zendesk
     support tickets as JSON. For every ticket, return a classification object.
 
+    Tickets arrive in many languages and many are machine-imported app-store
+    reviews. Classify what the user is actually reporting, not how they said it.
+
+    Categories — use exactly these values:
+    __CATEGORIES__
+
     Guidelines:
-    - Categorise each ticket: bug_report, low_star_review (app-store style
-      complaints, which often hide real bugs — extract the bug in `summary`),
-      legal_request, security_or_legislation (e.g. law/regulation questions such
-      as "Chat Control", data requests, encryption/backdoor questions),
-      question, feature_request, or other.
     - Infer severity from the description: crash and data_loss are the most
       serious; use not_applicable for tickets that are not bug reports.
     - Group tickets that share a likely root cause under the same short `cluster`
@@ -185,12 +247,16 @@ SYSTEM_PROMPT = textwrap.dedent(
     - `summary` is one plain line: what is actually broken, or what the user
       actually wants. Do not restate the ticket subject.
     - Mark `worth_looking_into` true for anything a human should see soon:
-      crashes, data loss, major bugs, legal requests, and
-      security/legislation topics. Be selective — not everything is major.
+      crashes, data loss, major bugs, and every abuse_report, security_report,
+      and legal_or_data_request. Be selective otherwise — not everything is major.
+    - For abuse_report, copy the reported account's Session ID into
+      `reported_session_id` exactly as written. Do not invent or reformat it.
     - Rank by `priority_rank` (1 = first) across the whole batch.
     - Echo each ticket `id` back exactly. Return one object per input ticket.
     """
 ).strip()
+# Substituted after dedent so the guidance block keeps its own formatting.
+SYSTEM_PROMPT = _SYSTEM_PROMPT_TEMPLATE.replace("__CATEGORIES__", CATEGORY_GUIDANCE)
 
 
 def get_env(name, cli_value=None, required=True):
@@ -212,25 +278,55 @@ def zendesk_session(email, token):
     return session
 
 
+def retry_after_seconds(resp, default):
+    """Seconds to wait per the Retry-After header, falling back to `default`.
+
+    RFC 9110 allows either a delay in seconds or an HTTP-date; float() on the date
+    form raises, so anything unparseable falls back rather than crashing the run.
+
+    Negative, NaN, and infinite values fall back too: time.sleep() rejects the first
+    two outright, so a hostile or buggy proxy sending `Retry-After: -30` would
+    otherwise take the run down with a ValueError.
+    """
+    raw = resp.headers.get("retry-after")
+    if raw is None:
+        return default
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(seconds) or seconds < 0:
+        return default
+    return seconds
+
+
 def request_with_retry(session, method, url, attempts=6, **kwargs):
     """GET/POST with backoff on 429 and 5xx.
 
     Lower `attempts` for calls whose result is nice-to-have: the full budget can
     burn ~60s of backoff, which is not worth spending on optional data.
     """
+    if attempts <= 0:
+        raise ValueError("attempts must be at least 1")
+
     delay = 1.0
     last_exc = None
-    for _ in range(attempts):
+    resp = None
+    for attempt in range(attempts):
+        final = attempt == attempts - 1
         try:
             resp = session.request(method, url, timeout=30, **kwargs)
         except requests.RequestException as exc:
             last_exc = exc
+            if final:
+                break
             time.sleep(delay)
             delay = min(delay * 2, 30)
             continue
         if resp.status_code == 429 or resp.status_code >= 500:
-            retry_after = float(resp.headers.get("retry-after", delay))
-            time.sleep(min(retry_after, 60))
+            if final:
+                break
+            time.sleep(min(retry_after_seconds(resp, delay), 60))
             delay = min(delay * 2, 30)
             continue
         return resp
@@ -313,6 +409,12 @@ def load_state(path):
     if not isinstance(data, dict) or not isinstance(data.get("seen"), dict):
         print(f"Note: unexpected shape in {path}; treating every ticket as new.")
         return empty_state()
+    # A state file written by a different schema version can't be trusted field by
+    # field, so treat it as a cache miss rather than misreading it.
+    if data.get("version") != STATE_VERSION:
+        print(f"Note: {path} is version {data.get('version')!r}, expected {STATE_VERSION}; "
+              f"treating every ticket as new.")
+        return empty_state()
     print(f"Loaded state for {len(data['seen'])} previously reported tickets.")
     return data
 
@@ -374,6 +476,90 @@ def save_state(path, state, reported, retention_days):
     return len(kept), len(seen) - len(kept)
 
 
+# ---- App-store review filtering --------------------------------------------
+#
+# AppFollow imports app-store reviews into Zendesk through this channel. In the
+# 13-month sample it identified reviews with no false positives (2,656 of 2,656),
+# whereas the `app-store` tag was present on only 287 of them — so filter on the
+# channel, not on tags. 4-5 star reviews were 59% of *all* tickets and are never
+# actionable, so counting them beats paying tokens to classify them.
+REVIEW_CHANNEL = "any_channel"
+STAR_SUBJECT = re.compile(r"^\s*([★☆]{1,10})")
+DEFAULT_REVIEW_STAR_FLOOR = 3
+
+
+def squash(value):
+    """Collapse whitespace so subject/description can be compared meaningfully."""
+    return re.sub(r"\s+", " ", value or "").strip()
+
+
+def review_stars(ticket):
+    """Star count from an AppFollow review subject, or None if not a review subject."""
+    match = STAR_SUBJECT.match(ticket.get("subject") or "")
+    return match.group(1).count("★") if match else None
+
+
+def is_store_review(ticket):
+    return (((ticket.get("via") or {}).get("channel") == REVIEW_CHANNEL)
+            or STAR_SUBJECT.match(ticket.get("subject") or "") is not None)
+
+
+def partition_reviews(tickets, star_floor):
+    """Split off app-store reviews rated above `star_floor`.
+
+    Reviews whose rating cannot be parsed are kept: spending a few tokens beats
+    dropping a real complaint.
+    """
+    keep, skipped = [], []
+    for ticket in tickets:
+        stars = review_stars(ticket)
+        if is_store_review(ticket) and stars is not None and stars > star_floor:
+            skipped.append(ticket)
+        else:
+            keep.append(ticket)
+    return keep, skipped
+
+
+def is_content_free(ticket):
+    """True when the description just repeats the subject, carrying no information.
+
+    Twitter DM tickets arrive this way — subject and body are both
+    "Conversation with <handle>" — 15% of non-review tickets in the sample. Sent
+    as-is they are unclassifiable, so the model invents a category for a handle.
+    """
+    return squash(ticket.get("description")) == squash(ticket.get("subject"))
+
+
+def hydrate_descriptions(session, subdomain, tickets):
+    """Fill content-free descriptions from the ticket's comments. Returns the count.
+
+    Costs one extra API call per affected ticket, so it only runs for those.
+    """
+    hydrated = 0
+    for ticket in tickets:
+        if not is_content_free(ticket):
+            continue
+        url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket['id']}/comments.json"
+        try:
+            resp = request_with_retry(session, "GET", url, attempts=2, params={"per_page": 10})
+        except requests.RequestException as exc:
+            # Hydration is an enrichment, never a reason to abort the digest: an
+            # unreachable comments endpoint just leaves the description as-is.
+            print(f"Note: could not fetch comments for #{ticket['id']} ({exc}).")
+            continue
+        if resp.status_code >= 400:
+            continue
+        subject = squash(ticket.get("subject"))
+        bodies = [squash(c.get("body")) for c in resp.json().get("comments", [])]
+        useful = [b for b in bodies if b and b != subject]
+        if useful:
+            ticket["description"] = "\n".join(useful)
+            hydrated += 1
+    if hydrated:
+        print(f"Recovered {hydrated} content-free description(s) from ticket comments.")
+    return hydrated
+
+
 def compact_ticket(ticket):
     """Reduce a Zendesk ticket to the fields Claude needs for triage."""
     description = (ticket.get("description") or "").strip()
@@ -400,21 +586,38 @@ def build_analysis_prompt(compact_tickets):
     )
 
 
+def _cli_field_lines():
+    """Describe every schema field for the CLI path, derived from TICKET_PROPERTIES.
+
+    The API path has structured outputs to enforce the shape; the CLI path only has
+    this text. Hardcoding the field list here is how three fields (platform,
+    app_version, reported_session_id) silently came back empty on the CLI backend
+    after being added to the schema.
+    """
+    lines = []
+    for name, spec in TICKET_PROPERTIES.items():
+        shape = spec.get("type", "string")
+        if "enum" in spec:
+            shape += "; one of: " + ", ".join(spec["enum"])
+        description = spec.get("description", "")
+        lines.append(f"- {name} ({shape}){': ' + description if description else ''}")
+    return "\n".join(lines)
+
+
 # The API path gets the shape enforced by structured outputs. The CLI path has no
-# such enforcement, so the shape has to be spelled out in the prompt instead.
+# such enforcement, so the shape is spelled out here — from the same schema.
 CLI_JSON_INSTRUCTIONS = textwrap.dedent(
     """
     Return ONLY a single JSON object — no prose, no explanation, no markdown code
     fence. The object has exactly one key, "tickets", whose value is an array with
     one object per input ticket, each with exactly these keys:
-      id (integer, echoed back unchanged), category, severity, affected_component,
-      summary, likely_root_cause, language, priority_rank (integer),
-      worth_looking_into (boolean), cluster
-    category must be one of: {categories}
-    severity must be one of: {severities}
-    Use an empty string for text fields you cannot fill.
+    __FIELDS__
+
+    Every key is required on every object. Use an empty string for text fields you
+    cannot fill, and the enum's catch-all value ('unknown', 'not_applicable', 'other')
+    rather than inventing a new one.
     """
-).strip().format(categories=", ".join(CATEGORIES), severities=", ".join(SEVERITIES))
+).strip().replace("__FIELDS__", _cli_field_lines())
 
 
 def extract_json_object(text):
@@ -427,6 +630,19 @@ def extract_json_object(text):
         return json.loads(text[start : end + 1])
     except json.JSONDecodeError as exc:
         sys.exit(f"Model output was not valid JSON ({exc}):\n{text[start : start + 500]}")
+
+
+def tickets_from_payload(payload, source):
+    """Pull the `tickets` list out of a classification payload, or exit clearly.
+
+    Structured outputs guarantee the key on the API path, but the CLI path has no
+    such guarantee — a bare KeyError there is a confusing way to learn that.
+    """
+    found = payload.get("tickets") if isinstance(payload, dict) else None
+    if not isinstance(found, list):
+        shape = sorted(payload) if isinstance(payload, dict) else type(payload).__name__
+        sys.exit(f"{source} returned no 'tickets' list (got: {shape}).")
+    return found
 
 
 def analyze_via_claude_cli(model, compact_tickets, timeout=1800):
@@ -460,7 +676,8 @@ def analyze_via_claude_cli(model, compact_tickets, timeout=1800):
     cost = envelope.get("total_cost_usd")
     if cost is not None:
         print(f"claude CLI reported ${cost:.4f} for this batch.")
-    return extract_json_object(envelope.get("result") or "")["tickets"]
+    result = extract_json_object(envelope.get("result") or "")
+    return tickets_from_payload(result, "`claude` CLI")
 
 
 def dump_batch(path, compact_tickets, model):
@@ -476,13 +693,27 @@ def dump_batch(path, compact_tickets, model):
         json.dump(payload, fh, indent=2, ensure_ascii=False)
 
 
+REQUIRED_FINDING_KEYS = ("id", "category", "severity")
+
+
 def load_findings(path):
-    """Read findings written by hand or by another tool: {"tickets": [...]} or [...]."""
+    """Read findings written by hand or by another tool: {"tickets": [...]} or [...].
+
+    Validates the keys the Discord renderer indexes directly, so a hand-edited file
+    fails here with the offending entry rather than as a KeyError mid-render.
+    """
     with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
     findings = data.get("tickets") if isinstance(data, dict) else data
     if not isinstance(findings, list):
         sys.exit(f"{path}: expected a JSON list, or an object with a 'tickets' list.")
+    for position, entry in enumerate(findings):
+        if not isinstance(entry, dict):
+            sys.exit(f"{path}: entry {position} is {type(entry).__name__}, expected an object.")
+        missing = [key for key in REQUIRED_FINDING_KEYS if key not in entry]
+        if missing:
+            sys.exit(f"{path}: entry {position} (id={entry.get('id')!r}) is missing "
+                     f"required key(s): {', '.join(missing)}.")
     return findings
 
 
@@ -534,7 +765,7 @@ def analyze(client, model, effort, compact_tickets):
     text = next((b.text for b in message.content if b.type == "text"), None)
     if not text:
         sys.exit("Claude returned no structured output.")
-    return json.loads(text)["tickets"]
+    return tickets_from_payload(json.loads(text), "Claude")
 
 
 # ---- Discord rendering -----------------------------------------------------
@@ -547,16 +778,8 @@ SEVERITY_COLOR = {
     "cosmetic": 0x95A5A6,   # grey
     "not_applicable": 0x3498DB,  # blue
 }
-CATEGORY_LABEL = {
-    "bug_report": "🐞 Bug report",
-    "low_star_review": "⭐ Low-star review",
-    "legal_request": "⚖️ Legal request",
-    "security_or_legislation": "🔒 Security / legislation",
-    "question": "❓ Question",
-    "feature_request": "💡 Feature request",
-    "other": "• Other",
-}
 MAX_EMBEDS_PER_MESSAGE = 10
+MAX_EMBED_CHARS_PER_MESSAGE = 6000  # Discord's aggregate limit across one message
 MAX_HIGHLIGHTS = 27  # 3 messages of ~9 highlights + a summary embed
 
 
@@ -611,6 +834,9 @@ def build_summary_embed(findings, highlights, subdomain, stats=None):
     window += "."
     if skipped:
         window += f" Skipped **{skipped}** already reported and unchanged."
+    reviews = stats.get("skipped_reviews") or 0
+    if reviews:
+        window += f" Skipped **{reviews}** positive app-store review(s)."
     lines = [window]
 
     if backlog is not None:
@@ -630,6 +856,23 @@ def build_summary_embed(findings, highlights, subdomain, stats=None):
     }
 
 
+def is_urgent(finding):
+    return finding.get("category") in URGENT_CATEGORIES
+
+
+def embed_color(finding):
+    """Colour by category urgency first, then severity.
+
+    An abuse or legal report is not a bug, so the model rates it not_applicable —
+    which maps to the calmest blue. Category has to win, or the most serious ticket
+    in the digest looks the most benign.
+    """
+    urgent = CATEGORY_COLOR.get(finding.get("category"))
+    if urgent:
+        return urgent
+    return SEVERITY_COLOR.get(finding.get("severity", "not_applicable"), 0x95A5A6)
+
+
 def build_highlight_embed(finding, subdomain, is_update=False):
     tid = finding["id"]
     sev = finding.get("severity", "not_applicable")
@@ -643,52 +886,126 @@ def build_highlight_embed(finding, subdomain, is_update=False):
         {"name": "Severity", "value": sev, "inline": True},
         {"name": "Language", "value": clip(finding.get("language"), 40) or "—", "inline": True},
     ]
+    platform = finding.get("platform")
+    if platform and platform != "unknown":
+        fields.append({"name": "Platform", "value": clip(platform, 40), "inline": True})
     component = clip(finding.get("affected_component"), 100)
     if component:
         fields.append({"name": "Component", "value": component, "inline": True})
+    version = clip(finding.get("app_version"), 40)
+    if version:
+        fields.append({"name": "Version", "value": version, "inline": True})
+    # The reported account is the actionable part of an abuse report — surfacing it
+    # here saves opening the ticket to copy it.
+    reported = clip(finding.get("reported_session_id"), 100)
+    if reported:
+        fields.append({"name": "Reported account", "value": f"`{reported}`", "inline": False})
     root = clip(finding.get("likely_root_cause"), 300)
     description = f"Likely cause: {root}" if root else ""
     return {
         "title": clip(title, 256),
         "url": ticket_url(subdomain, tid),
         "description": description,
-        "color": SEVERITY_COLOR.get(sev, 0x95A5A6),
+        "color": embed_color(finding),
         "fields": fields,
     }
 
 
-def build_messages(findings, subdomain, stats=None, updated_ids=None):
-    """Return a list of Discord webhook payloads (each <=10 embeds)."""
-    updated_ids = updated_ids or set()
-    highlights = [f for f in findings if f.get("worth_looking_into")]
-    highlights.sort(key=lambda f: f.get("priority_rank", 9999))
-    shown = highlights[:MAX_HIGHLIGHTS]
+def embed_char_count(embed):
+    """Characters Discord counts against the per-message embed budget."""
+    total = len(embed.get("title") or "") + len(embed.get("description") or "")
+    for field in embed.get("fields") or []:
+        total += len(field.get("name") or "") + len(field.get("value") or "")
+    return total
 
-    embeds = [build_summary_embed(findings, highlights, subdomain, stats)]
-    embeds += [
-        build_highlight_embed(f, subdomain, is_update=f.get("id") in updated_ids)
+
+def chunk_entries(entries):
+    """Group (embed, ticket_ids) pairs into messages within both Discord limits.
+
+    Discord caps a message at 10 embeds *and* 6,000 characters summed across them;
+    chunking on count alone can produce a payload that is rejected as too large.
+    """
+    chunks, current, current_chars = [], [], 0
+    for embed, ids in entries:
+        size = embed_char_count(embed)
+        too_many = len(current) >= MAX_EMBEDS_PER_MESSAGE
+        too_long = current_chars + size > MAX_EMBED_CHARS_PER_MESSAGE
+        if current and (too_many or too_long):
+            chunks.append(current)
+            current, current_chars = [], 0
+        current.append((embed, ids))
+        current_chars += size
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def select_highlights(findings):
+    """Ordered highlights split into (shown, omitted) by the display cap.
+
+    Urgent categories are included even if the model failed to flag them, and sort
+    ahead of everything else — an abuse or legal report must not be pushed out of the
+    digest by a queue of ordinary bugs. Shared with state recording so the display
+    and what gets marked reported can't drift apart.
+    """
+    highlights = [f for f in findings if f.get("worth_looking_into") or is_urgent(f)]
+    highlights.sort(key=lambda f: (not is_urgent(f), f.get("priority_rank", 9999)))
+    return highlights[:MAX_HIGHLIGHTS], highlights[MAX_HIGHLIGHTS:]
+
+
+def build_messages(findings, subdomain, stats=None, updated_ids=None):
+    """Return (messages, coverage).
+
+    coverage[i] is the set of ticket ids message i accounts for, so a partial post
+    failure can still record exactly the tickets that reached Discord.
+    """
+    updated_ids = updated_ids or set()
+    shown, omitted = select_highlights(findings)
+    shown_ids = {f.get("id") for f in shown}
+    omitted_ids = {f.get("id") for f in omitted}
+
+    # The summary embed accounts for every classified ticket except the highlights
+    # that didn't fit; those are covered by no message and stay eligible.
+    summary_ids = {f.get("id") for f in findings} - shown_ids - omitted_ids
+    entries = [(build_summary_embed(findings, shown + omitted, subdomain, stats), summary_ids)]
+    entries += [
+        (build_highlight_embed(f, subdomain, is_update=f.get("id") in updated_ids),
+         {f.get("id")})
         for f in shown
     ]
 
     content = None
-    if len(highlights) > len(shown):
-        content = f"Showing the top {len(shown)} of {len(highlights)} tickets worth looking into."
+    if omitted:
+        content = (f"Showing the top {len(shown)} of {len(shown) + len(omitted)} "
+                   f"tickets worth looking into.")
 
-    messages = []
-    for i in range(0, len(embeds), MAX_EMBEDS_PER_MESSAGE):
-        chunk = embeds[i : i + MAX_EMBEDS_PER_MESSAGE]
-        payload = {"embeds": chunk}
-        if i == 0 and content:
+    messages, coverage = [], []
+    for index, chunk in enumerate(chunk_entries(entries)):
+        payload = {"embeds": [embed for embed, _ in chunk]}
+        if index == 0 and content:
             payload["content"] = content
         messages.append(payload)
-    return messages
+        covered = set()
+        for _, ids in chunk:
+            covered |= ids
+        coverage.append(covered)
+    return messages, coverage
 
 
 def post_to_discord(session, webhook_url, messages):
-    for payload in messages:
+    """POST each message in order; return how many Discord accepted.
+
+    Stops at the first failure and returns the accepted count instead of exiting, so
+    the caller can record the tickets that did land before signalling the failure —
+    otherwise a failure on message 3 of 3 reposts messages 1 and 2 on the next run.
+    """
+    for index, payload in enumerate(messages):
         resp = request_with_retry(session, "POST", webhook_url, json=payload)
         if resp.status_code >= 400:
-            sys.exit(f"Discord webhook failed ({resp.status_code}): {resp.text[:300]}")
+            print(f"Discord webhook failed on message {index + 1}/{len(messages)} "
+                  f"({resp.status_code}): {resp.text[:300]}")
+            return index
+    return len(messages)
 
 
 def main():
@@ -718,6 +1035,15 @@ def main():
                              "local `claude` CLI (no API key needed), or a findings file.")
     parser.add_argument("--findings",
                         help="Findings JSON to render instead of classifying (--backend file).")
+    parser.add_argument("--review-star-floor", type=int, default=DEFAULT_REVIEW_STAR_FLOOR,
+                        metavar="N",
+                        help=f"Classify app-store reviews of N stars or fewer; count the rest "
+                             f"without spending tokens (default: {DEFAULT_REVIEW_STAR_FLOOR}).")
+    parser.add_argument("--include-positive-reviews", action="store_true",
+                        help="Classify every app-store review, including 4-5 star ones.")
+    parser.add_argument("--no-hydrate", action="store_true",
+                        help="Skip fetching comments for tickets whose description just "
+                             "repeats the subject (e.g. Twitter DMs).")
     parser.add_argument("--state", metavar="PATH",
                         help="Dedup state file. When set, tickets already reported and "
                              "unchanged (same Zendesk updated_at) are skipped entirely; "
@@ -742,7 +1068,7 @@ def main():
 
     stats = {}
     state = None
-    reported = []
+    classified = []
     updated_ids = set()
 
     if args.backend == "file":
@@ -779,6 +1105,18 @@ def main():
         stats["matched"] = total_matched
         stats["total_unsolved"] = fetch_total_unsolved(zd, subdomain)
 
+        # Drop positive store reviews before anything expensive: they were 59% of all
+        # tickets in the sample and never actionable.
+        if not args.include_positive_reviews:
+            tickets, skipped_reviews = partition_reviews(tickets, args.review_star_floor)
+            if skipped_reviews:
+                stats["skipped_reviews"] = len(skipped_reviews)
+                print(f"Skipped {len(skipped_reviews)} app-store review(s) above "
+                      f"{args.review_star_floor} stars; {len(tickets)} tickets remain.")
+            if not tickets:
+                print("Only positive reviews in this window; nothing to report.")
+                return
+
         if args.state:
             state = load_state(args.state)
             new, changed, unchanged = partition_by_state(tickets, state)
@@ -793,7 +1131,12 @@ def main():
                 print("Nothing new or changed since the last run; nothing to report.")
                 return
 
-        reported = tickets
+        # Only after the review and dedup filters, so we never pay comment lookups
+        # for tickets we are about to discard.
+        if not args.no_hydrate:
+            hydrate_descriptions(zd, subdomain, tickets)
+
+        analyzed = tickets
         compact = [compact_ticket(t) for t in tickets]
 
         if args.dump_batch:
@@ -814,25 +1157,46 @@ def main():
         valid_ids = {t["id"] for t in compact}
         findings = [f for f in findings if f.get("id") in valid_ids]
 
-    highlights = sum(1 for f in findings if f.get("worth_looking_into"))
-    print(f"{len(findings)} tickets classified; {highlights} worth looking into.")
+        # A ticket with no classification was never triaged, so it must not be
+        # recorded as reported — leave it eligible for the next run.
+        finding_ids = {f.get("id") for f in findings}
+        classified = [t for t in analyzed if t.get("id") in finding_ids]
+        if len(classified) < len(analyzed):
+            print(f"Note: {len(analyzed) - len(classified)} ticket(s) came back without a "
+                  f"classification; they stay eligible for the next run.")
 
-    messages = build_messages(findings, subdomain, stats, updated_ids)
+    # Same selection the embeds use, so the console count can't disagree with the
+    # digest — worth_looking_into alone would miss urgent categories the model
+    # failed to flag.
+    shown, omitted = select_highlights(findings)
+    print(f"{len(findings)} tickets classified; {len(shown) + len(omitted)} worth looking into"
+          + (f" ({len(omitted)} beyond the display cap)." if omitted else "."))
+
+    messages, coverage = build_messages(findings, subdomain, stats, updated_ids)
     if args.dry_run:
         print(json.dumps(messages, indent=2, ensure_ascii=False))
         if args.state:
-            print(f"(dry run: would record {len(reported)} tickets in {args.state})")
+            would = set().union(*coverage) if coverage else set()
+            print(f"(dry run: would record "
+                  f"{sum(1 for t in classified if t.get('id') in would)} tickets "
+                  f"in {args.state})")
         return
 
-    post_to_discord(requests.Session(), webhook, messages)
-    print(f"Posted {len(messages)} Discord message(s).")
+    posted = post_to_discord(requests.Session(), webhook, messages)
+    print(f"Posted {posted} of {len(messages)} Discord message(s).")
 
-    # Only after Discord accepted the post: a failure here must leave the tickets
-    # unrecorded so the next run retries them instead of dropping them silently.
+    # Record only tickets covered by messages Discord actually accepted, so a partial
+    # failure neither reposts what landed nor suppresses what didn't.
     if args.state and state is not None:
-        kept, pruned = save_state(args.state, state, reported, args.state_retention_days)
-        print(f"Recorded {len(reported)} tickets; state now tracks {kept} "
+        delivered = set().union(*coverage[:posted]) if posted else set()
+        recorded = [t for t in classified if t.get("id") in delivered]
+        kept, pruned = save_state(args.state, state, recorded, args.state_retention_days)
+        print(f"Recorded {len(recorded)} tickets; state now tracks {kept} "
               f"({pruned} pruned beyond {args.state_retention_days} days).")
+
+    if posted < len(messages):
+        sys.exit(f"Aborted after {posted}/{len(messages)} messages; "
+                 f"undelivered tickets stay eligible for the next run.")
 
 
 if __name__ == "__main__":
