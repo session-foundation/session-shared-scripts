@@ -12,3 +12,9 @@ do_not_commit.sh
 
 # Local Crowdin audit outputs (persist across sessions, not for commit)
 .crowdin_audit/
+
+# Local Zendesk triage debugging artifacts — these contain ticket content
+zendesk_triage/*.json
+
+# Zendesk triage dedup state (ticket ids + timestamps; restored from CI cache)
+.triage-state/
