@@ -21,7 +21,7 @@ on:
         description: "Analyze tickets created in the last N hours (default 48)"
         required: false
       max_tickets:
-        description: "Max tickets to analyze (default 2000)"
+        description: "Max tickets to analyze (default 1000, Zendesk's search cap)"
         required: false
       reset_state:
         description: "Ignore saved state and re-report everything in the window"
@@ -56,15 +56,19 @@ jobs:
         run: pip install -r zendesk_triage/requirements.txt
 
       # Unique key so every run writes a fresh entry; the restore-keys prefix pulls
-      # in the most recent previous one. Restore and save are split (rather than the
-      # combined actions/cache) so the save can run with if: always() — the script
-      # records partially-delivered tickets even when a later Discord POST fails, and
-      # the combined action would discard that on a failed job.
+      # in the most recent previous one. run_attempt is in the key because cache
+      # entries are immutable: a re-run reuses run_id, so without it attempt 2's save
+      # would collide with attempt 1's and silently write nothing. Attempt 2 then
+      # restores attempt 1's entry via the prefix, so tickets already delivered
+      # aren't reposted. Restore and save are split (rather than the combined
+      # actions/cache) so the save can run with if: always() — the script records
+      # partially-delivered tickets even when a later Discord POST fails, and the
+      # combined action would discard that on a failed job.
       - name: Restore triage state
         uses: actions/cache/restore@v4
         with:
           path: .triage-state
-          key: zendesk-triage-state-${{ github.run_id }}
+          key: zendesk-triage-state-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             zendesk-triage-state-
 
@@ -79,11 +83,12 @@ jobs:
         run: |
           # The cap is a runaway guard, not a batch size: a 48h window is ~45
           # tickets, and anything over --batch-size is split across requests
-          # rather than truncated.
+          # rather than truncated. 1000 is Zendesk's own search result limit —
+          # asking for more just walks pagination into a 422, so don't.
           window=$(printf '%s' "${INPUT_WINDOW:-48}" | tr -cd '0-9')
-          max=$(printf '%s' "${INPUT_MAX:-2000}" | tr -cd '0-9')
+          max=$(printf '%s' "${INPUT_MAX:-1000}" | tr -cd '0-9')
           : "${window:=48}"
-          : "${max:=2000}"
+          : "${max:=1000}"
           echo "window=$window" >> "$GITHUB_OUTPUT"
           echo "max=$max" >> "$GITHUB_OUTPUT"
           if [ "$RESET_STATE" = "true" ]; then
@@ -115,4 +120,4 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .triage-state
-          key: zendesk-triage-state-${{ github.run_id }}
+          key: zendesk-triage-state-${{ github.run_id }}-${{ github.run_attempt }}

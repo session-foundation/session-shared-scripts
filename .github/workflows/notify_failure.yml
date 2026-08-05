@@ -6,6 +6,7 @@ on:
       - "Check for Crowdin Updates"
       - "Test Failure Notification"
       - "Crowdin Multiple Translations Report"
+      - "Zendesk Ticket Triage"
     types:
       - completed
 

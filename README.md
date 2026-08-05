@@ -143,7 +143,7 @@ Two caveats worth knowing:
 | `--state-retention-days` | flag           | `30`                                                    | Forget state entries older than N days |
 | `ZENDESK_QUERY`        | env / `--query`  | *(unset)*                                               | Explicit Zendesk search query. Overrides `--window-hours` entirely |
 | `ZENDESK_TRIAGE_MODEL` | repo variable / `--model` | `claude-opus-4-8`                             | Set to a cheaper model (e.g. `claude-haiku-4-5`) to reduce cost on large batches |
-| `--max-tickets`        | workflow input   | `2000`                                                  | Runaway guard on tickets analyzed per run, **not** a batch size |
+| `--max-tickets`        | workflow input / flag | `1000` (workflow) / `100` (flag)                   | Runaway guard on tickets analyzed per run, **not** a batch size. The workflow passes `1000`; a bare `python triage.py` uses the script's own `DEFAULT_MAX_TICKETS` of `100`. Zendesk's search API caps a query at 1000 results, so higher values don't fetch more |
 | `--batch-size`         | flag             | `400`                                                   | Split batches larger than this across multiple requests |
 | `--review-star-floor`  | flag             | `3`                                                     | Classify app-store reviews at or below N stars; count the rest |
 | `--include-positive-reviews` | flag       | off                                                     | Classify every review, including 4-5★ ones |
@@ -154,7 +154,7 @@ Two caveats worth knowing:
 
 These do different jobs, and conflating them is how you get a silently truncated digest:
 
-- **`--max-tickets`** bounds how much of the Zendesk result set is fetched. At 2000 it never binds on a 48h window (~45 tickets); it exists so a spam flood or a wide `reset_state` backfill can't run away.
+- **`--max-tickets`** bounds how much of the Zendesk result set is fetched. At the workflow's 1000 it never binds on a 48h window (~45 tickets); it exists so a spam flood or a wide `reset_state` backfill can't run away. 1000 is also [Zendesk's own search result limit](https://developer.zendesk.com/api-reference/ticketing/ticket-management/search/#results-limit) — the API returns `422` for any page past it, so the fetch stops at 1000 regardless of what you pass, and reports the matched-vs-analyzed gap rather than failing.
 - **`--batch-size`** bounds how many tickets go into a *single* model request. Anything larger is split across requests and the findings are concatenated.
 
 The split is necessary because output tokens, not context, are the binding constraint. Measured on real tickets: **~118 input tokens and ~102 output tokens per ticket**, with adaptive thinking drawing from the same `max_tokens` budget.
@@ -163,7 +163,7 @@ The split is necessary because output tokens, not context, are the binding const
 | ----- | ----- | ------------- | -------------------- |
 | 45 (typical daily) | ~5K | ~5K | Yes |
 | 400 (`--batch-size`) | ~47K | ~41K | Yes, with room for thinking |
-| 2000 | ~235K | ~204K | **No** — past the 128K output ceiling |
+| 1000 (`--max-tickets`) | ~118K | ~102K | **No** — leaves only ~26K of the 128K output ceiling for thinking |
 
 If a single request ever does hit the ceiling, the script exits with that explicit reason rather than failing on an incomplete-JSON parse error.
 
@@ -173,17 +173,19 @@ If a single request ever does hit the ceiling, the script exits with that explic
 
 Runs daily at 07:00 UTC over a 48h window (~45 tickets). The window is 48h rather than 24h so a failed run doesn't silently drop a day of tickets; the resulting overlap doesn't produce duplicate posts because of the dedup state described above.
 
-Triggerable manually via **workflow_dispatch** (optional `query` / `window_hours` / `max_tickets` inputs, plus `reset_state` to re-report the whole window). Failures are reported through the Discord failure-notification workflow.
+Triggerable manually via **workflow_dispatch** (optional `query` / `window_hours` / `max_tickets` inputs, plus `reset_state` to re-report the whole window). Failures are reported through the Discord failure-notification workflow, which watches this workflow by name — so renaming `Zendesk Ticket Triage` means updating the `workflows:` list in [`notify_failure.yml`](.github/workflows/notify_failure.yml) too.
 
 #### How state survives between runs
 
-State is kept in the **GitHub Actions cache**, not committed — this repo is public, and ticket IDs plus timestamps would leak ticket volume and activity rates. The workflow writes a unique cache key per run and restores the most recent one by prefix:
+State is kept in the **GitHub Actions cache**, not committed — this repo is public, and ticket IDs plus timestamps would leak ticket volume and activity rates. The workflow writes a unique cache key per run attempt and restores the most recent one by prefix:
 
 ```yaml
-key: zendesk-triage-state-${{ github.run_id }}
+key: zendesk-triage-state-${{ github.run_id }}-${{ github.run_attempt }}
 restore-keys: |
   zendesk-triage-state-
 ```
+
+`run_attempt` is in the key because cache entries are **immutable**: a re-run reuses `run_id`, so keying on that alone would make the second attempt's save collide with the first's and write nothing. With it, attempt 2 saves its own entry and restores attempt 1's through the prefix — so tickets the first attempt already delivered aren't reposted.
 
 The cache is **best-effort**, and the script is written to tolerate that — a missing, corrupt, or wrong-shaped state file degrades to "treat every ticket as new", which is noisy for one run but never wrong. Things that can lose state:
 
@@ -203,7 +205,7 @@ If you outgrow the cache's guarantees, the next step up is a private store (a pr
 python -m unittest discover -s zendesk_triage -v
 ```
 
-68 offline tests covering the window arithmetic, dedup partitioning, state round-trip and pruning, corrupt-state degradation, Discord embed rendering and chunking, defensive JSON parsing, and the retry/pagination behaviour with a stub session. No secrets or network access needed. They run in CI on any push or PR touching `zendesk_triage/`.
+Offline tests covering the window arithmetic, dedup partitioning, state round-trip and pruning, corrupt-state degradation, Discord embed rendering and chunking, defensive JSON parsing, and the retry/pagination behaviour with a stub session. No secrets or network access needed. They run in CI on any push or PR touching `zendesk_triage/`.
 
 ### Local Testing
 

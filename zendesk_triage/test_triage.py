@@ -10,6 +10,7 @@ tests drive fetch_tickets with a stub session instead.
 """
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -74,6 +75,17 @@ class FakeResponse:
 
     def json(self):
         return self._payload
+
+
+class NonJsonResponse(FakeResponse):
+    """A 200 whose body isn't JSON — a proxy error page, say."""
+
+    def __init__(self):
+        super().__init__({})
+        self.text = "<html>maintenance</html>"
+
+    def json(self):
+        raise requests.exceptions.JSONDecodeError("Expecting value", self.text, 0)
 
 
 class FakeSession:
@@ -596,6 +608,13 @@ class TestContentFreeTickets(unittest.TestCase):
             self.assertEqual(triage.hydrate_descriptions(session, "acme", [row]), 0)
         self.assertEqual(row["description"], "Conversation with x")
 
+    def test_hydration_survives_a_non_json_body(self):
+        """A 200 carrying an HTML error page is as harmless as an HTTP error here."""
+        row = ticket(1, subject="Conversation with x", description="Conversation with x")
+        session = FakeSession([NonJsonResponse()])
+        self.assertEqual(triage.hydrate_descriptions(session, "acme", [row]), 0)
+        self.assertEqual(row["description"], "Conversation with x")  # left as-is
+
     def test_one_unreachable_ticket_does_not_block_the_next(self):
         rows = [
             ticket(1, subject="Conversation with a", description="Conversation with a"),
@@ -761,7 +780,8 @@ class TestSelectHighlights(unittest.TestCase):
 
 class TestTicketsFromPayload(unittest.TestCase):
     def test_returns_the_list(self):
-        self.assertEqual(triage.tickets_from_payload({"tickets": [{"id": 1}]}, "x"), [{"id": 1}])
+        payload = {"tickets": [finding(1)]}
+        self.assertEqual(triage.tickets_from_payload(payload, "x"), [finding(1)])
 
     def test_missing_key_exits_instead_of_raising_keyerror(self):
         with self.assertRaises(SystemExit):
@@ -771,6 +791,21 @@ class TestTicketsFromPayload(unittest.TestCase):
         for payload in ({"tickets": {}}, [], "nope", None):
             with self.assertRaises(SystemExit):
                 triage.tickets_from_payload(payload, "x")
+
+    def test_an_empty_list_is_valid(self):
+        self.assertEqual(triage.tickets_from_payload({"tickets": []}, "x"), [])
+
+    def test_a_finding_missing_renderer_keys_exits(self):
+        """The claude-cli backend has no structured-output enforcement, so an entry
+        without category/severity would otherwise KeyError inside build_summary_embed."""
+        for entry in ({"id": 1}, {"id": 1, "category": "bug_report"},
+                      {"category": "bug_report", "severity": "major"}):
+            with self.assertRaises(SystemExit):
+                triage.tickets_from_payload({"tickets": [entry]}, "x")
+
+    def test_a_non_object_entry_exits(self):
+        with self.assertRaises(SystemExit):
+            triage.tickets_from_payload({"tickets": [["not", "an", "object"]]}, "x")
 
 
 class TestExtractJsonObject(unittest.TestCase):
@@ -959,6 +994,50 @@ class TestFetchTickets(unittest.TestCase):
         with self.assertRaises(SystemExit):
             triage.fetch_tickets(session, "acme", "q", 100)
 
+    def test_pagination_stops_at_the_zendesk_result_limit(self):
+        """Past 1000 results the search API 422s, so we never ask for that page.
+
+        A caller asking for more gets the limit, not an error: one page beyond the
+        cap is queued here and must go unrequested.
+        """
+        limit = triage.SEARCH_RESULT_LIMIT
+        pages = [
+            FakeResponse({
+                "count": 5000,
+                "results": [ticket(i) for i in range(offset, offset + 100)],
+                "next_page": "https://n/next",
+            })
+            for offset in range(0, limit + 100, 100)
+        ]
+        session = FakeSession(pages)
+        tickets, total = triage.fetch_tickets(session, "acme", "q", 5000)
+        self.assertEqual(len(tickets), limit)
+        self.assertEqual(total, 5000)  # the digest still reports the real backlog
+        self.assertEqual(len(session.calls), limit // 100)
+
+    def test_max_tickets_below_the_limit_still_wins(self):
+        session = FakeSession([
+            FakeResponse({"count": 500, "results": [ticket(i) for i in range(100)]}),
+        ])
+        tickets, _ = triage.fetch_tickets(session, "acme", "q", 7)
+        self.assertEqual(len(tickets), 7)
+
+    def test_an_unexpected_422_keeps_the_tickets_already_fetched(self):
+        """Belt and braces: a lower-than-documented limit truncates, not crashes."""
+        session = FakeSession([
+            FakeResponse({"count": 900, "results": [ticket(1)], "next_page": "https://n/2"}),
+            FakeResponse({"error": "invalid"}, status_code=422),
+        ])
+        tickets, total = triage.fetch_tickets(session, "acme", "q", 900)
+        self.assertEqual([t["id"] for t in tickets], [1])
+        self.assertEqual(total, 900)
+
+    def test_a_422_on_the_first_page_still_exits(self):
+        """Nothing fetched means nothing to salvage — that's a real failure."""
+        session = FakeSession([FakeResponse({"error": "invalid"}, status_code=422)])
+        with self.assertRaises(SystemExit):
+            triage.fetch_tickets(session, "acme", "q", 100)
+
 
 class TestFetchTotalUnsolved(unittest.TestCase):
     def test_returns_the_count(self):
@@ -975,6 +1054,17 @@ class TestFetchTotalUnsolved(unittest.TestCase):
         session = FakeSession([FakeResponse({}, status_code=500)] * 6)
         triage.fetch_total_unsolved(session, "acme")
         self.assertEqual(len(session.calls), 2)
+
+    def test_a_transport_failure_is_non_fatal_too(self):
+        """request_with_retry re-raises once its budget is spent; None is documented."""
+        session = FakeSession([requests.ConnectionError("no route")] * 2)
+        with NoSleep():
+            self.assertIsNone(triage.fetch_total_unsolved(session, "acme"))
+
+    def test_a_non_json_body_is_non_fatal(self):
+        """A 200 with an HTML error page (proxy, maintenance) must not abort the run."""
+        session = FakeSession([NonJsonResponse()])
+        self.assertIsNone(triage.fetch_total_unsolved(session, "acme"))
 
 
 class TestRequestWithRetry(unittest.TestCase):
@@ -1091,6 +1181,31 @@ class TestRetryAfterSeconds(unittest.TestCase):
             resp = triage.request_with_retry(session, "GET", "https://x", attempts=3)
         self.assertEqual(resp.json(), {"ok": True})
         self.assertTrue(all(s >= 0 for s in clock.slept), clock.slept)
+
+
+# ---- Workflow wiring -------------------------------------------------------
+
+
+class TestFailureNotificationWiring(unittest.TestCase):
+    """The failure notifier matches on workflow *name*, so a rename silently
+    unsubscribes the triage job. The README promises failures get reported; this
+    keeps that promise checkable without running Actions.
+    """
+
+    WORKFLOWS = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".github", "workflows"
+    )
+
+    def read(self, filename):
+        with open(os.path.join(self.WORKFLOWS, filename), encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_notify_failure_watches_the_triage_workflow_by_its_current_name(self):
+        triage_yml = self.read("zendesk_triage.yml")
+        match = re.search(r"^name:\s*(.+?)\s*$", triage_yml, re.MULTILINE)
+        self.assertIsNotNone(match, "zendesk_triage.yml has no top-level name")
+        name = match.group(1).strip("\"'")
+        self.assertIn(f'"{name}"', self.read("notify_failure.yml"))
 
 
 if __name__ == "__main__":

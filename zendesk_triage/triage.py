@@ -71,6 +71,12 @@ import requests
 DEFAULT_QUERY = "type:ticket status<solved order_by:created_at sort:desc"
 # Whole unsolved backlog, for context in the digest. Not analyzed — just counted.
 BACKLOG_QUERY = "type:ticket status<solved"
+# The Search API hard-caps a query at 1000 results and returns 422 for any page past
+# it (at per_page=100 that is page 11), so pagination stops here rather than walking
+# into that error. Above the cap the digest reports truncation — which it already does
+# for --max-tickets — instead of failing the run.
+# https://developer.zendesk.com/api-reference/ticketing/ticket-management/search/#results-limit
+SEARCH_RESULT_LIMIT = 1000
 STATE_VERSION = 1
 
 
@@ -339,19 +345,30 @@ def fetch_tickets(session, subdomain, query, max_tickets):
     """Fetch tickets via the Zendesk Search API, following pagination.
 
     Returns (tickets, total_matched). total_matched is the full result count
-    reported by Zendesk, which can exceed len(tickets) when max_tickets caps the
-    batch — the caller surfaces that gap so the truncation isn't silent.
+    reported by Zendesk, which can exceed len(tickets) when max_tickets — or
+    SEARCH_RESULT_LIMIT — caps the batch; the caller surfaces that gap so the
+    truncation isn't silent.
     """
     base = f"https://{subdomain}.zendesk.com/api/v2/search.json"
     url = base
     params = {"query": query, "per_page": 100}
     tickets = []
     total_matched = None
-    while url and len(tickets) < max_tickets:
+    # Whichever bites first: our own runaway guard or Zendesk's hard result limit.
+    cap = min(max_tickets, SEARCH_RESULT_LIMIT)
+    while url and len(tickets) < cap:
         resp = request_with_retry(session, "GET", url, params=params)
         params = None  # next_page already carries the query
         if resp.status_code == 403:
             sys.exit("Zendesk returned 403 — the API token/email may lack search access.")
+        # 422 past the result limit: `cap` should have stopped us first, so this only
+        # fires if the account's effective limit is lower than documented. Keep the
+        # tickets already in hand — a partial digest beats no digest — and let the
+        # caller report the gap. With nothing in hand there is nothing to salvage.
+        if resp.status_code == 422 and tickets:
+            print(f"Note: Zendesk stopped paginating at {len(tickets)} results "
+                  f"(search result limit); analyzing what was fetched.")
+            break
         if resp.status_code >= 400:
             sys.exit(f"Zendesk search failed ({resp.status_code}): {resp.text[:300]}")
         payload = resp.json()
@@ -361,7 +378,7 @@ def fetch_tickets(session, subdomain, query, max_tickets):
             if row.get("result_type") != "ticket":
                 continue
             tickets.append(row)
-            if len(tickets) >= max_tickets:
+            if len(tickets) >= cap:
                 break
         url = payload.get("next_page")
     return tickets, total_matched
@@ -374,13 +391,20 @@ def fetch_total_unsolved(session, subdomain):
     short retry budget.
     """
     url = f"https://{subdomain}.zendesk.com/api/v2/search/count.json"
-    resp = request_with_retry(
-        session, "GET", url, attempts=2, params={"query": BACKLOG_QUERY}
-    )
-    if resp.status_code >= 400:
-        print(f"Note: could not count the unsolved backlog ({resp.status_code}).")
+    try:
+        resp = request_with_retry(
+            session, "GET", url, attempts=2, params={"query": BACKLOG_QUERY}
+        )
+        if resp.status_code >= 400:
+            print(f"Note: could not count the unsolved backlog ({resp.status_code}).")
+            return None
+        return resp.json().get("count")
+    except (requests.RequestException, ValueError) as exc:
+        # request_with_retry re-raises the transport error once its (short) budget is
+        # spent, and .json() raises on a non-JSON body — neither is a reason to lose
+        # the digest over one context number, so both land on the documented None.
+        print(f"Note: could not count the unsolved backlog ({exc}).")
         return None
-    return resp.json().get("count")
 
 
 # ---- Dedup state -----------------------------------------------------------
@@ -549,8 +573,15 @@ def hydrate_descriptions(session, subdomain, tickets):
             continue
         if resp.status_code >= 400:
             continue
+        try:
+            comments = resp.json().get("comments", [])
+        except ValueError as exc:
+            # A 200 carrying an HTML error page (proxy, maintenance) is the same kind
+            # of non-event as an HTTP error here — enrich what we can, skip the rest.
+            print(f"Note: unreadable comments payload for #{ticket['id']} ({exc}).")
+            continue
         subject = squash(ticket.get("subject"))
-        bodies = [squash(c.get("body")) for c in resp.json().get("comments", [])]
+        bodies = [squash(c.get("body")) for c in comments]
         useful = [b for b in bodies if b and b != subject]
         if useful:
             ticket["description"] = "\n".join(useful)
@@ -632,17 +663,38 @@ def extract_json_object(text):
         sys.exit(f"Model output was not valid JSON ({exc}):\n{text[start : start + 500]}")
 
 
+REQUIRED_FINDING_KEYS = ("id", "category", "severity")
+
+
+def validate_findings(findings, label):
+    """Exit unless every entry is an object carrying the keys the renderer indexes.
+
+    build_summary_embed does f["category"] / f["severity"] and build_highlight_embed
+    does f["id"], so a missing key surfaces as a KeyError halfway through building a
+    Discord payload. Failing here names the offending entry instead.
+    """
+    for position, entry in enumerate(findings):
+        if not isinstance(entry, dict):
+            sys.exit(f"{label}: entry {position} is {type(entry).__name__}, expected an object.")
+        missing = [key for key in REQUIRED_FINDING_KEYS if key not in entry]
+        if missing:
+            sys.exit(f"{label}: entry {position} (id={entry.get('id')!r}) is missing "
+                     f"required key(s): {', '.join(missing)}.")
+    return findings
+
+
 def tickets_from_payload(payload, source):
     """Pull the `tickets` list out of a classification payload, or exit clearly.
 
-    Structured outputs guarantee the key on the API path, but the CLI path has no
-    such guarantee — a bare KeyError there is a confusing way to learn that.
+    Structured outputs guarantee the key and the item shape on the API path, but the
+    CLI path has neither — a bare KeyError mid-render is a confusing way to learn
+    that, so both paths are validated here before anything renders them.
     """
     found = payload.get("tickets") if isinstance(payload, dict) else None
     if not isinstance(found, list):
         shape = sorted(payload) if isinstance(payload, dict) else type(payload).__name__
         sys.exit(f"{source} returned no 'tickets' list (got: {shape}).")
-    return found
+    return validate_findings(found, source)
 
 
 def analyze_via_claude_cli(model, compact_tickets, timeout=1800):
@@ -693,9 +745,6 @@ def dump_batch(path, compact_tickets, model):
         json.dump(payload, fh, indent=2, ensure_ascii=False)
 
 
-REQUIRED_FINDING_KEYS = ("id", "category", "severity")
-
-
 def load_findings(path):
     """Read findings written by hand or by another tool: {"tickets": [...]} or [...].
 
@@ -707,14 +756,7 @@ def load_findings(path):
     findings = data.get("tickets") if isinstance(data, dict) else data
     if not isinstance(findings, list):
         sys.exit(f"{path}: expected a JSON list, or an object with a 'tickets' list.")
-    for position, entry in enumerate(findings):
-        if not isinstance(entry, dict):
-            sys.exit(f"{path}: entry {position} is {type(entry).__name__}, expected an object.")
-        missing = [key for key in REQUIRED_FINDING_KEYS if key not in entry]
-        if missing:
-            sys.exit(f"{path}: entry {position} (id={entry.get('id')!r}) is missing "
-                     f"required key(s): {', '.join(missing)}.")
-    return findings
+    return validate_findings(findings, path)
 
 
 def analyze_in_chunks(analyzer, compact_tickets, batch_size):
@@ -1096,8 +1138,13 @@ def main():
         matched = "?" if total_matched is None else total_matched
         print(f"Fetched {len(tickets)} of {matched} matching tickets (query: {query!r}).")
         if total_matched is not None and total_matched > len(tickets):
+            # Name whichever cap actually bound, so a truncated digest doesn't send
+            # someone raising --max-tickets against a limit that isn't ours.
+            reason = (f"Zendesk's search API returns at most {SEARCH_RESULT_LIMIT} results"
+                      if args.max_tickets >= SEARCH_RESULT_LIMIT
+                      else f"--max-tickets is {args.max_tickets}")
             print(f"Note: {total_matched - len(tickets)} matching tickets were not analyzed "
-                  f"(--max-tickets is {args.max_tickets}).")
+                  f"({reason}).")
         if not tickets:
             print("No tickets matched the query; nothing to do.")
             return
