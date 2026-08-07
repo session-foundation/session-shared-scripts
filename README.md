@@ -131,24 +131,40 @@ Two caveats worth knowing:
 | `ZENDESK_SUBDOMAIN`   | Zendesk subdomain (`mycompany` → `mycompany.zendesk.com`) |
 | `ZENDESK_EMAIL`       | Agent email used for Zendesk API-token auth             |
 | `ZENDESK_API_TOKEN`   | Zendesk API token                                       |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Claude subscription OAuth token — see [Claude authentication](#claude-authentication) |
+| **One Claude credential** | `ANTHROPIC_API_KEY` **or** `CLAUDE_CODE_OAUTH_TOKEN` — see [Claude authentication](#claude-authentication) |
 | `DISCORD_WEBHOOK_URL` | Discord webhook (reused from the failure-notification setup) |
 
 ### Claude Authentication
 
-Classification runs through Claude Code (`--backend claude-cli`), not the Anthropic API, so the job authenticates with a **subscription OAuth token** rather than an API key. Generate one on a machine where you're logged into Claude Code:
+Classification can reach Claude two ways, and they need different credentials:
+
+| Backend | Credential | Billing |
+| ------- | ---------- | ------- |
+| `api` | `ANTHROPIC_API_KEY` from the [Claude Console](https://platform.claude.com) | Per token, to the Console organization |
+| `claude-cli` | `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` | Draws on that subscription's usage limits |
+
+**The workflow picks for itself.** The `Select backend` step uses `api` when an `ANTHROPIC_API_KEY` secret exists and `claude-cli` otherwise, so adding that secret switches the job over with no edit to the workflow, and until then it keeps running on the subscription. The choice is echoed into the run log, and a `workflow_dispatch` run can force either backend to test one without touching secrets.
+
+Prefer the API key where you have one: it's an organization-owned credential that doesn't expire annually, doesn't consume an individual's quota, and costs a fraction of a run through Claude Code (measured on this batch shape: ~$0.01 versus ~$0.31, because each `claude -p` invocation carries ~25K tokens of Claude Code system prompt).
+
+#### Notes on the API key
+
+An API key only exists inside a **Claude Console organization** (`platform.claude.com`), which is separate from a claude.ai Pro/Max/Team/Enterprise subscription with its own membership and billing — a claude.ai admin console has no API keys at all. If nobody can find one, the likely answer is that no Console organization exists yet rather than a permissions problem.
+
+#### Notes on the subscription token
+
+Generate it on a machine where you're logged into Claude Code:
 
 ```
 claude setup-token
 ```
 
-It runs the browser authorization flow and prints the token once — it is not saved anywhere. Store it as the `CLAUDE_CODE_OAUTH_TOKEN` repo secret. Requires a Pro, Max, Team, or Enterprise plan; see [Generate a long-lived token](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token).
-
-Four things worth knowing before you rely on it:
+It runs the browser authorization flow and prints the token once — it is not saved anywhere. Requires a Pro, Max, Team, or Enterprise plan; see [Generate a long-lived token](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token). Then:
 
 - **The token lasts one year.** It expires silently from the workflow's point of view — the run just fails to authenticate. Put the renewal date somewhere you'll see it.
-- **Never add `ANTHROPIC_API_KEY` to that step.** An API key [outranks the OAuth token](https://code.claude.com/docs/en/authentication#authentication-precedence) in Claude Code's credential precedence, and in `-p` mode a key that is present is always used — so the job would quietly bill the API instead of the subscription.
-- **Runs draw on that subscription's usage limits**, not API credits, and the token is tied to whoever minted it. A scheduled run competes with that person's own interactive Claude Code usage, and hitting a limit fails the run (the tickets stay eligible and get picked up by the next one, per the dedup rules above). Anthropic's own guidance is to use an API key for a secret shared across an org for exactly this reason.
+- **The two credentials must not both be live in the run step.** An API key [outranks the OAuth token](https://code.claude.com/docs/en/authentication#authentication-precedence) in Claude Code's credential precedence, and in `-p` mode a key that is present is always used, so a `claude-cli` run with a key in scope would quietly bill the API instead. The workflow unsets whichever credential the chosen backend doesn't use.
+- **Runs draw on that subscription's usage limits**, not API credits, and the token is tied to whoever minted it — so a scheduled run competes with that person's own interactive Claude Code usage. Hitting a limit fails the run (the tickets stay eligible and get picked up by the next one, per the dedup rules above). If your organization has [usage credits](https://support.claude.com/en/articles/12429409-manage-usage-credits-for-paid-claude-plans) enabled, usage continues past the allowance at standard API rates instead of stopping, which turns a failed run into a billed one.
+  > A [separate monthly Agent SDK credit](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) was announced for 2026-06-15 and then **paused** — `claude -p` still draws on subscription limits as described here. Worth re-reading that page before assuming otherwise.
 - **The CLI must be v2.1.205 or newer** for `--json-schema`. The workflow installs the `stable` channel and echoes `claude --version` into the run log, because the script's "no structured_output" error points here.
 
 ### Optional Configuration
@@ -159,7 +175,8 @@ Four things worth knowing before you rely on it:
 | `--state`              | flag             | *(unset)*                                               | Dedup state file. The workflow points this at the cached `.triage-state/seen.json` |
 | `--state-retention-days` | flag           | `30`                                                    | Forget state entries older than N days |
 | `ZENDESK_QUERY`        | env / `--query`  | *(unset)*                                               | Explicit Zendesk search query. Overrides `--window-hours` entirely |
-| `ZENDESK_TRIAGE_MODEL` | repo variable / `--model` | `opus`                                        | Model alias (`opus`, `sonnet`, `haiku`) or a full id. Set it to `sonnet` to reduce cost on large batches |
+| `ZENDESK_TRIAGE_MODEL` | repo variable / `--model` | `opus`                                        | Model alias (`opus`, `sonnet`, `haiku`) or a full id. Set it to `sonnet` to reduce cost on large batches. On `--backend api` the alias is mapped to an id by `API_MODEL_ALIASES` |
+| `backend`              | workflow input / `--backend` | `auto` (workflow) / `claude-cli` (flag)   | `api`, `claude-cli`, or `file`. The workflow's `auto` resolves to `api` when an `ANTHROPIC_API_KEY` secret exists — see [Claude authentication](#claude-authentication) |
 | `--max-tickets`        | workflow input / flag | `1000` (workflow) / `100` (flag)                   | Runaway guard on tickets analyzed per run, **not** a batch size. The workflow passes `1000`; a bare `python triage.py` uses the script's own `DEFAULT_MAX_TICKETS` of `100`. Zendesk's search API caps a query at 1000 results, so higher values don't fetch more |
 | `--batch-size`         | flag             | `400`                                                   | Split batches larger than this across multiple requests |
 | `--review-star-floor`  | flag             | `3`                                                     | Classify app-store reviews at or below N stars; count the rest |
@@ -228,7 +245,7 @@ Offline tests covering the window arithmetic, dedup partitioning, state round-tr
 
 ### Local Testing
 
-Classification reuses your own Claude Code login, so no token is needed locally — only the Zendesk credentials:
+The default backend reuses your own Claude Code login, so no Claude credential is needed locally — only the Zendesk ones:
 
 ```
 pip install -r zendesk_triage/requirements.txt
@@ -236,6 +253,10 @@ export ZENDESK_SUBDOMAIN=... ZENDESK_EMAIL=... ZENDESK_API_TOKEN=...
 
 # fetch + classify, print the Discord payload, post nothing
 python zendesk_triage/triage.py --window-hours 48 --dry-run
+
+# exercise the path CI uses once an API key is configured
+export ANTHROPIC_API_KEY=...
+python zendesk_triage/triage.py --backend api --window-hours 48 --dry-run
 
 # or dump the batch, classify it by hand, and feed the findings back
 python zendesk_triage/triage.py --dump-batch /tmp/batch.json --window-hours 48

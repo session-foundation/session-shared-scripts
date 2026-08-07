@@ -791,6 +791,26 @@ class TestTicketsFromPayload(unittest.TestCase):
             triage.tickets_from_payload({"tickets": [["not", "an", "object"]]}, "x")
 
 
+class TestResolveApiModel(unittest.TestCase):
+    """The CLI resolves aliases itself; the API takes ids, so only that path maps."""
+
+    def test_every_alias_maps_to_an_id(self):
+        for alias, model_id in triage.API_MODEL_ALIASES.items():
+            self.assertEqual(triage.resolve_api_model(alias), model_id)
+            self.assertTrue(model_id.startswith("claude-"), model_id)
+
+    def test_the_default_model_is_mappable(self):
+        """DEFAULT_MODEL is an alias, so --backend api would 404 without an entry."""
+        self.assertIn(triage.DEFAULT_MODEL, triage.API_MODEL_ALIASES)
+
+    def test_a_full_id_passes_through(self):
+        self.assertEqual(triage.resolve_api_model("claude-opus-4-8"), "claude-opus-4-8")
+
+    def test_an_unknown_value_passes_through(self):
+        """A model newer than this table should reach the API rather than be rewritten."""
+        self.assertEqual(triage.resolve_api_model("claude-future-9"), "claude-future-9")
+
+
 class TestFindingsFromCliEnvelope(unittest.TestCase):
     def envelope(self, **overrides):
         base = {
