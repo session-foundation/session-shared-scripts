@@ -259,6 +259,38 @@ python zendesk_triage/triage.py --dump-batch /tmp/batch.json --window-hours 48
 python zendesk_triage/triage.py --findings /tmp/findings.json --dry-run
 ```
 
+## Zendesk Resolve Positive Reviews
+
+Weekly counterpart to the triage: it solves the 4-5★ AppFollow reviews that were never going to be actioned, so the unsolved backlog reflects work that actually exists. When this was written **5,253** reviews were unsolved — **4,812** of them still `new` — against **428** non-review unsolved tickets. Solving reviews was already being done by hand: **4,959** were already solved or closed.
+
+> ⚠️ **This workflow writes to Zendesk.** A scheduled run always applies. A manual run is a **dry run** unless you tick `apply`, so the dispatch button cannot solve tickets by accident. Read the warning at the top of [resolve_reviews.py](zendesk_triage/resolve_reviews.py) before the first applied run.
+
+### What it will and will not touch
+
+Deliberately narrow, because a mis-aimed bulk status change is not recoverable by re-running:
+
+- **App-store reviews only**, by the same detection the triage uses — `triage.is_store_review`, so the two can't drift apart. Every fetched ticket is re-checked locally, since the query can't express the rating.
+- **Rated at or above `--min-stars`** (default 4). A review whose stars can't be parsed from the subject is skipped, never solved — the same conservatism the triage applies.
+- **`new` only** unless `--include-open`. 441 reviews are `open`, which can mean an agent engaged with one.
+- **`solved`, never `closed`.** Solved is reversible; closed is not.
+- **Tagged** `auto-resolved-review`, so they stay identifiable and a trigger can exclude them, and annotated with a **private** note — a public comment would email the person who wrote the review.
+
+### Before the first applied run
+
+Solving a ticket fires triggers and automations, and an AppFollow requester may carry a real email address. **A satisfaction survey trigger would email thousands of app-store reviewers.** Check Admin Center → Objects and rules → Business rules first, then do the first applied run with `--max-tickets 5` so the effects are observable before they're bulk.
+
+### How it drains
+
+No state file: a solved ticket drops out of the query, so runs are idempotent. Zendesk's search API caps at 1,000 results, so a run can never see more than that — the first few runs work the backlog down and after that the weekly schedule comfortably clears the ~420 reviews a week that arrive. `update_many` takes [100 ids per request](https://developer.zendesk.com/api-reference/ticketing/tickets/tickets/#update-many-tickets) and is asynchronous, so each batch's job is polled to completion and per-ticket failures fail the run rather than being reported as success.
+
+### Required Secrets
+
+`ZENDESK_SUBDOMAIN`, `ZENDESK_EMAIL`, `ZENDESK_API_TOKEN` — the same three the triage uses. No Claude or Discord credentials: it posts nothing.
+
+### Schedule
+
+Mondays at 05:00 UTC. Failures are reported through the Discord failure-notification workflow, which watches this workflow by name — renaming `Zendesk Resolve Positive Reviews` means updating the `workflows:` list in [`notify_failure.yml`](.github/workflows/notify_failure.yml) too.
+
 ## Workflow Failure Notificaiton
 
 If a workflow fails and is in the list of workflows monitored by the failure notificaiton workflow, the failure notificaiton workflow will send a message to a discord webhook.
