@@ -144,7 +144,7 @@ CATEGORY_SPECS = (
     ("legal_or_data_request", "⚖️ Legal / data request", True,
      "GDPR or data-deletion request, subpoena, law-enforcement or court order. "
      "Always set worth_looking_into."),
-    ("bug_report", "🐞 Bug report", False,
+    ("bug_report", "🐛 Bug report", False,
      "Something in the app is broken or misbehaving."),
     ("account_access", "🔑 Account access", False,
      "Lost recovery phrase, locked out, or asking to restore an account. Usually "
@@ -819,7 +819,7 @@ def severity_marker(finding):
 def build_ticket_line(finding, subdomain, is_update=False):
     """One skimmable line per ticket:
 
-        🔥 | 🐞 | 🤖 | #27605 · Notifications only arrive… | Likely cause: push service…
+        🔥 | 🐛 | 🤖 | #27605 · Notifications only arrive… | Likely cause: push service…
 
     The id is a masked link, so the ticket stays one click away without spending the
     character budget on a visible URL.

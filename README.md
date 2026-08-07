@@ -101,12 +101,12 @@ Each line leads with a severity marker, a category emoji and a platform icon, li
 🗂️ **Zendesk triage** — analyzed **16** of **46** tickets in the window (created in the past 2 days). Skipped **30** positive app-store review(s).
 Backlog: **5,680** unsolved tickets in total (not triaged).
 **9** worth looking into.
-⭐ **6** · 🐞 **3** · ❓ **2** · 🔑 **1** · ⚖️ **1** · 🔒 **1**
+⭐ **6** · 🐛 **3** · ❓ **2** · 🔑 **1** · ⚖️ **1** · 🔒 **1**
 Likely duplicates: **push-notifications-not-delivered** ×5 (#27637, #27610, #27606, #27605)
 🚨 | ⚖️ | ❔ | #27632 · Police summons demanding user details for a Session ID
 🚨 | 🔒 | 🤖 | #27603 · Exported component lets another app obtain internal SharedPreferences | Likely cause: Improperly exported provider allowing external apps to trigger file sharing
 🟠 | ⭐ | 🍎 | #27610 · Messages not delivered for days; nothing shows even after opening | Likely cause: Push notification delivery / message retrieval failure
-🟠 | 🐞 | 🤖 | 🔄 #27605 · Message and call notifications only appear when the app is opened | Likely cause: Push notification service failure on Android
+🟠 | 🐛 | 🤖 | 🔄 #27605 · Message and call notifications only appear when the app is opened | Likely cause: Push notification service failure on Android
 ```
 
 | Column | Values |
