@@ -791,37 +791,6 @@ class TestTicketsFromPayload(unittest.TestCase):
             triage.tickets_from_payload({"tickets": [["not", "an", "object"]]}, "x")
 
 
-class TestCliIsolation(unittest.TestCase):
-    """The claude-cli invocation is locked down because ticket text is untrusted and
-    the runner has a checkout. Each of these fails silently if broken: a wrong deny
-    list returns prose instead of findings, a missing flag loads the repo's config."""
-
-    def test_structured_output_is_never_denied(self):
-        """--json-schema is implemented as the StructuredOutput tool, so denying it —
-        or passing a `*` wildcard — makes the run return prose and no findings."""
-        denied = triage.CLI_DENIED_TOOLS.split()
-        self.assertNotIn("StructuredOutput", denied)
-        self.assertNotIn("*", denied)
-
-    def test_tools_with_side_effects_are_denied(self):
-        denied = triage.CLI_DENIED_TOOLS.split()
-        for tool in ("Bash", "Write", "Edit", "WebFetch", "WebSearch", "Task"):
-            self.assertIn(tool, denied)
-
-    def test_the_system_prompt_travels_as_a_flag(self):
-        """Not on stdin with the tickets: stdin is untrusted input, the prompt isn't."""
-        self.assertIn("--system-prompt", triage.CLI_ISOLATION_ARGS)
-        self.assertIn(triage.SYSTEM_PROMPT, triage.CLI_ISOLATION_ARGS)
-
-    def test_no_setting_sources_are_loaded(self):
-        """An empty value is what keeps hooks, plugins, skills and CLAUDE.md out."""
-        args = triage.CLI_ISOLATION_ARGS
-        self.assertEqual(args[args.index("--setting-sources") + 1], "")
-
-    def test_mcp_config_is_strict(self):
-        self.assertIn("--strict-mcp-config", triage.CLI_ISOLATION_ARGS)
-
-
 class TestResolveApiModel(unittest.TestCase):
     """The CLI resolves aliases itself; the API takes ids, so only that path maps."""
 
@@ -843,65 +812,6 @@ class TestResolveApiModel(unittest.TestCase):
     def test_an_unknown_value_passes_through(self):
         """A model newer than this table should reach the API rather than be rewritten."""
         self.assertEqual(triage.resolve_api_model("claude-future-9"), "claude-future-9")
-
-
-class TestFindingsFromCliEnvelope(unittest.TestCase):
-    def envelope(self, **overrides):
-        base = {
-            "subtype": "success",
-            "is_error": False,
-            "structured_output": {"tickets": [finding(1)]},
-        }
-        base.update(overrides)
-        return base
-
-    def test_reads_structured_output(self):
-        self.assertEqual(triage.findings_from_cli_envelope(self.envelope()), [finding(1)])
-
-    def test_missing_structured_output_exits(self):
-        """A CLI too old for --json-schema returns prose in `result` and no
-        structured_output; without this check the digest comes out silently empty."""
-        stale = self.envelope(result='{"tickets": []}')
-        del stale["structured_output"]
-        with self.assertRaises(SystemExit):
-            triage.findings_from_cli_envelope(stale)
-
-    def test_a_reported_cli_error_exits(self):
-        for envelope in (self.envelope(is_error=True),
-                         self.envelope(subtype="error_max_turns")):
-            with self.assertRaises(SystemExit):
-                triage.findings_from_cli_envelope(envelope)
-
-    def test_a_cost_field_is_reported_not_fatal(self):
-        result = triage.findings_from_cli_envelope(self.envelope(total_cost_usd=0.42))
-        self.assertEqual(result, [finding(1)])
-
-
-class TestExtractJsonObject(unittest.TestCase):
-    def test_bare_object(self):
-        self.assertEqual(triage.extract_json_object('{"a": 1}'), {"a": 1})
-
-    def test_object_inside_a_markdown_fence(self):
-        self.assertEqual(triage.extract_json_object('```json\n{"a": 1}\n```'), {"a": 1})
-
-    def test_object_surrounded_by_prose(self):
-        self.assertEqual(
-            triage.extract_json_object('Sure! Here you go:\n{"a": 1}\nHope that helps.'), {"a": 1}
-        )
-
-    def test_nested_braces_survive(self):
-        self.assertEqual(
-            triage.extract_json_object('{"t": [{"id": 1}, {"id": 2}]}'),
-            {"t": [{"id": 1}, {"id": 2}]},
-        )
-
-    def test_no_object_exits(self):
-        with self.assertRaises(SystemExit):
-            triage.extract_json_object("no json here")
-
-    def test_malformed_object_exits(self):
-        with self.assertRaises(SystemExit):
-            triage.extract_json_object('{"a": }')
 
 
 class TestAnalyzeInChunks(unittest.TestCase):

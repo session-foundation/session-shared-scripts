@@ -136,7 +136,7 @@ Two caveats worth knowing:
 
 ### Claude Authentication
 
-The workflow classifies through the Anthropic API (`--backend api`) with an `ANTHROPIC_API_KEY`. That keeps CI on an organization-owned credential that doesn't draw on any individual's subscription quota, and keeps the runner free of a ~270MB Claude Code download. The `claude-cli` backend stays in the script for [local runs](#local-testing) and is not used in CI.
+Classification goes through the Anthropic API with an `ANTHROPIC_API_KEY`, in CI and locally alike — an organization-owned credential that doesn't draw on any individual's subscription quota.
 
 If you go looking for that key and can't find one: an API key only exists inside a **Claude Console organization** (`platform.claude.com`), which is a separate organization from a claude.ai Pro/Max/Team/Enterprise subscription, with its own membership and billing. A claude.ai admin console has no API keys in it at all, so the usual answer is that no Console organization exists yet rather than that you're missing a permission.
 
@@ -149,7 +149,7 @@ If you go looking for that key and can't find one: an API key only exists inside
 | `--state-retention-days` | flag           | `30`                                                    | Forget state entries older than N days |
 | `ZENDESK_QUERY`        | env / `--query`  | *(unset)*                                               | Explicit Zendesk search query. Overrides `--window-hours` entirely |
 | `ZENDESK_TRIAGE_MODEL` | repo variable / `--model` | `claude-opus-5`                                         | Overrides the model. Takes a full id, or an alias (`opus`, `sonnet`, `haiku`) which `--backend api` maps to an id via `API_MODEL_ALIASES`. **Leave it unset for normal operation** — the default lives in the script so there's one place to change it |
-| `--backend`            | flag             | `claude-cli` (flag) / `api` (workflow)                  | Where classification happens: `claude-cli` for local runs, `api` for CI, or `file` to render findings classified elsewhere |
+| `--backend`            | flag             | `api`                                                   | `file` instead renders a findings JSON classified elsewhere, skipping the model — pair with `--findings` |
 | `--max-tickets`        | workflow input / flag | `1000` (workflow) / `100` (flag)                   | Runaway guard on tickets analyzed per run, **not** a batch size. The workflow passes `1000`; a bare `python triage.py` uses the script's own `DEFAULT_MAX_TICKETS` of `100`. Zendesk's search API caps a query at 1000 results, so higher values don't fetch more |
 | `--batch-size`         | flag             | `400`                                                   | Split batches larger than this across multiple requests |
 | `--review-star-floor`  | flag             | `3`                                                     | Classify app-store reviews at or below N stars; count the rest |
@@ -227,42 +227,23 @@ Offline tests covering the window arithmetic, dedup partitioning, state round-tr
 
 ### Local Testing
 
-Locally the default backend is `claude-cli`, which reuses your own Claude Code login — so no Claude credential is needed, only the Zendesk ones:
+Local runs use the same Anthropic API path as CI, so they need an `ANTHROPIC_API_KEY` alongside the Zendesk credentials. `--dry-run` prints the Discord payload instead of posting, so no webhook is needed:
 
 ```
 pip install -r zendesk_triage/requirements.txt
-export ZENDESK_SUBDOMAIN=... ZENDESK_EMAIL=... ZENDESK_API_TOKEN=...
+export ZENDESK_SUBDOMAIN=... ZENDESK_EMAIL=... ZENDESK_API_TOKEN=... ANTHROPIC_API_KEY=...
 
-# fetch + classify through your Claude Code login, print the payload, post nothing
+# what CI runs, minus the Discord post and the state file
 python zendesk_triage/triage.py --window-hours 48 --dry-run
 
-# exercise exactly what CI runs
-ANTHROPIC_API_KEY=... python zendesk_triage/triage.py --backend api --window-hours 48 --dry-run
+# keep it cheap while iterating on the rendering
+python zendesk_triage/triage.py --window-hours 12 --max-tickets 5 --dry-run
 
-# or dump the batch, classify it by hand, and feed the findings back
+# or take the model out of the loop: dump the batch, classify it by hand,
+# and feed the findings back in to render
 python zendesk_triage/triage.py --dump-batch /tmp/batch.json --window-hours 48
 python zendesk_triage/triage.py --backend file --findings /tmp/findings.json --dry-run
 ```
-
-Two things about the local `claude-cli` path:
-
-- **It spends your own subscription usage**, shared with your interactive Claude Code and chat usage — one invocation per chunk, so a 48h window is a single call (~$0.015 of equivalent usage on a small batch).
-- **An exported `ANTHROPIC_API_KEY` silently takes over.** It [outranks your login](https://code.claude.com/docs/en/authentication#authentication-precedence) in Claude Code's credential precedence, and in `-p` mode a key that is present is always used — so with one exported in your shell, `--backend claude-cli` bills the API rather than using your subscription. `unset ANTHROPIC_API_KEY` if you want the subscription path.
-- **It needs Claude Code v2.1.205 or newer** for `--json-schema`. On an older CLI the run exits with "no structured_output" naming that version; check `claude --version`.
-
-#### How the `claude-cli` invocation is locked down
-
-Ticket text is written by strangers, so the CLI is invoked with as little around it as possible: our own `--system-prompt` in place of Claude Code's, `--setting-sources ""` (no hooks, plugins, skills, allow-rules or `CLAUDE.md` from either your machine or this repo), `--strict-mcp-config` with no config (no MCP servers), and an explicit `--disallowed-tools` list. A session then exposes one tool, `StructuredOutput`, and no MCP servers. Removing the agent preamble and the tool definitions is also what makes this path cheap.
-
-Three findings from `v2.1.218` that explain why it's written that way — all worth re-testing after a CLI upgrade:
-
-- **`--disallowed-tools "*"` can't be used**, tempting as it is. It empties the surface, but `--json-schema` is itself implemented as a `StructuredOutput` tool, so the wildcard denies that too and the run returns prose with no `structured_output`. Allow-listing `StructuredOutput` alongside the wildcard leaves the tool present but still doesn't produce structured output.
-- **`--permission-mode dontAsk` is not a boundary.** A session with no allow rules still ran `Bash(echo …)`, because the mode permits a read-only command set. It's kept as a backstop, not as the control.
-- **The deny list is therefore by name, and will go stale** as tools are added. Naming only the obvious ones (`Bash`, `Read`, `Write`, …) left 19 others live, including several with outward side effects. To see what a session really exposes, read the `init` event: `echo hi | claude -p --output-format stream-json --verbose [flags] | grep '"subtype":"init"'`.
-
-One more, on the flag not used:
-
-- **Do not add `--bare`.** It's otherwise the right flag for a scripted call (it skips hook, plugin, MCP and `CLAUDE.md` discovery, so the runner behaves the same as your laptop), but bare mode reads `ANTHROPIC_API_KEY` or an `apiKeyHelper` **only** — it never touches OAuth credentials, which is exactly what both CI and your local login use. See [bare mode](https://code.claude.com/docs/en/headless#start-faster-with-bare-mode); the docs say it will become the default for `-p` in a future release, so this is worth re-checking on CLI upgrades.
 
 ## Workflow Failure Notificaiton
 

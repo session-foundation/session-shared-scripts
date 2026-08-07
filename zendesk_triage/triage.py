@@ -20,19 +20,15 @@ Categories Claude sorts each ticket into:
     bug_report | low_star_review | legal_request | security_or_legislation
     | question | feature_request | other
 
-Two ways to reach Claude, chosen with --backend:
-    api         the Anthropic API, with an ANTHROPIC_API_KEY. What CI runs: an
-                org-owned credential, per-token billing, schema enforced by the API.
-    claude-cli  the local `claude` CLI, authenticating as your own Claude Code
-                login. The default for local runs — no API key needed, but it
-                spends your subscription's usage rather than being billed.
+Classification goes through the Anthropic API, with structured outputs enforcing
+SCHEMA. --backend file skips it entirely and renders findings produced elsewhere.
 
-Config (env vars, or CLI flags for local runs):
+Config (env vars, or flags for local runs):
     ZENDESK_SUBDOMAIN     e.g. "mycompany"  -> https://mycompany.zendesk.com
     ZENDESK_EMAIL         agent email for API token auth
     ZENDESK_API_TOKEN     Zendesk API token
-    ANTHROPIC_API_KEY     Claude API key, for --backend api (read by the SDK itself)
-    DISCORD_WEBHOOK_URL   Discord incoming webhook
+    ANTHROPIC_API_KEY     Claude API key (read by the SDK itself)
+    DISCORD_WEBHOOK_URL   Discord incoming webhook (not needed with --dry-run)
     ZENDESK_QUERY         (optional) Zendesk search query; see DEFAULT_QUERY
     ZENDESK_TRIAGE_MODEL  (optional) Claude model id or alias; defaults to
                           claude-opus-5. Set it to override, e.g. `sonnet` for a
@@ -51,9 +47,6 @@ Usage:
     # or an explicit query, which overrides --window-hours
     python triage.py --query "type:ticket status:open tags:bug" --max-tickets 50
 
-    # classify through the Anthropic API instead of Claude Code
-    python triage.py --backend api --dry-run
-
     # split classification out entirely: dump the batch, classify it by hand,
     # feed the findings back in to render
     python triage.py --dump-batch /tmp/batch.json --max-tickets 20
@@ -64,7 +57,6 @@ import json
 import math
 import os
 import re
-import subprocess
 import sys
 import textwrap
 import time
@@ -115,10 +107,10 @@ def window_label(hours):
 # several languages, and the whole job costs single-digit dollars a month either way.
 # Bumping this is a one-line, deliberate change; both backends accept a full id.
 DEFAULT_MODEL = "claude-opus-5"
-# Aliases still work as an override (ZENDESK_TRIAGE_MODEL=sonnet for a big backfill),
-# and the Anthropic API takes ids only — so --backend api maps them here. Each entry
-# is the newest model in its family, which is where the CLI's own alias resolution
-# lands; a full id passes through untouched.
+# Shorthands for the override, so ZENDESK_TRIAGE_MODEL=sonnet works for a big
+# backfill without anyone looking up an id. The API takes ids only, so they are
+# mapped here; each is the newest model in its family, and a full id passes through
+# untouched.
 API_MODEL_ALIASES = {
     "opus": "claude-opus-5",
     "sonnet": "claude-sonnet-5",
@@ -636,9 +628,9 @@ def compact_ticket(ticket):
 
 
 def resolve_api_model(model):
-    """Map a Claude Code model alias onto the id the Anthropic API expects.
+    """Map a shorthand model name onto the id the Anthropic API expects.
 
-    Anything that isn't a known alias passes through untouched, so a pinned id
+    Anything that isn't a known shorthand passes through untouched, so a pinned id
     (`claude-opus-4-8`) or a model newer than this table still works.
     """
     return API_MODEL_ALIASES.get(model, model)
@@ -650,18 +642,6 @@ def build_analysis_prompt(compact_tickets):
         "TICKETS (JSON):\n"
         + json.dumps(compact_tickets, ensure_ascii=False)
     )
-
-
-def extract_json_object(text):
-    """Pull the outermost JSON object out of model prose (tolerates code fences)."""
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end <= start:
-        sys.exit(f"No JSON object found in the model output:\n{text[:500]}")
-    try:
-        return json.loads(text[start : end + 1])
-    except json.JSONDecodeError as exc:
-        sys.exit(f"Model output was not valid JSON ({exc}):\n{text[start : start + 500]}")
 
 
 REQUIRED_FINDING_KEYS = ("id", "category", "severity")
@@ -687,120 +667,15 @@ def validate_findings(findings, label):
 def tickets_from_payload(payload, source):
     """Pull the `tickets` list out of a classification payload, or exit clearly.
 
-    Structured outputs guarantee the key and the item shape on the API path, but the
-    CLI path has neither — a bare KeyError mid-render is a confusing way to learn
-    that, so both paths are validated here before anything renders them.
+    Structured outputs guarantee the key and the item shape, so on a normal run this
+    never fires; it is the guard for --backend file, whose findings nothing validates,
+    and a bare KeyError mid-render is a confusing way to learn a key is missing.
     """
     found = payload.get("tickets") if isinstance(payload, dict) else None
     if not isinstance(found, list):
         shape = sorted(payload) if isinstance(payload, dict) else type(payload).__name__
         sys.exit(f"{source} returned no 'tickets' list (got: {shape}).")
     return validate_findings(found, source)
-
-
-# Ticket text is untrusted input written by strangers, and the runner has a checkout
-# of this repo, so the CLI invocation is stripped to just "classify this text":
-#   --system-prompt        ours replaces Claude Code's, so there is no agent preamble
-#                          and no per-machine section (cwd, env, git status) either
-#   --setting-sources ""   loads no user/project/local settings, so no hooks, plugins,
-#                          skills, allow-rules or CLAUDE.md from the runner or the repo
-#   --strict-mcp-config    with no --mcp-config, that means no MCP servers at all
-#   --disallowed-tools     the tools below, by name — see CLI_DENIED_TOOLS
-#   --permission-mode      dontAsk, as a backstop rather than the boundary
-# Everything Claude needs is in the prompt, so a ticket that tries to talk its way
-# into running something should have nothing to reach for.
-# --bare would give the same isolation and a faster start, but it reads
-# ANTHROPIC_API_KEY only and never OAuth credentials, which is what this path uses.
-#
-# Two things measured on v2.1.218 that constrain how the tool surface is closed:
-#   - `--disallowed-tools "*"` does empty the surface, but it also denies
-#     StructuredOutput, which is how --json-schema is implemented — the run then
-#     returns prose and no structured_output. So the tools have to be named.
-#   - `--permission-mode dontAsk` is not a boundary on its own: a session with no
-#     allow rules still executed `Bash(echo …)`, because the mode permits a
-#     read-only command set. It stays as a backstop, not as the control.
-# A named list goes stale as tools are added, so re-check what a session actually
-# exposes after a CLI upgrade — the `init` event lists it:
-#   echo hi | claude -p --output-format stream-json --verbose [flags] \
-#     | grep '"subtype":"init"'
-CLI_DENIED_TOOLS = " ".join([
-    # filesystem and execution
-    "Bash", "BashOutput", "KillShell", "Read", "Write", "Edit", "NotebookEdit",
-    "Glob", "Grep",
-    # network
-    "WebFetch", "WebSearch",
-    # delegation and session control
-    "Task", "TaskOutput", "TaskStop", "Workflow", "Skill", "SlashCommand",
-    "ToolSearch", "TodoWrite", "EnterWorktree", "ExitWorktree", "Monitor",
-    "ScheduleWakeup",
-    # anything that reaches outside the run
-    "Artifact", "SendMessage", "PushNotification", "RemoteTrigger", "DesignSync",
-    "CronCreate", "CronDelete", "CronList", "ShareOnboardingGuide", "ReportFindings",
-])
-CLI_ISOLATION_ARGS = [
-    "--system-prompt", SYSTEM_PROMPT,
-    "--setting-sources", "",
-    "--strict-mcp-config",
-    "--permission-mode", "dontAsk",
-    "--disallowed-tools", CLI_DENIED_TOOLS,
-]
-
-
-def findings_from_cli_envelope(envelope):
-    """Pull the findings out of a `claude -p --output-format json` envelope.
-
-    With --json-schema the shape lands in `structured_output`, already validated
-    against SCHEMA. An envelope without that key would otherwise surface as an empty
-    digest, so it exits naming both causes: a CLI too old for the flag, or a reply
-    that ran out of output tokens before the JSON closed.
-    """
-    if envelope.get("is_error") or envelope.get("subtype") != "success":
-        sys.exit(f"`claude` reported an error: {envelope.get('result') or envelope}")
-    cost = envelope.get("total_cost_usd")
-    if cost is not None:
-        print(f"claude CLI reported ${cost:.4f} for this batch.")
-    payload = envelope.get("structured_output")
-    if not isinstance(payload, dict):
-        sys.exit("`claude` returned no structured_output. Either the CLI predates "
-                 "--json-schema (needs v2.1.205 or newer — check `claude --version`) "
-                 f"or the batch outgrew the output ceiling: lower --batch-size "
-                 f"(currently splitting at {DEFAULT_BATCH_SIZE}).")
-    return tickets_from_payload(payload, "`claude` CLI")
-
-
-def analyze_via_claude_cli(model, effort, compact_tickets, timeout=1800):
-    """Classify the batch with the local `claude` CLI instead of the Anthropic API.
-
-    It authenticates as Claude Code, so no ANTHROPIC_API_KEY is needed, and
-    --json-schema enforces the same SCHEMA the API path uses — so the response needs
-    no prose parsing and no hand-maintained field list in the prompt.
-    """
-    cmd = ["claude", "-p", "--output-format", "json",
-           "--json-schema", json.dumps(SCHEMA), *CLI_ISOLATION_ARGS]
-    if model:
-        cmd += ["--model", model]
-    if effort:
-        cmd += ["--effort", effort]
-    try:
-        # Only the ticket payload goes over stdin — the instructions are the system
-        # prompt above. It goes over stdin rather than argv because a full batch can
-        # exceed the argv size limit.
-        proc = subprocess.run(
-            cmd,
-            input=build_analysis_prompt(compact_tickets),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except FileNotFoundError:
-        sys.exit("`claude` not found on PATH. Install Claude Code "
-                 "(https://code.claude.com/docs/en/setup), or use --backend api.")
-    except subprocess.TimeoutExpired:
-        sys.exit(f"`claude` timed out after {timeout}s. Try a smaller --max-tickets.")
-    if proc.returncode != 0:
-        sys.exit(f"`claude` failed ({proc.returncode}): {proc.stderr[:500]}")
-
-    return findings_from_cli_envelope(extract_json_object(proc.stdout))
 
 
 def dump_batch(path, compact_tickets, model):
@@ -1144,10 +1019,9 @@ def main():
                              f"(default: {DEFAULT_BATCH_SIZE}).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Fetch and analyze, then print the Discord payload instead of posting.")
-    parser.add_argument("--backend", default="claude-cli", choices=["claude-cli", "api", "file"],
-                        help="Where classification happens: Claude Code (default, no API "
-                             "key needed), the Anthropic API (needs ANTHROPIC_API_KEY), or "
-                             "a findings file classified elsewhere.")
+    parser.add_argument("--backend", default="api", choices=["api", "file"],
+                        help="Where classification happens: the Anthropic API (default), "
+                             "or a findings file classified elsewhere.")
     parser.add_argument("--findings",
                         help="Findings JSON to render instead of classifying (--backend file).")
     parser.add_argument("--review-star-floor", type=int, default=DEFAULT_REVIEW_STAR_FLOOR,
@@ -1266,11 +1140,8 @@ def main():
             print("Classify it, then: --backend file --findings <path> --dry-run")
             return
 
-        if args.backend == "api":
-            client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
-            analyzer = partial(analyze, client, resolve_api_model(model), args.effort)
-        else:
-            analyzer = partial(analyze_via_claude_cli, model, args.effort)
+        client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
+        analyzer = partial(analyze, client, resolve_api_model(model), args.effort)
         findings = analyze_in_chunks(analyzer, compact, args.batch_size)
 
         # Keep only findings whose id maps to a fetched ticket, in case of drift.

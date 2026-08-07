@@ -97,10 +97,6 @@ jobs:
           fi
           echo "Window: ${window}h, max tickets: ${max}"
 
-      # Classification goes through the Anthropic API here, never the `claude` CLI:
-      # CI gets an org-owned credential that doesn't draw on an individual's
-      # subscription quota, and the runner needs no 270MB CLI download. The
-      # claude-cli backend stays in the script for local runs — see the README.
       - name: Run triage
         env:
           ZENDESK_SUBDOMAIN: ${{ secrets.ZENDESK_SUBDOMAIN }}
@@ -113,7 +109,6 @@ jobs:
         run: |
           mkdir -p .triage-state
           python zendesk_triage/triage.py \
-            --backend api \
             --window-hours "${{ steps.cfg.outputs.window }}" \
             --max-tickets "${{ steps.cfg.outputs.max }}" \
             --state .triage-state/seen.json
