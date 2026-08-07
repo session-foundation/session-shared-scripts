@@ -21,11 +21,11 @@ Categories Claude sorts each ticket into:
     | question | feature_request | other
 
 Two ways to reach Claude, chosen with --backend:
-    api         the Anthropic API, with an ANTHROPIC_API_KEY (org-owned credential,
-                per-token billing, structured outputs enforced by the API)
-    claude-cli  the local `claude` CLI, authenticating as Claude Code — your own
-                login locally, or a CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`
-                in CI. No API key, but it draws on that subscription's usage limits.
+    api         the Anthropic API, with an ANTHROPIC_API_KEY. What CI runs: an
+                org-owned credential, per-token billing, schema enforced by the API.
+    claude-cli  the local `claude` CLI, authenticating as your own Claude Code
+                login. The default for local runs — no API key needed, but it
+                spends your subscription's usage rather than being billed.
 
 Config (env vars, or CLI flags for local runs):
     ZENDESK_SUBDOMAIN     e.g. "mycompany"  -> https://mycompany.zendesk.com

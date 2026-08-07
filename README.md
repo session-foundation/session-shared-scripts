@@ -131,41 +131,14 @@ Two caveats worth knowing:
 | `ZENDESK_SUBDOMAIN`   | Zendesk subdomain (`mycompany` → `mycompany.zendesk.com`) |
 | `ZENDESK_EMAIL`       | Agent email used for Zendesk API-token auth             |
 | `ZENDESK_API_TOKEN`   | Zendesk API token                                       |
-| **One Claude credential** | `ANTHROPIC_API_KEY` **or** `CLAUDE_CODE_OAUTH_TOKEN` — see [Claude authentication](#claude-authentication) |
+| `ANTHROPIC_API_KEY`   | Claude API key — see [Claude authentication](#claude-authentication) |
 | `DISCORD_WEBHOOK_URL` | Discord webhook (reused from the failure-notification setup) |
 
 ### Claude Authentication
 
-Classification can reach Claude two ways, and they need different credentials:
+The workflow classifies through the Anthropic API (`--backend api`) with an `ANTHROPIC_API_KEY`. That keeps CI on an organization-owned credential that doesn't draw on any individual's subscription quota, and keeps the runner free of a ~270MB Claude Code download. The `claude-cli` backend stays in the script for [local runs](#local-testing) and is not used in CI.
 
-| Backend | Credential | Billing |
-| ------- | ---------- | ------- |
-| `api` | `ANTHROPIC_API_KEY` from the [Claude Console](https://platform.claude.com) | Per token, to the Console organization |
-| `claude-cli` | `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` | Draws on that subscription's usage limits |
-
-**The workflow picks for itself.** The `Select backend` step uses `api` when an `ANTHROPIC_API_KEY` secret exists and `claude-cli` otherwise, so adding that secret switches the job over with no edit to the workflow, and until then it keeps running on the subscription. The choice is echoed into the run log, and a `workflow_dispatch` run can force either backend to test one without touching secrets.
-
-Prefer the API key where you have one, but for credential reasons rather than cost: it's organization-owned, doesn't expire annually, and doesn't consume an individual's quota. The two are close on cost — a `claude -p` run used to carry ~25K tokens of Claude Code system prompt and tool definitions on top of the batch, but the [locked-down invocation](#how-the-claude-cli-invocation-is-locked-down) removes both, which took a two-ticket fixture from ~$0.29 to ~$0.015.
-
-#### Notes on the API key
-
-An API key only exists inside a **Claude Console organization** (`platform.claude.com`), which is separate from a claude.ai Pro/Max/Team/Enterprise subscription with its own membership and billing — a claude.ai admin console has no API keys at all. If nobody can find one, the likely answer is that no Console organization exists yet rather than a permissions problem.
-
-#### Notes on the subscription token
-
-Generate it on a machine where you're logged into Claude Code:
-
-```
-claude setup-token
-```
-
-It runs the browser authorization flow and prints the token once — it is not saved anywhere. Requires a Pro, Max, Team, or Enterprise plan; see [Generate a long-lived token](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token). Then:
-
-- **The token lasts one year.** It expires silently from the workflow's point of view — the run just fails to authenticate. Put the renewal date somewhere you'll see it.
-- **The two credentials must not both be live in the run step.** An API key [outranks the OAuth token](https://code.claude.com/docs/en/authentication#authentication-precedence) in Claude Code's credential precedence, and in `-p` mode a key that is present is always used, so a `claude-cli` run with a key in scope would quietly bill the API instead. The workflow unsets whichever credential the chosen backend doesn't use.
-- **Runs draw on that subscription's usage limits**, not API credits, and the token is tied to whoever minted it — so a scheduled run competes with that person's own interactive Claude Code usage. Hitting a limit fails the run (the tickets stay eligible and get picked up by the next one, per the dedup rules above). If your organization has [usage credits](https://support.claude.com/en/articles/12429409-manage-usage-credits-for-paid-claude-plans) enabled, usage continues past the allowance at standard API rates instead of stopping, which turns a failed run into a billed one.
-  > A [separate monthly Agent SDK credit](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) was announced for 2026-06-15 and then **paused** — `claude -p` still draws on subscription limits as described here. Worth re-reading that page before assuming otherwise.
-- **The CLI must be v2.1.205 or newer** for `--json-schema`. The workflow installs the `stable` channel and echoes `claude --version` into the run log, because the script's "no structured_output" error points here.
+If you go looking for that key and can't find one: an API key only exists inside a **Claude Console organization** (`platform.claude.com`), which is a separate organization from a claude.ai Pro/Max/Team/Enterprise subscription, with its own membership and billing. A claude.ai admin console has no API keys in it at all, so the usual answer is that no Console organization exists yet rather than that you're missing a permission.
 
 ### Optional Configuration
 
@@ -176,7 +149,7 @@ It runs the browser authorization flow and prints the token once — it is not s
 | `--state-retention-days` | flag           | `30`                                                    | Forget state entries older than N days |
 | `ZENDESK_QUERY`        | env / `--query`  | *(unset)*                                               | Explicit Zendesk search query. Overrides `--window-hours` entirely |
 | `ZENDESK_TRIAGE_MODEL` | repo variable / `--model` | `opus`                                        | Model alias (`opus`, `sonnet`, `haiku`) or a full id. Set it to `sonnet` to reduce cost on large batches. On `--backend api` the alias is mapped to an id by `API_MODEL_ALIASES` |
-| `backend`              | workflow input / `--backend` | `auto` (workflow) / `claude-cli` (flag)   | `api`, `claude-cli`, or `file`. The workflow's `auto` resolves to `api` when an `ANTHROPIC_API_KEY` secret exists — see [Claude authentication](#claude-authentication) |
+| `--backend`            | flag             | `claude-cli` (flag) / `api` (workflow)                  | Where classification happens: `claude-cli` for local runs, `api` for CI, or `file` to render findings classified elsewhere |
 | `--max-tickets`        | workflow input / flag | `1000` (workflow) / `100` (flag)                   | Runaway guard on tickets analyzed per run, **not** a batch size. The workflow passes `1000`; a bare `python triage.py` uses the script's own `DEFAULT_MAX_TICKETS` of `100`. Zendesk's search API caps a query at 1000 results, so higher values don't fetch more |
 | `--batch-size`         | flag             | `400`                                                   | Split batches larger than this across multiple requests |
 | `--review-star-floor`  | flag             | `3`                                                     | Classify app-store reviews at or below N stars; count the rest |
@@ -245,27 +218,32 @@ Offline tests covering the window arithmetic, dedup partitioning, state round-tr
 
 ### Local Testing
 
-The default backend reuses your own Claude Code login, so no Claude credential is needed locally — only the Zendesk ones:
+Locally the default backend is `claude-cli`, which reuses your own Claude Code login — so no Claude credential is needed, only the Zendesk ones:
 
 ```
 pip install -r zendesk_triage/requirements.txt
 export ZENDESK_SUBDOMAIN=... ZENDESK_EMAIL=... ZENDESK_API_TOKEN=...
 
-# fetch + classify, print the Discord payload, post nothing
+# fetch + classify through your Claude Code login, print the payload, post nothing
 python zendesk_triage/triage.py --window-hours 48 --dry-run
 
-# exercise the path CI uses once an API key is configured
-export ANTHROPIC_API_KEY=...
-python zendesk_triage/triage.py --backend api --window-hours 48 --dry-run
+# exercise exactly what CI runs
+ANTHROPIC_API_KEY=... python zendesk_triage/triage.py --backend api --window-hours 48 --dry-run
 
 # or dump the batch, classify it by hand, and feed the findings back
 python zendesk_triage/triage.py --dump-batch /tmp/batch.json --window-hours 48
 python zendesk_triage/triage.py --backend file --findings /tmp/findings.json --dry-run
 ```
 
-### How the `claude-cli` invocation is locked down
+Two things about the local `claude-cli` path:
 
-Ticket text is written by strangers and the runner has a checkout of this repo, so the CLI is invoked with as little around it as possible: our own `--system-prompt` in place of Claude Code's, `--setting-sources ""` (no hooks, plugins, skills, allow-rules or `CLAUDE.md` from either the runner or the repo), `--strict-mcp-config` with no config (no MCP servers), and an explicit `--disallowed-tools` list. A session then exposes one tool, `StructuredOutput`, and no MCP servers. Removing the agent preamble and the tool definitions is also what makes this path cheap.
+- **It spends your own subscription usage**, shared with your interactive Claude Code and chat usage — one invocation per chunk, so a 48h window is a single call (~$0.015 of equivalent usage on a small batch).
+- **An exported `ANTHROPIC_API_KEY` silently takes over.** It [outranks your login](https://code.claude.com/docs/en/authentication#authentication-precedence) in Claude Code's credential precedence, and in `-p` mode a key that is present is always used — so with one exported in your shell, `--backend claude-cli` bills the API rather than using your subscription. `unset ANTHROPIC_API_KEY` if you want the subscription path.
+- **It needs Claude Code v2.1.205 or newer** for `--json-schema`. On an older CLI the run exits with "no structured_output" naming that version; check `claude --version`.
+
+#### How the `claude-cli` invocation is locked down
+
+Ticket text is written by strangers, so the CLI is invoked with as little around it as possible: our own `--system-prompt` in place of Claude Code's, `--setting-sources ""` (no hooks, plugins, skills, allow-rules or `CLAUDE.md` from either your machine or this repo), `--strict-mcp-config` with no config (no MCP servers), and an explicit `--disallowed-tools` list. A session then exposes one tool, `StructuredOutput`, and no MCP servers. Removing the agent preamble and the tool definitions is also what makes this path cheap.
 
 Three findings from `v2.1.218` that explain why it's written that way — all worth re-testing after a CLI upgrade:
 

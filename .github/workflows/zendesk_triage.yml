@@ -27,11 +27,6 @@ on:
         description: "Ignore saved state and re-report everything in the window"
         type: boolean
         default: false
-      backend:
-        description: "Where classification runs (auto: API key if configured, else Claude Code)"
-        type: choice
-        options: [auto, api, claude-cli]
-        default: auto
 
 # Two overlapping runs would race on the same state file, and the loser's
 # reported tickets would be forgotten. Queue instead of cancelling, so a
@@ -59,43 +54,6 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r zendesk_triage/requirements.txt
-
-      # Classification can run through the Anthropic API or through Claude Code, and
-      # the credential differs: an org-owned ANTHROPIC_API_KEY, or a subscription
-      # OAuth token from `claude setup-token`. `auto` prefers the API key when the
-      # secret exists, because it doesn't draw on one person's subscription quota —
-      # so adding that secret switches the job over with no edit here, and the job
-      # keeps running on the subscription until then. The secret is tested through
-      # a boolean rather than shelled out, so its value never reaches the runner.
-      - name: Select backend
-        id: backend
-        env:
-          FORCED: ${{ github.event.inputs.backend }}
-          HAS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
-        run: |
-          if [ -n "$FORCED" ] && [ "$FORCED" != "auto" ]; then
-            backend="$FORCED"
-          elif [ "$HAS_API_KEY" = "true" ]; then
-            backend="api"
-          else
-            backend="claude-cli"
-          fi
-          echo "backend=$backend" >> "$GITHUB_OUTPUT"
-          echo "Classification backend: $backend"
-
-      # Only the claude-cli backend needs the CLI. The `stable` channel is ~a week
-      # behind `latest` and skips releases with known major regressions, which is what
-      # a scheduled job wants; the version is echoed because a CLI older than
-      # v2.1.205 ignores --json-schema and the script's error for that names this.
-      - name: Install Claude Code
-        if: steps.backend.outputs.backend == 'claude-cli'
-        run: |
-          curl -fsSL https://claude.ai/install.sh | bash -s stable
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Report Claude Code version
-        if: steps.backend.outputs.backend == 'claude-cli'
-        run: claude --version
 
       # Unique key so every run writes a fresh entry; the restore-keys prefix pulls
       # in the most recent previous one. run_attempt is in the key because cache
@@ -139,33 +97,23 @@ jobs:
           fi
           echo "Window: ${window}h, max tickets: ${max}"
 
-      # Both credentials are in scope, so the step must drop the one the chosen
-      # backend doesn't use: an API key outranks the OAuth token in Claude Code's
-      # credential precedence, and in -p mode a key that is present is always used,
-      # so leaving it set would make a claude-cli run silently bill the API instead.
-      # DISABLE_AUTOUPDATER keeps the CLI from downloading a new version mid-run,
-      # so the version echoed above is the one that actually classifies.
+      # Classification goes through the Anthropic API here, never the `claude` CLI:
+      # CI gets an org-owned credential that doesn't draw on an individual's
+      # subscription quota, and the runner needs no 270MB CLI download. The
+      # claude-cli backend stays in the script for local runs — see the README.
       - name: Run triage
         env:
-          BACKEND: ${{ steps.backend.outputs.backend }}
           ZENDESK_SUBDOMAIN: ${{ secrets.ZENDESK_SUBDOMAIN }}
           ZENDESK_EMAIL: ${{ secrets.ZENDESK_EMAIL }}
           ZENDESK_API_TOKEN: ${{ secrets.ZENDESK_API_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          DISABLE_AUTOUPDATER: "1"
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           ZENDESK_QUERY: ${{ github.event.inputs.query }}
           ZENDESK_TRIAGE_MODEL: ${{ vars.ZENDESK_TRIAGE_MODEL }}
         run: |
-          if [ "$BACKEND" = "api" ]; then
-            unset CLAUDE_CODE_OAUTH_TOKEN
-          else
-            unset ANTHROPIC_API_KEY
-          fi
           mkdir -p .triage-state
           python zendesk_triage/triage.py \
-            --backend "$BACKEND" \
+            --backend api \
             --window-hours "${{ steps.cfg.outputs.window }}" \
             --max-tickets "${{ steps.cfg.outputs.max }}" \
             --state .triage-state/seen.json
