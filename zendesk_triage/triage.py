@@ -2,10 +2,10 @@
 """
 Daily Zendesk ticket triage with Claude, delivered to Discord.
 
-Fetches open Zendesk tickets (broad query by default, not just bugs), sends the
-whole batch to Claude in a single structured-output request, and posts a Discord
-summary that links back to each original ticket and highlights the ones worth
-looking into (crashes, data loss, legal requests, security/legislation, etc.).
+Fetches open Zendesk tickets (broad query by default, not just bugs), classifies the
+whole batch in one schema-enforced request through the local `claude` CLI, and posts
+a Discord summary that links back to each original ticket and highlights the ones
+worth looking into (crashes, data loss, legal requests, security/legislation, etc.).
 
 Because this repo is public, ticket content is never written to the job summary or
 anywhere public: in a normal run the only place ticket detail goes is the Discord
@@ -20,11 +20,13 @@ Categories Claude sorts each ticket into:
     bug_report | low_star_review | legal_request | security_or_legislation
     | question | feature_request | other
 
+Classification authenticates as Claude Code: your own login locally, or a
+CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token` in CI. No Claude API key involved.
+
 Config (env vars, or CLI flags for local runs):
     ZENDESK_SUBDOMAIN     e.g. "mycompany"  -> https://mycompany.zendesk.com
     ZENDESK_EMAIL         agent email for API token auth
     ZENDESK_API_TOKEN     Zendesk API token
-    ANTHROPIC_API_KEY     Claude API key (read by the SDK automatically)
     DISCORD_WEBHOOK_URL   Discord incoming webhook
     ZENDESK_QUERY         (optional) Zendesk search query; see DEFAULT_QUERY
     ZENDESK_TRIAGE_MODEL  (optional) Claude model alias or id; defaults to `opus`
@@ -42,10 +44,8 @@ Usage:
     # or an explicit query, which overrides --window-hours
     python triage.py --query "type:ticket status:open tags:bug" --max-tickets 50
 
-    # local debugging without an ANTHROPIC_API_KEY: classify via the `claude` CLI
-    python triage.py --backend claude-cli --dry-run --max-tickets 20
-
-    # or split it in two: dump the batch, classify it by hand, feed it back
+    # split classification out entirely: dump the batch, classify it by hand,
+    # feed the findings back in to render
     python triage.py --dump-batch /tmp/batch.json --max-tickets 20
     python triage.py --backend file --findings /tmp/findings.json --dry-run
 """
@@ -61,7 +61,6 @@ import time
 from datetime import datetime, timedelta, timezone
 from functools import partial
 
-import anthropic
 import requests
 
 # Open, pending, new, and on-hold tickets, newest first. Broad on purpose: we
@@ -104,10 +103,9 @@ DEFAULT_MODEL = "opus"
 DEFAULT_MAX_TICKETS = 100
 DESCRIPTION_CHARS = 1500  # per-ticket description sent to Claude (triage only)
 # One classification runs ~100 output tokens per ticket, and adaptive thinking draws
-# from the same max_tokens budget. 400 keeps a chunk far under the 128K output
+# from the same output budget. 400 keeps a chunk far under the model's 128K output
 # ceiling; batches larger than this are split rather than truncated.
 DEFAULT_BATCH_SIZE = 400
-MAX_OUTPUT_TOKENS = 128000
 
 # ---- Taxonomy --------------------------------------------------------------
 #
@@ -670,8 +668,9 @@ def findings_from_cli_envelope(envelope):
     """Pull the findings out of a `claude -p --output-format json` envelope.
 
     With --json-schema the shape lands in `structured_output`, already validated
-    against SCHEMA. An envelope without that key means the CLI ignored the flag
-    (it predates v2.1.205), which would otherwise surface as an empty digest.
+    against SCHEMA. An envelope without that key would otherwise surface as an empty
+    digest, so it exits naming both causes: a CLI too old for the flag, or a reply
+    that ran out of output tokens before the JSON closed.
     """
     if envelope.get("is_error") or envelope.get("subtype") != "success":
         sys.exit(f"`claude` reported an error: {envelope.get('result') or envelope}")
@@ -680,8 +679,10 @@ def findings_from_cli_envelope(envelope):
         print(f"claude CLI reported ${cost:.4f} for this batch.")
     payload = envelope.get("structured_output")
     if not isinstance(payload, dict):
-        sys.exit("`claude` returned no structured_output: --json-schema needs Claude "
-                 "Code v2.1.205 or newer (check `claude --version`).")
+        sys.exit("`claude` returned no structured_output. Either the CLI predates "
+                 "--json-schema (needs v2.1.205 or newer — check `claude --version`) "
+                 f"or the batch outgrew the output ceiling: lower --batch-size "
+                 f"(currently splitting at {DEFAULT_BATCH_SIZE}).")
     return tickets_from_payload(payload, "`claude` CLI")
 
 
@@ -707,7 +708,8 @@ def analyze_via_claude_cli(model, effort, compact_tickets, timeout=1800):
             cmd, input=prompt, capture_output=True, text=True, timeout=timeout
         )
     except FileNotFoundError:
-        sys.exit("`claude` not found on PATH. Install Claude Code, or use --backend api.")
+        sys.exit("`claude` not found on PATH. Install Claude Code: "
+                 "https://code.claude.com/docs/en/setup")
     except subprocess.TimeoutExpired:
         sys.exit(f"`claude` timed out after {timeout}s. Try a smaller --max-tickets.")
     if proc.returncode != 0:
@@ -760,37 +762,6 @@ def analyze_in_chunks(analyzer, compact_tickets, batch_size):
         print(f"  chunk {number}/{chunks}: {len(chunk)} tickets")
         findings.extend(analyzer(chunk))
     return findings
-
-
-def analyze(client, model, effort, compact_tickets):
-    prompt = build_analysis_prompt(compact_tickets)
-    with client.messages.stream(
-        model=model,
-        max_tokens=MAX_OUTPUT_TOKENS,
-        thinking={"type": "adaptive"},
-        output_config={
-            "format": {"type": "json_schema", "schema": SCHEMA},
-            "effort": effort,
-        },
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
-    ) as stream:
-        message = stream.get_final_message()
-
-    if message.stop_reason == "refusal":
-        sys.exit("Claude refused to process the batch.")
-    if message.stop_reason == "max_tokens":
-        # Structured output truncated mid-JSON: json.loads below would fail with a
-        # baffling parse error, so say what actually went wrong.
-        sys.exit(
-            f"Claude hit the {MAX_OUTPUT_TOKENS} output-token limit on a batch of "
-            f"{len(compact_tickets)} tickets, so the JSON is incomplete. "
-            f"Lower --batch-size (currently splitting at {DEFAULT_BATCH_SIZE})."
-        )
-    text = next((b.text for b in message.content if b.type == "text"), None)
-    if not text:
-        sys.exit("Claude returned no structured output.")
-    return tickets_from_payload(json.loads(text), "Claude")
 
 
 # ---- Discord rendering -----------------------------------------------------
@@ -1056,9 +1027,9 @@ def main():
                              f"(default: {DEFAULT_BATCH_SIZE}).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Fetch and analyze, then print the Discord payload instead of posting.")
-    parser.add_argument("--backend", default="api", choices=["api", "claude-cli", "file"],
-                        help="Where classification happens: the Anthropic API (default), the "
-                             "local `claude` CLI (no API key needed), or a findings file.")
+    parser.add_argument("--backend", default="claude-cli", choices=["claude-cli", "file"],
+                        help="Where classification happens: Claude Code (default), or a "
+                             "findings file classified elsewhere.")
     parser.add_argument("--findings",
                         help="Findings JSON to render instead of classifying (--backend file).")
     parser.add_argument("--review-star-floor", type=int, default=DEFAULT_REVIEW_STAR_FLOOR,
@@ -1177,11 +1148,7 @@ def main():
             print("Classify it, then: --backend file --findings <path> --dry-run")
             return
 
-        if args.backend == "claude-cli":
-            analyzer = partial(analyze_via_claude_cli, model, args.effort)
-        else:
-            client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
-            analyzer = partial(analyze, client, model, args.effort)
+        analyzer = partial(analyze_via_claude_cli, model, args.effort)
         findings = analyze_in_chunks(analyzer, compact, args.batch_size)
 
         # Keep only findings whose id maps to a fetched ticket, in case of drift.

@@ -63,7 +63,7 @@ Runs automatically every Monday at 00:00 UTC.
 
 ## Zendesk Ticket Triage
 
-Claude reviews recently-created unsolved Zendesk tickets via the API and posts a summary to Discord that links back to each original ticket and highlights the ones worth looking into. For each ticket it assigns a category, infers severity, guesses a likely root cause, identifies platform and app version, groups likely duplicates into clusters, and ranks by priority.
+Claude reviews recently-created unsolved Zendesk tickets fetched from the Zendesk API and posts a summary to Discord that links back to each original ticket and highlights the ones worth looking into. For each ticket it assigns a category, infers severity, guesses a likely root cause, identifies platform and app version, groups likely duplicates into clusters, and ranks by priority.
 
 ### Categories
 
@@ -93,7 +93,7 @@ Detection uses the Zendesk `via.channel`, which identified reviews with no false
 
 Twitter DM tickets arrive with `description` identical to `subject` — both just `"Conversation with <handle>"` — which is 15% of non-review tickets and unclassifiable as fetched. For those only, `hydrate_descriptions` fetches a page of up to 10 comments and joins every body that differs from the subject into the description; later replies often carry the actual detail. Hydration is an enrichment, so an HTTP error or an unreachable endpoint leaves the ticket as-is rather than failing the run (`--no-hydrate` to skip it entirely).
 
-The script (`zendesk_triage/triage.py`) fetches the tickets in a rolling time window, sends the whole batch to Claude in one structured-output request, and posts Discord embeds: a summary embed plus one embed per highlighted ticket (linking to the ticket in Zendesk).
+The script (`zendesk_triage/triage.py`) fetches the tickets in a rolling time window, classifies the whole batch in one schema-enforced request through the `claude` CLI, and posts Discord embeds: a summary embed plus one embed per highlighted ticket (linking to the ticket in Zendesk).
 
 The summary embed accounts for the batch in full, so nothing is dropped silently:
 
@@ -176,7 +176,7 @@ These do different jobs, and conflating them is how you get a silently truncated
 - **`--max-tickets`** bounds how much of the Zendesk result set is fetched. At the workflow's 1000 it never binds on a 48h window (~45 tickets); it exists so a spam flood or a wide `reset_state` backfill can't run away. 1000 is also [Zendesk's own search result limit](https://developer.zendesk.com/api-reference/ticketing/ticket-management/search/#results-limit) — the API returns `422` for any page past it, so the fetch stops at 1000 regardless of what you pass, and reports the matched-vs-analyzed gap rather than failing.
 - **`--batch-size`** bounds how many tickets go into a *single* model request. Anything larger is split across requests and the findings are concatenated.
 
-The split is necessary because output tokens, not context, are the binding constraint. Measured on real tickets: **~118 input tokens and ~102 output tokens per ticket**, with adaptive thinking drawing from the same `max_tokens` budget.
+The split is necessary because output tokens, not context, are the binding constraint. Measured on real tickets: **~118 input tokens and ~102 output tokens per ticket**, with adaptive thinking drawing from the same output budget.
 
 | Batch | Input | Output needed | Fits in one request? |
 | ----- | ----- | ------------- | -------------------- |
@@ -184,7 +184,7 @@ The split is necessary because output tokens, not context, are the binding const
 | 400 (`--batch-size`) | ~47K | ~41K | Yes, with room for thinking |
 | 1000 (`--max-tickets`) | ~118K | ~102K | **No** — leaves only ~26K of the 128K output ceiling for thinking |
 
-If a single request ever does hit the ceiling, the script exits with that explicit reason rather than failing on an incomplete-JSON parse error.
+If a single request ever does hit the ceiling, the JSON never closes and no `structured_output` comes back — the script exits naming that and the `--batch-size` to lower, rather than rendering a digest that is silently short.
 
 > Chunking is per-request, so `cluster` labels and `priority_rank` are only meaningful within a chunk. Batches large enough to split are ones where completing at all matters more than cross-chunk cluster fidelity.
 
@@ -228,19 +228,14 @@ Offline tests covering the window arithmetic, dedup partitioning, state round-tr
 
 ### Local Testing
 
+Classification reuses your own Claude Code login, so no token is needed locally — only the Zendesk credentials:
+
 ```
 pip install -r zendesk_triage/requirements.txt
-export ZENDESK_SUBDOMAIN=... ZENDESK_EMAIL=... ZENDESK_API_TOKEN=... ANTHROPIC_API_KEY=...
+export ZENDESK_SUBDOMAIN=... ZENDESK_EMAIL=... ZENDESK_API_TOKEN=...
 
-# fetch + analyze, print the Discord payload, post nothing
+# fetch + classify, print the Discord payload, post nothing
 python zendesk_triage/triage.py --window-hours 48 --dry-run
-```
-
-Locally, `--backend claude-cli` needs no token at all — it reuses your own Claude Code login:
-
-```
-# what CI runs: classify through Claude Code
-python zendesk_triage/triage.py --backend claude-cli --window-hours 48 --dry-run
 
 # or dump the batch, classify it by hand, and feed the findings back
 python zendesk_triage/triage.py --dump-batch /tmp/batch.json --window-hours 48
