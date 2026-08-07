@@ -439,23 +439,6 @@ class TestTaxonomyIsDerived(unittest.TestCase):
         missing = [c for c in triage.CATEGORIES if c not in triage.SYSTEM_PROMPT]
         self.assertEqual(missing, [])
 
-    def test_every_category_is_listed_in_the_cli_instructions(self):
-        missing = [c for c in triage.CATEGORIES if c not in triage.CLI_JSON_INSTRUCTIONS]
-        self.assertEqual(missing, [])
-
-    def test_every_schema_field_is_listed_in_the_cli_instructions(self):
-        """The CLI backend has no structured-output enforcement, so a field absent
-        from these instructions comes back empty — which is how platform, app_version
-        and reported_session_id silently went unpopulated."""
-        fields = triage.SCHEMA["properties"]["tickets"]["items"]["properties"]
-        missing = [f for f in fields if f not in triage.CLI_JSON_INSTRUCTIONS]
-        self.assertEqual(missing, [])
-
-    def test_every_enum_value_is_listed_in_the_cli_instructions(self):
-        for values in (triage.CATEGORIES, triage.SEVERITIES, triage.PLATFORMS):
-            for value in values:
-                self.assertIn(value, triage.CLI_JSON_INSTRUCTIONS)
-
     def test_schema_enum_matches_the_category_list(self):
         item = triage.SCHEMA["properties"]["tickets"]["items"]
         self.assertEqual(item["properties"]["category"]["enum"], triage.CATEGORIES)
@@ -796,8 +779,8 @@ class TestTicketsFromPayload(unittest.TestCase):
         self.assertEqual(triage.tickets_from_payload({"tickets": []}, "x"), [])
 
     def test_a_finding_missing_renderer_keys_exits(self):
-        """The claude-cli backend has no structured-output enforcement, so an entry
-        without category/severity would otherwise KeyError inside build_summary_embed."""
+        """A hand-edited --backend file findings list has nothing enforcing its shape,
+        so an entry without category/severity would KeyError in build_summary_embed."""
         for entry in ({"id": 1}, {"id": 1, "category": "bug_report"},
                       {"category": "bug_report", "severity": "major"}):
             with self.assertRaises(SystemExit):
@@ -806,6 +789,38 @@ class TestTicketsFromPayload(unittest.TestCase):
     def test_a_non_object_entry_exits(self):
         with self.assertRaises(SystemExit):
             triage.tickets_from_payload({"tickets": [["not", "an", "object"]]}, "x")
+
+
+class TestFindingsFromCliEnvelope(unittest.TestCase):
+    def envelope(self, **overrides):
+        base = {
+            "subtype": "success",
+            "is_error": False,
+            "structured_output": {"tickets": [finding(1)]},
+        }
+        base.update(overrides)
+        return base
+
+    def test_reads_structured_output(self):
+        self.assertEqual(triage.findings_from_cli_envelope(self.envelope()), [finding(1)])
+
+    def test_missing_structured_output_exits(self):
+        """A CLI too old for --json-schema returns prose in `result` and no
+        structured_output; without this check the digest comes out silently empty."""
+        stale = self.envelope(result='{"tickets": []}')
+        del stale["structured_output"]
+        with self.assertRaises(SystemExit):
+            triage.findings_from_cli_envelope(stale)
+
+    def test_a_reported_cli_error_exits(self):
+        for envelope in (self.envelope(is_error=True),
+                         self.envelope(subtype="error_max_turns")):
+            with self.assertRaises(SystemExit):
+                triage.findings_from_cli_envelope(envelope)
+
+    def test_a_cost_field_is_reported_not_fatal(self):
+        result = triage.findings_from_cli_envelope(self.envelope(total_cost_usd=0.42))
+        self.assertEqual(result, [finding(1)])
 
 
 class TestExtractJsonObject(unittest.TestCase):

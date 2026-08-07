@@ -617,40 +617,6 @@ def build_analysis_prompt(compact_tickets):
     )
 
 
-def _cli_field_lines():
-    """Describe every schema field for the CLI path, derived from TICKET_PROPERTIES.
-
-    The API path has structured outputs to enforce the shape; the CLI path only has
-    this text. Hardcoding the field list here is how three fields (platform,
-    app_version, reported_session_id) silently came back empty on the CLI backend
-    after being added to the schema.
-    """
-    lines = []
-    for name, spec in TICKET_PROPERTIES.items():
-        shape = spec.get("type", "string")
-        if "enum" in spec:
-            shape += "; one of: " + ", ".join(spec["enum"])
-        description = spec.get("description", "")
-        lines.append(f"- {name} ({shape}){': ' + description if description else ''}")
-    return "\n".join(lines)
-
-
-# The API path gets the shape enforced by structured outputs. The CLI path has no
-# such enforcement, so the shape is spelled out here — from the same schema.
-CLI_JSON_INSTRUCTIONS = textwrap.dedent(
-    """
-    Return ONLY a single JSON object — no prose, no explanation, no markdown code
-    fence. The object has exactly one key, "tickets", whose value is an array with
-    one object per input ticket, each with exactly these keys:
-    __FIELDS__
-
-    Every key is required on every object. Use an empty string for text fields you
-    cannot fill, and the enum's catch-all value ('unknown', 'not_applicable', 'other')
-    rather than inventing a new one.
-    """
-).strip().replace("__FIELDS__", _cli_field_lines())
-
-
 def extract_json_object(text):
     """Pull the outermost JSON object out of model prose (tolerates code fences)."""
     start = text.find("{")
@@ -697,17 +663,37 @@ def tickets_from_payload(payload, source):
     return validate_findings(found, source)
 
 
+def findings_from_cli_envelope(envelope):
+    """Pull the findings out of a `claude -p --output-format json` envelope.
+
+    With --json-schema the shape lands in `structured_output`, already validated
+    against SCHEMA. An envelope without that key means the CLI ignored the flag
+    (it predates v2.1.205), which would otherwise surface as an empty digest.
+    """
+    if envelope.get("is_error") or envelope.get("subtype") != "success":
+        sys.exit(f"`claude` reported an error: {envelope.get('result') or envelope}")
+    cost = envelope.get("total_cost_usd")
+    if cost is not None:
+        print(f"claude CLI reported ${cost:.4f} for this batch.")
+    payload = envelope.get("structured_output")
+    if not isinstance(payload, dict):
+        sys.exit("`claude` returned no structured_output: --json-schema needs Claude "
+                 "Code v2.1.205 or newer (check `claude --version`).")
+    return tickets_from_payload(payload, "`claude` CLI")
+
+
 def analyze_via_claude_cli(model, effort, compact_tickets, timeout=1800):
     """Classify the batch with the local `claude` CLI instead of the Anthropic API.
 
-    Local debugging path: it authenticates as Claude Code, so no ANTHROPIC_API_KEY is
-    needed. There is no structured-output enforcement here, so the response is parsed
-    defensively and the schema is described in the prompt.
+    It authenticates as Claude Code, so no ANTHROPIC_API_KEY is needed, and
+    --json-schema enforces the same SCHEMA the API path uses — so the response needs
+    no prose parsing and no hand-maintained field list in the prompt.
     """
-    prompt = "\n\n".join(
-        [SYSTEM_PROMPT, CLI_JSON_INSTRUCTIONS, build_analysis_prompt(compact_tickets)]
-    )
-    cmd = ["claude", "-p", "--output-format", "json"]
+    prompt = "\n\n".join([SYSTEM_PROMPT, build_analysis_prompt(compact_tickets)])
+    # --bare would be the faster startup, but it reads ANTHROPIC_API_KEY only and
+    # never touches OAuth credentials, which is exactly what CI authenticates with.
+    cmd = ["claude", "-p", "--output-format", "json",
+           "--json-schema", json.dumps(SCHEMA)]
     if model:
         cmd += ["--model", model]
     if effort:
@@ -724,14 +710,7 @@ def analyze_via_claude_cli(model, effort, compact_tickets, timeout=1800):
     if proc.returncode != 0:
         sys.exit(f"`claude` failed ({proc.returncode}): {proc.stderr[:500]}")
 
-    envelope = extract_json_object(proc.stdout)
-    if envelope.get("is_error") or envelope.get("subtype") != "success":
-        sys.exit(f"`claude` reported an error: {envelope.get('result') or envelope}")
-    cost = envelope.get("total_cost_usd")
-    if cost is not None:
-        print(f"claude CLI reported ${cost:.4f} for this batch.")
-    result = extract_json_object(envelope.get("result") or "")
-    return tickets_from_payload(result, "`claude` CLI")
+    return findings_from_cli_envelope(extract_json_object(proc.stdout))
 
 
 def dump_batch(path, compact_tickets, model):
@@ -739,7 +718,6 @@ def dump_batch(path, compact_tickets, model):
     payload = {
         "model": model,
         "system_prompt": SYSTEM_PROMPT,
-        "instructions": CLI_JSON_INSTRUCTIONS,
         "schema": SCHEMA,
         "tickets": compact_tickets,
     }
