@@ -830,9 +830,12 @@ class TestResolveApiModel(unittest.TestCase):
             self.assertEqual(triage.resolve_api_model(alias), model_id)
             self.assertTrue(model_id.startswith("claude-"), model_id)
 
-    def test_the_default_model_is_mappable(self):
-        """DEFAULT_MODEL is an alias, so --backend api would 404 without an entry."""
-        self.assertIn(triage.DEFAULT_MODEL, triage.API_MODEL_ALIASES)
+    def test_the_default_model_resolves_to_an_api_id(self):
+        """--backend api 404s on a Claude Code alias, so whatever DEFAULT_MODEL is —
+        a pinned id today, an alias if that ever changes — it has to resolve to one."""
+        resolved = triage.resolve_api_model(triage.DEFAULT_MODEL)
+        self.assertNotIn(resolved, triage.API_MODEL_ALIASES)
+        self.assertTrue(resolved.startswith("claude-"), resolved)
 
     def test_a_full_id_passes_through(self):
         self.assertEqual(triage.resolve_api_model("claude-opus-4-8"), "claude-opus-4-8")

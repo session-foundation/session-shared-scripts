@@ -34,7 +34,9 @@ Config (env vars, or CLI flags for local runs):
     ANTHROPIC_API_KEY     Claude API key, for --backend api (read by the SDK itself)
     DISCORD_WEBHOOK_URL   Discord incoming webhook
     ZENDESK_QUERY         (optional) Zendesk search query; see DEFAULT_QUERY
-    ZENDESK_TRIAGE_MODEL  (optional) Claude model alias or id; defaults to `opus`
+    ZENDESK_TRIAGE_MODEL  (optional) Claude model id or alias; defaults to
+                          claude-opus-5. Set it to override, e.g. `sonnet` for a
+                          large backfill.
 
 Usage:
     # real run (CI): reads everything from the environment
@@ -105,14 +107,18 @@ def window_label(hours):
         days = hours // 24
         return f"created in the past {days} day{'s' if days > 1 else ''}"
     return f"created in the past {hours}h"
-# An alias, not a pinned id: the CLI resolves `opus` to the newest Opus the
-# authenticated plan allows, so a model release needs no edit here and a plan
-# without Opus access degrades instead of 404-ing on a dead id.
-DEFAULT_MODEL = "opus"
-# The Anthropic API takes model ids, not Claude Code aliases, so the same alias has
-# to be mapped for --backend api. Each entry is the newest model in its family,
-# which is what the CLI's own alias resolution lands on — pass a full id to pin a
-# specific version instead.
+# A pinned id rather than the `opus` alias, deliberately. This is an unattended
+# digest a human skims: the batch-wide fields (`cluster`, `priority_rank`) and the
+# severity calibration shift when the model underneath changes, and an alias would
+# move them on someone else's release schedule. Opus rather than a cheaper tier
+# because clustering asks the model to recognise one root cause across 45 tickets in
+# several languages, and the whole job costs single-digit dollars a month either way.
+# Bumping this is a one-line, deliberate change; both backends accept a full id.
+DEFAULT_MODEL = "claude-opus-5"
+# Aliases still work as an override (ZENDESK_TRIAGE_MODEL=sonnet for a big backfill),
+# and the Anthropic API takes ids only — so --backend api maps them here. Each entry
+# is the newest model in its family, which is where the CLI's own alias resolution
+# lands; a full id passes through untouched.
 API_MODEL_ALIASES = {
     "opus": "claude-opus-5",
     "sonnet": "claude-sonnet-5",
@@ -1125,8 +1131,9 @@ def main():
     parser.add_argument("--window-hours", type=int, metavar="N",
                         help="Only analyze unsolved tickets created in the last N hours. "
                              "The scheduled daily run uses 48.")
-    parser.add_argument("--model", help="Claude model alias (opus, sonnet, haiku) or full "
-                                       "id (else ZENDESK_TRIAGE_MODEL, else opus).")
+    parser.add_argument("--model", help=f"Claude model id, or an alias (opus, sonnet, "
+                                        f"haiku) which --backend api maps to an id "
+                                        f"(else ZENDESK_TRIAGE_MODEL, else {DEFAULT_MODEL}).")
     parser.add_argument("--effort", default="medium", choices=["low", "medium", "high", "xhigh", "max"],
                         help="Claude reasoning effort (default: medium).")
     parser.add_argument("--max-tickets", type=int, default=DEFAULT_MAX_TICKETS,

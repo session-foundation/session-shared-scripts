@@ -148,7 +148,7 @@ If you go looking for that key and can't find one: an API key only exists inside
 | `--state`              | flag             | *(unset)*                                               | Dedup state file. The workflow points this at the cached `.triage-state/seen.json` |
 | `--state-retention-days` | flag           | `30`                                                    | Forget state entries older than N days |
 | `ZENDESK_QUERY`        | env / `--query`  | *(unset)*                                               | Explicit Zendesk search query. Overrides `--window-hours` entirely |
-| `ZENDESK_TRIAGE_MODEL` | repo variable / `--model` | `opus`                                        | Model alias (`opus`, `sonnet`, `haiku`) or a full id. Set it to `sonnet` to reduce cost on large batches. On `--backend api` the alias is mapped to an id by `API_MODEL_ALIASES` |
+| `ZENDESK_TRIAGE_MODEL` | repo variable / `--model` | `claude-opus-5`                                         | Overrides the model. Takes a full id, or an alias (`opus`, `sonnet`, `haiku`) which `--backend api` maps to an id via `API_MODEL_ALIASES`. **Leave it unset for normal operation** — the default lives in the script so there's one place to change it |
 | `--backend`            | flag             | `claude-cli` (flag) / `api` (workflow)                  | Where classification happens: `claude-cli` for local runs, `api` for CI, or `file` to render findings classified elsewhere |
 | `--max-tickets`        | workflow input / flag | `1000` (workflow) / `100` (flag)                   | Runaway guard on tickets analyzed per run, **not** a batch size. The workflow passes `1000`; a bare `python triage.py` uses the script's own `DEFAULT_MAX_TICKETS` of `100`. Zendesk's search API caps a query at 1000 results, so higher values don't fetch more |
 | `--batch-size`         | flag             | `400`                                                   | Split batches larger than this across multiple requests |
@@ -157,7 +157,16 @@ If you go looking for that key and can't find one: an API key only exists inside
 | `--no-hydrate`         | flag             | off                                                     | Skip fetching comments for content-free tickets |
 | `--effort`             | flag             | `medium`                                                | Claude reasoning effort (`low`–`max`) |
 
-> **Why an alias and not a pinned model id:** the alias is resolved at run time against whatever the authenticated plan allows, so a new Opus release needs no edit here, and a plan without Opus access falls back rather than failing on an id it can't serve. Pin a full id (`claude-opus-4-8`) only when you need a specific version — for reproducing a past run, say.
+#### Why this model, and why pinned
+
+**Opus**, because the hard part of this job isn't per-ticket classification — enum-constrained categories with prompt guidance is squarely mid-tier work. It's the two batch-wide fields: `cluster` has to spot that a German app-store review and an English bug report describe one root cause, and `priority_rank` has to stay consistent across the whole batch. Those need the model to hold ~45 heterogeneous tickets in mind at once. The exact-transcription requirement (a 66-character Session ID copied verbatim) points the same way. And the entire job costs **single-digit dollars a month** on any current model — roughly $10 on Opus 5 against $6 on Sonnet 5 and $2 on Haiku 4.5 — so trading classification quality for a few dollars would be optimising the wrong thing when the cost of a miss is an unseen abuse report.
+
+**Pinned to an id rather than the `opus` alias**, because this is an unattended digest. An alias resolves to the newest Opus the credential allows, so severity calibration and cluster labels would shift on someone else's release schedule, with no run in between to notice it. Bumping the pin is a deliberate one-line change in [triage.py](zendesk_triage/triage.py) (`DEFAULT_MODEL`).
+
+Two cases for overriding it:
+
+- **Large backfills.** A `reset_state` run at `--max-tickets 1000` chunks into 400-ticket requests, where Opus latency and spend actually show up and cross-chunk cluster fidelity is already reduced by design. `ZENDESK_TRIAGE_MODEL=sonnet` for those.
+- **Never Fable 5.** It prices above Opus tier, targets long-horizon agentic reasoning, and requires 30-day data retention — all wrong for batch classification of support tickets.
 
 #### Batch size vs. ticket cap
 
