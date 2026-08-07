@@ -692,6 +692,54 @@ def tickets_from_payload(payload, source):
     return validate_findings(found, source)
 
 
+# Ticket text is untrusted input written by strangers, and the runner has a checkout
+# of this repo, so the CLI invocation is stripped to just "classify this text":
+#   --system-prompt        ours replaces Claude Code's, so there is no agent preamble
+#                          and no per-machine section (cwd, env, git status) either
+#   --setting-sources ""   loads no user/project/local settings, so no hooks, plugins,
+#                          skills, allow-rules or CLAUDE.md from the runner or the repo
+#   --strict-mcp-config    with no --mcp-config, that means no MCP servers at all
+#   --disallowed-tools     the tools below, by name — see CLI_DENIED_TOOLS
+#   --permission-mode      dontAsk, as a backstop rather than the boundary
+# Everything Claude needs is in the prompt, so a ticket that tries to talk its way
+# into running something should have nothing to reach for.
+# --bare would give the same isolation and a faster start, but it reads
+# ANTHROPIC_API_KEY only and never OAuth credentials, which is what this path uses.
+#
+# Two things measured on v2.1.218 that constrain how the tool surface is closed:
+#   - `--disallowed-tools "*"` does empty the surface, but it also denies
+#     StructuredOutput, which is how --json-schema is implemented — the run then
+#     returns prose and no structured_output. So the tools have to be named.
+#   - `--permission-mode dontAsk` is not a boundary on its own: a session with no
+#     allow rules still executed `Bash(echo …)`, because the mode permits a
+#     read-only command set. It stays as a backstop, not as the control.
+# A named list goes stale as tools are added, so re-check what a session actually
+# exposes after a CLI upgrade — the `init` event lists it:
+#   echo hi | claude -p --output-format stream-json --verbose [flags] \
+#     | grep '"subtype":"init"'
+CLI_DENIED_TOOLS = " ".join([
+    # filesystem and execution
+    "Bash", "BashOutput", "KillShell", "Read", "Write", "Edit", "NotebookEdit",
+    "Glob", "Grep",
+    # network
+    "WebFetch", "WebSearch",
+    # delegation and session control
+    "Task", "TaskOutput", "TaskStop", "Workflow", "Skill", "SlashCommand",
+    "ToolSearch", "TodoWrite", "EnterWorktree", "ExitWorktree", "Monitor",
+    "ScheduleWakeup",
+    # anything that reaches outside the run
+    "Artifact", "SendMessage", "PushNotification", "RemoteTrigger", "DesignSync",
+    "CronCreate", "CronDelete", "CronList", "ShareOnboardingGuide", "ReportFindings",
+])
+CLI_ISOLATION_ARGS = [
+    "--system-prompt", SYSTEM_PROMPT,
+    "--setting-sources", "",
+    "--strict-mcp-config",
+    "--permission-mode", "dontAsk",
+    "--disallowed-tools", CLI_DENIED_TOOLS,
+]
+
+
 def findings_from_cli_envelope(envelope):
     """Pull the findings out of a `claude -p --output-format json` envelope.
 
@@ -721,19 +769,22 @@ def analyze_via_claude_cli(model, effort, compact_tickets, timeout=1800):
     --json-schema enforces the same SCHEMA the API path uses — so the response needs
     no prose parsing and no hand-maintained field list in the prompt.
     """
-    prompt = "\n\n".join([SYSTEM_PROMPT, build_analysis_prompt(compact_tickets)])
-    # --bare would be the faster startup, but it reads ANTHROPIC_API_KEY only and
-    # never touches OAuth credentials, which is exactly what CI authenticates with.
     cmd = ["claude", "-p", "--output-format", "json",
-           "--json-schema", json.dumps(SCHEMA)]
+           "--json-schema", json.dumps(SCHEMA), *CLI_ISOLATION_ARGS]
     if model:
         cmd += ["--model", model]
     if effort:
         cmd += ["--effort", effort]
     try:
-        # Prompt goes over stdin: a full batch can exceed the argv size limit.
+        # Only the ticket payload goes over stdin — the instructions are the system
+        # prompt above. It goes over stdin rather than argv because a full batch can
+        # exceed the argv size limit.
         proc = subprocess.run(
-            cmd, input=prompt, capture_output=True, text=True, timeout=timeout
+            cmd,
+            input=build_analysis_prompt(compact_tickets),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
     except FileNotFoundError:
         sys.exit("`claude` not found on PATH. Install Claude Code "

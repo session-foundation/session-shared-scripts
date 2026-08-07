@@ -791,6 +791,37 @@ class TestTicketsFromPayload(unittest.TestCase):
             triage.tickets_from_payload({"tickets": [["not", "an", "object"]]}, "x")
 
 
+class TestCliIsolation(unittest.TestCase):
+    """The claude-cli invocation is locked down because ticket text is untrusted and
+    the runner has a checkout. Each of these fails silently if broken: a wrong deny
+    list returns prose instead of findings, a missing flag loads the repo's config."""
+
+    def test_structured_output_is_never_denied(self):
+        """--json-schema is implemented as the StructuredOutput tool, so denying it —
+        or passing a `*` wildcard — makes the run return prose and no findings."""
+        denied = triage.CLI_DENIED_TOOLS.split()
+        self.assertNotIn("StructuredOutput", denied)
+        self.assertNotIn("*", denied)
+
+    def test_tools_with_side_effects_are_denied(self):
+        denied = triage.CLI_DENIED_TOOLS.split()
+        for tool in ("Bash", "Write", "Edit", "WebFetch", "WebSearch", "Task"):
+            self.assertIn(tool, denied)
+
+    def test_the_system_prompt_travels_as_a_flag(self):
+        """Not on stdin with the tickets: stdin is untrusted input, the prompt isn't."""
+        self.assertIn("--system-prompt", triage.CLI_ISOLATION_ARGS)
+        self.assertIn(triage.SYSTEM_PROMPT, triage.CLI_ISOLATION_ARGS)
+
+    def test_no_setting_sources_are_loaded(self):
+        """An empty value is what keeps hooks, plugins, skills and CLAUDE.md out."""
+        args = triage.CLI_ISOLATION_ARGS
+        self.assertEqual(args[args.index("--setting-sources") + 1], "")
+
+    def test_mcp_config_is_strict(self):
+        self.assertIn("--strict-mcp-config", triage.CLI_ISOLATION_ARGS)
+
+
 class TestResolveApiModel(unittest.TestCase):
     """The CLI resolves aliases itself; the API takes ids, so only that path maps."""
 

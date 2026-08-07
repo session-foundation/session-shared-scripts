@@ -145,7 +145,7 @@ Classification can reach Claude two ways, and they need different credentials:
 
 **The workflow picks for itself.** The `Select backend` step uses `api` when an `ANTHROPIC_API_KEY` secret exists and `claude-cli` otherwise, so adding that secret switches the job over with no edit to the workflow, and until then it keeps running on the subscription. The choice is echoed into the run log, and a `workflow_dispatch` run can force either backend to test one without touching secrets.
 
-Prefer the API key where you have one: it's an organization-owned credential that doesn't expire annually, doesn't consume an individual's quota, and costs a fraction of a run through Claude Code (measured on this batch shape: ~$0.01 versus ~$0.31, because each `claude -p` invocation carries ~25K tokens of Claude Code system prompt).
+Prefer the API key where you have one, but for credential reasons rather than cost: it's organization-owned, doesn't expire annually, and doesn't consume an individual's quota. The two are close on cost — a `claude -p` run used to carry ~25K tokens of Claude Code system prompt and tool definitions on top of the batch, but the [locked-down invocation](#how-the-claude-cli-invocation-is-locked-down) removes both, which took a two-ticket fixture from ~$0.29 to ~$0.015.
 
 #### Notes on the API key
 
@@ -263,9 +263,18 @@ python zendesk_triage/triage.py --dump-batch /tmp/batch.json --window-hours 48
 python zendesk_triage/triage.py --backend file --findings /tmp/findings.json --dry-run
 ```
 
-Two properties of the `claude-cli` backend to keep in mind:
+### How the `claude-cli` invocation is locked down
 
-- Each invocation carries ~25K tokens of Claude Code system-prompt overhead on top of the batch, so the per-run cost is dominated by that on small windows. It's one invocation per chunk, not per ticket — a typical 48h window is a single call.
+Ticket text is written by strangers and the runner has a checkout of this repo, so the CLI is invoked with as little around it as possible: our own `--system-prompt` in place of Claude Code's, `--setting-sources ""` (no hooks, plugins, skills, allow-rules or `CLAUDE.md` from either the runner or the repo), `--strict-mcp-config` with no config (no MCP servers), and an explicit `--disallowed-tools` list. A session then exposes one tool, `StructuredOutput`, and no MCP servers. Removing the agent preamble and the tool definitions is also what makes this path cheap.
+
+Three findings from `v2.1.218` that explain why it's written that way — all worth re-testing after a CLI upgrade:
+
+- **`--disallowed-tools "*"` can't be used**, tempting as it is. It empties the surface, but `--json-schema` is itself implemented as a `StructuredOutput` tool, so the wildcard denies that too and the run returns prose with no `structured_output`. Allow-listing `StructuredOutput` alongside the wildcard leaves the tool present but still doesn't produce structured output.
+- **`--permission-mode dontAsk` is not a boundary.** A session with no allow rules still ran `Bash(echo …)`, because the mode permits a read-only command set. It's kept as a backstop, not as the control.
+- **The deny list is therefore by name, and will go stale** as tools are added. Naming only the obvious ones (`Bash`, `Read`, `Write`, …) left 19 others live, including several with outward side effects. To see what a session really exposes, read the `init` event: `echo hi | claude -p --output-format stream-json --verbose [flags] | grep '"subtype":"init"'`.
+
+One more, on the flag not used:
+
 - **Do not add `--bare`.** It's otherwise the right flag for a scripted call (it skips hook, plugin, MCP and `CLAUDE.md` discovery, so the runner behaves the same as your laptop), but bare mode reads `ANTHROPIC_API_KEY` or an `apiKeyHelper` **only** — it never touches OAuth credentials, which is exactly what both CI and your local login use. See [bare mode](https://code.claude.com/docs/en/headless#start-faster-with-bare-mode); the docs say it will become the default for `-p` in a future release, so this is worth re-checking on CLI upgrades.
 
 ## Workflow Failure Notificaiton
