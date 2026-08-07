@@ -48,16 +48,15 @@ def human_ticket(ticket_id):
 
 
 class TestQuery(unittest.TestCase):
-    def test_defaults_to_new_only(self):
-        """An `open` review may have had agent activity; this job shouldn't close it."""
-        self.assertIn("status:new", resolve_reviews.build_query(include_open=False))
+    def test_only_untouched_reviews_are_eligible(self):
+        """`new`, not `status<solved`: every open review sampled had an assignee, a
+        group and an updated_at past its created_at, so something already handled it."""
+        query = resolve_reviews.build_query()
+        self.assertIn("status:new", query)
+        self.assertNotIn("status<solved", query)
 
-    def test_include_open_widens_to_every_unsolved_status(self):
-        self.assertIn("status<solved", resolve_reviews.build_query(include_open=True))
-
-    def test_always_filters_to_the_appfollow_channel(self):
-        for include_open in (True, False):
-            self.assertIn("via:any_channel", resolve_reviews.build_query(include_open))
+    def test_filters_to_the_appfollow_channel(self):
+        self.assertIn("via:any_channel", resolve_reviews.build_query())
 
 
 class TestSelection(unittest.TestCase):

@@ -22,8 +22,10 @@ What it will and will not touch, deliberately narrow:
     `via.channel`, or a leading ★ run in the subject
   * with a parsed rating at or above --min-stars (default 4). A review whose stars
     cannot be parsed is skipped, never solved
-  * in `new` only, unless --include-open. 441 reviews are `open`, which can mean an
-    agent engaged with one, and this job has no business closing that
+  * in `new` only. The other 441 unsolved reviews are `open`, and every one of a
+    100-ticket sample had an assignee, a group, and an updated_at past its
+    created_at — something already acted on them, which is exactly what a bulk
+    status change should keep its hands off
   * `solved`, never `closed` — solved is reversible, closed is not
 
 No state file: solved tickets drop out of the query, so runs are idempotent and a
@@ -71,15 +73,19 @@ JOB_TIMEOUT_SECONDS = 300
 JOB_POLL_SECONDS = 3
 
 
-def build_query(include_open):
-    """Unsolved app-store reviews, newest first.
+def build_query():
+    """Untouched app-store reviews, newest first.
 
     `via:any_channel` is what AppFollow imports arrive on, and it is the cheap half
     of the filter — the star rating lives in the subject, which Zendesk's search
     index will not match, so the rating is applied locally in select_resolvable.
+
+    `status:new` rather than `status<solved`: the difference is the 441 `open`
+    reviews, and every one of a 100-ticket sample carried an assignee, a group and
+    an updated_at later than its created_at. Something has already handled those,
+    so they are not this job's to close.
     """
-    status = "status<solved" if include_open else "status:new"
-    return f"type:ticket {status} via:any_channel order_by:created_at sort:desc"
+    return "type:ticket status:new via:any_channel order_by:created_at sort:desc"
 
 
 def select_resolvable(tickets, min_stars):
@@ -172,9 +178,6 @@ def main():
     parser.add_argument("--max-tickets", type=int, default=DEFAULT_MAX_TICKETS, metavar="N",
                         help=f"Runaway guard on tickets solved per run "
                              f"(default: {DEFAULT_MAX_TICKETS}, Zendesk's search cap).")
-    parser.add_argument("--include-open", action="store_true",
-                        help="Also consider `open` reviews, not just `new`. An open "
-                             "ticket may have had agent activity.")
     parser.add_argument("--tag", default=RESOLVED_TAG,
                         help=f"Tag added to every ticket solved, so they stay "
                              f"identifiable and a trigger can exclude them "
@@ -194,7 +197,7 @@ def main():
     api_token = triage.get_env("ZENDESK_API_TOKEN", args.api_token)
 
     session = triage.zendesk_session(email, api_token)
-    query = build_query(args.include_open)
+    query = build_query()
     tickets, total_matched = triage.fetch_tickets(session, subdomain, query, args.max_tickets)
     matched = "?" if total_matched is None else total_matched
     print(f"Fetched {len(tickets)} of {matched} matching tickets (query: {query!r}).")

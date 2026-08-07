@@ -26,10 +26,6 @@ on:
       min_stars:
         description: "Only solve reviews at or above this rating (default 4)"
         required: false
-      include_open:
-        description: "Also consider `open` reviews, not just `new` (may have agent activity)"
-        type: boolean
-        default: false
 
 # A second run while one is mid-flight would re-fetch tickets the first has already
 # queued for update, and bulk jobs are asynchronous. Queue rather than cancel, so a
@@ -66,7 +62,6 @@ jobs:
           INPUT_MAX: ${{ github.event.inputs.max_tickets }}
           INPUT_STARS: ${{ github.event.inputs.min_stars }}
           APPLY: ${{ github.event_name == 'schedule' || github.event.inputs.apply == 'true' }}
-          INCLUDE_OPEN: ${{ github.event.inputs.include_open }}
         run: |
           max=$(printf '%s' "${INPUT_MAX:-1000}" | tr -cd '0-9')
           stars=$(printf '%s' "${INPUT_STARS:-4}" | tr -cd '0-9')
@@ -74,7 +69,6 @@ jobs:
           : "${stars:=4}"
           flags=""
           if [ "$APPLY" = "true" ]; then flags="--apply"; fi
-          if [ "$INCLUDE_OPEN" = "true" ]; then flags="$flags --include-open"; fi
           echo "max=$max" >> "$GITHUB_OUTPUT"
           echo "stars=$stars" >> "$GITHUB_OUTPUT"
           echo "flags=$flags" >> "$GITHUB_OUTPUT"
