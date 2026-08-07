@@ -270,7 +270,7 @@ Weekly counterpart to the triage: it solves the 4-5★ AppFollow reviews that we
 Deliberately narrow, because a mis-aimed bulk status change is not recoverable by re-running:
 
 - **App-store reviews only**, by the same detection the triage uses — `triage.is_store_review`, so the two can't drift apart. Every fetched ticket is re-checked locally, since the query can't express the rating.
-- **Rated at or above `--min-stars`** (default 4). A review whose stars can't be parsed from the subject is skipped, never solved — the same conservatism the triage applies.
+- **Rated 4★ or better.** A fixed floor (`MIN_STARS`), not a flag — 3★ and below are what the triage reads as bug reports in disguise, so a lower floor would have this job close the reviews most worth looking at. A review whose stars can't be parsed from the subject is skipped, never solved.
 - **`new` only** — untouched reviews. The other 441 unsolved reviews are `open`, and every one of a 100-ticket sample had an assignee, a group, and an `updated_at` past its `created_at`: something already acted on them, so a bulk status change has no business there. There is deliberately no flag to widen this.
 - **`solved`, never `closed`.** Solved is reversible; closed is not.
 - **Tagged** `auto-resolved-review`, so they stay identifiable and a trigger can exclude them, and annotated with a **private** note — a public comment would email the person who wrote the review.

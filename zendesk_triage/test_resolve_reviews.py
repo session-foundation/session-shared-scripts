@@ -60,7 +60,7 @@ class TestQuery(unittest.TestCase):
 
 
 class TestSelection(unittest.TestCase):
-    def select(self, tickets, min_stars=4):
+    def select(self, tickets, min_stars=resolve_reviews.MIN_STARS):
         return resolve_reviews.select_resolvable(tickets, min_stars)
 
     def test_selects_four_and_five_star_reviews(self):
@@ -85,8 +85,10 @@ class TestSelection(unittest.TestCase):
         self.assertEqual(resolvable, [])
         self.assertIn("no star rating", skipped[0][1])
 
-    def test_the_floor_is_configurable(self):
-        resolvable, _ = self.select([review(1, stars=3)], min_stars=3)
+    def test_the_floor_is_fixed_at_four_stars(self):
+        """Not a flag: lowering it would close the reviews the triage most wants."""
+        self.assertEqual(resolve_reviews.MIN_STARS, 4)
+        resolvable, _ = self.select([review(1, stars=4), review(2, stars=3)])
         self.assertEqual([t["id"] for t in resolvable], [1])
 
     def test_a_star_subject_counts_even_off_channel(self):
@@ -217,7 +219,7 @@ class TestSharedDetectionIsNotReimplemented(unittest.TestCase):
     def test_the_star_floor_matches_what_the_triage_skips(self):
         """The triage counts reviews above its floor without classifying them; this
         job solves exactly that set, so the two numbers cannot disagree."""
-        self.assertEqual(resolve_reviews.DEFAULT_MIN_STARS,
+        self.assertEqual(resolve_reviews.MIN_STARS,
                          triage.DEFAULT_REVIEW_STAR_FLOOR + 1)
 
 

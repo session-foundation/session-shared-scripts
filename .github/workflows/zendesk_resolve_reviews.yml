@@ -23,9 +23,6 @@ on:
       max_tickets:
         description: "Max tickets to solve this run (default 1000, Zendesk's search cap)"
         required: false
-      min_stars:
-        description: "Only solve reviews at or above this rating (default 4)"
-        required: false
 
 # A second run while one is mid-flight would re-fetch tickets the first has already
 # queued for update, and bulk jobs are asynchronous. Queue rather than cancel, so a
@@ -60,20 +57,16 @@ jobs:
         id: cfg
         env:
           INPUT_MAX: ${{ github.event.inputs.max_tickets }}
-          INPUT_STARS: ${{ github.event.inputs.min_stars }}
           APPLY: ${{ github.event_name == 'schedule' || github.event.inputs.apply == 'true' }}
         run: |
           max=$(printf '%s' "${INPUT_MAX:-1000}" | tr -cd '0-9')
-          stars=$(printf '%s' "${INPUT_STARS:-4}" | tr -cd '0-9')
           : "${max:=1000}"
-          : "${stars:=4}"
           flags=""
           if [ "$APPLY" = "true" ]; then flags="--apply"; fi
           echo "max=$max" >> "$GITHUB_OUTPUT"
-          echo "stars=$stars" >> "$GITHUB_OUTPUT"
           echo "flags=$flags" >> "$GITHUB_OUTPUT"
           if [ "$APPLY" = "true" ]; then
-            echo "Applying: up to $max review(s) at ${stars}★ or better will be solved."
+            echo "Applying: up to $max review(s) at 4★ or better will be solved."
           else
             echo "Dry run: reporting only, nothing will be changed."
           fi
@@ -86,5 +79,4 @@ jobs:
         run: |
           python zendesk_triage/resolve_reviews.py \
             ${{ steps.cfg.outputs.flags }} \
-            --min-stars "${{ steps.cfg.outputs.stars }}" \
             --max-tickets "${{ steps.cfg.outputs.max }}"

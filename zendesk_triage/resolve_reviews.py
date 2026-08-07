@@ -20,7 +20,8 @@ What it will and will not touch, deliberately narrow:
 
   * app-store reviews only, by the same detection the triage uses — the Zendesk
     `via.channel`, or a leading ★ run in the subject
-  * with a parsed rating at or above --min-stars (default 4). A review whose stars
+  * with a parsed rating of MIN_STARS (4) or better — a fixed floor, not an option,
+    because 3★ and below are what the triage wants to see. A review whose stars
     cannot be parsed is skipped, never solved
   * in `new` only. The other 441 unsolved reviews are `open`, and every one of a
     100-ticket sample had an assignee, a group, and an updated_at past its
@@ -56,9 +57,11 @@ import requests
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import triage  # noqa: E402  (needs the path insert above)
 
-# Reviews at or above this rating carry nothing to act on. 3★ and below are left
-# alone: the triage treats them as bug reports in disguise.
-DEFAULT_MIN_STARS = 4
+# Reviews at or above this rating carry nothing to act on. Fixed rather than a flag:
+# 3★ and below are what the triage treats as bug reports in disguise, so lowering the
+# floor would have this job close the reviews most worth reading. Changing it is a
+# deliberate edit here, not something a dispatch can do by accident.
+MIN_STARS = 4
 # Zendesk's search API returns at most 1000 results, so a run can never see more
 # than that anyway. At ~420 new reviews a week the first few runs drain the
 # backlog and every run after that clears the week's intake.
@@ -172,9 +175,6 @@ def main():
     parser.add_argument("--apply", action="store_true",
                         help="Actually solve the tickets. Without this the script "
                              "reports what it would do and changes nothing.")
-    parser.add_argument("--min-stars", type=int, default=DEFAULT_MIN_STARS, metavar="N",
-                        help=f"Only solve reviews rated N stars or better "
-                             f"(default: {DEFAULT_MIN_STARS}).")
     parser.add_argument("--max-tickets", type=int, default=DEFAULT_MAX_TICKETS, metavar="N",
                         help=f"Runaway guard on tickets solved per run "
                              f"(default: {DEFAULT_MAX_TICKETS}, Zendesk's search cap).")
@@ -189,9 +189,6 @@ def main():
     parser.add_argument("--api-token", help="Zendesk API token (else ZENDESK_API_TOKEN).")
     args = parser.parse_args()
 
-    if args.min_stars < 1 or args.min_stars > 5:
-        sys.exit("--min-stars must be between 1 and 5.")
-
     subdomain = triage.get_env("ZENDESK_SUBDOMAIN", args.subdomain)
     email = triage.get_env("ZENDESK_EMAIL", args.email)
     api_token = triage.get_env("ZENDESK_API_TOKEN", args.api_token)
@@ -202,7 +199,7 @@ def main():
     matched = "?" if total_matched is None else total_matched
     print(f"Fetched {len(tickets)} of {matched} matching tickets (query: {query!r}).")
 
-    resolvable, skipped = select_resolvable(tickets, args.min_stars)
+    resolvable, skipped = select_resolvable(tickets, MIN_STARS)
     if skipped:
         reasons = {}
         for _, reason in skipped:
@@ -213,7 +210,7 @@ def main():
         print("Nothing to solve.")
         return
 
-    print(f"{len(resolvable)} review(s) at {args.min_stars}★ or better would be solved "
+    print(f"{len(resolvable)} review(s) at {MIN_STARS}★ or better would be solved "
           f"and tagged {args.tag!r}.")
     if total_matched is not None and total_matched > len(tickets):
         print(f"Note: {total_matched - len(tickets)} more match the query than this run "
@@ -224,7 +221,7 @@ def main():
         return
 
     note = None if args.no_note else (
-        f"Solved automatically: {args.min_stars}★ or better app-store review with no "
+        f"Solved automatically: {MIN_STARS}★ or better app-store review with no "
         f"actionable content. See zendesk_triage/resolve_reviews.py.")
 
     solved_total, failures = 0, []
