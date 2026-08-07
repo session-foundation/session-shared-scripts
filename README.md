@@ -98,16 +98,15 @@ The script (`zendesk_triage/triage.py`) fetches the tickets in a rolling time wi
 Each line leads with a severity marker, a category emoji and a platform icon, links the ticket id, and carries the model's one-line summary plus its root-cause guess:
 
 ```
-🗂️ Zendesk triage
-Analyzed **5** of **47** tickets in the window (created in the past 2 days). Skipped **31** positive app-store review(s).
-Backlog: **5,609** unsolved tickets in total (not triaged).
-**5** worth looking into, including **1** crash/data-loss. 🔄 **1** changed since last reported.
-🐞 **3** · ⚖️ **1** · 🚨 **1**
-Likely duplicates: **push-wake** ×2 (#27605, #27610)
-🚨 | ⚖️ | ❔ | #27612 · GDPR request to delete all account data
-🔥 | 🐞 | 🤖 | #27605 · Notifications only appear after manually opening the app | Likely cause: Background push service not waking client
-🟠 | 🐞 | 🍎 | 🔄 #27610 · Attachments fail to download on cellular | Likely cause: Same push wake issue
-🟡 | 🐞 | 🖥️ | #27611 · Window does not restore after minimise to tray
+🗂️ **Zendesk triage** — analyzed **16** of **46** tickets in the window (created in the past 2 days). Skipped **30** positive app-store review(s).
+Backlog: **5,680** unsolved tickets in total (not triaged).
+**9** worth looking into.
+⭐ **6** · 🐞 **3** · ❓ **2** · 🔑 **1** · ⚖️ **1** · 🔒 **1**
+Likely duplicates: **push-notifications-not-delivered** ×5 (#27637, #27610, #27606, #27605)
+🚨 | ⚖️ | ❔ | #27632 · Police summons demanding user details for a Session ID
+🚨 | 🔒 | 🤖 | #27603 · Exported component lets another app obtain internal SharedPreferences | Likely cause: Improperly exported provider allowing external apps to trigger file sharing
+🟠 | ⭐ | 🍎 | #27610 · Messages not delivered for days; nothing shows even after opening | Likely cause: Push notification delivery / message retrieval failure
+🟠 | 🐞 | 🤖 | 🔄 #27605 · Message and call notifications only appear when the app is opened | Likely cause: Push notification service failure on Android
 ```
 
 | Column | Values |
@@ -116,9 +115,9 @@ Likely duplicates: **push-wake** ×2 (#27605, #27610)
 | Category | The emoji from `CATEGORY_SPECS`, so it matches the tally line |
 | Platform | 🤖 Android · 🍎 iOS · 🖥️ desktop (all three) · 🌐 multiple · ❔ unknown |
 
-The header accounts for the batch in full, so nothing is dropped silently, and the embed's left border is orange when something is worth looking into and green when nothing is — a glance answers "does today need me?". An abuse report also carries the reported Session ID on its line, since that is the actionable part and it saves opening the ticket.
+The header accounts for the batch in full, so nothing is dropped silently. An abuse report also carries the reported Session ID on its line, since that is the actionable part and it saves opening the ticket.
 
-**Why an embed for plain lines.** Discord caps message content at 2,000 characters but an embed description at 4,096, and no `fields` are used — the embed is only a bigger text box with a coloured border. A typical day is ~16 lines at ~180 characters (55 of which is the masked link on the id), which is two messages as plain text and one inside an embed. Lines are clipped (`SUMMARY_CHARS`, `ROOT_CAUSE_CHARS`) and chunked against 4,096, counting the newlines that join them; each message records which ticket ids it accounts for, which is what makes a partial post failure recoverable.
+**Plain message content, no embeds.** The lines carry their own structure, so an embed added a border and nothing else. The cost is the character budget: Discord caps message content at 2,000 against an embed description's 4,096, and a masked link on the id spends 54 characters that the reader never sees. A real 9-highlight day comes to ~2,400 characters, so it arrives as two messages. Lines are clipped (`SUMMARY_CHARS`, `ROOT_CAUSE_CHARS`) and chunked against 2,000, counting the newlines that join them; each message records which ticket ids it accounts for, which is what makes a partial post failure recoverable.
 
 ### Deduplication
 

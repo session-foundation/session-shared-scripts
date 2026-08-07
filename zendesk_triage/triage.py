@@ -126,9 +126,8 @@ MAX_OUTPUT_TOKENS = 128000
 
 # ---- Taxonomy --------------------------------------------------------------
 #
-# Single source of truth. The schema enum, the Discord labels and emoji, which
-# categories are urgent, and the system-prompt guidance are all derived from this
-# table, so adding a
+# Single source of truth. The schema enum, the Discord labels, the urgency colours,
+# and the system-prompt guidance are all derived from this table, so adding a
 # category is one edit and the model can never be given an enum value that the
 # prompt never explains.
 #
@@ -761,10 +760,10 @@ def analyze(client, model, effort, compact_tickets):
 # ---- Discord rendering -----------------------------------------------------
 #
 # A short header, then one line per ticket — the digest is read by skimming, so the
-# lines are the layout. They travel inside a single embed per message purely for the
-# character budget: message content caps at 2,000 while an embed description gets
-# 4,096, which is the difference between one message and two on a busy day. Fields
-# are deliberately unused; a labelled box per attribute is what made this a wall.
+# lines are the layout. Plain message content, no embeds: the lines carry their own
+# structure, so the box added nothing but a border. The cost is the character budget
+# (2,000 for content against 4,096 for an embed description), which a busy day can
+# spill into a second message — see chunk_entries.
 
 # Leads each line so severity is scannable straight down the left edge. Urgent
 # categories get URGENT_MARKER instead: they are not bugs, so the model rates them
@@ -790,16 +789,11 @@ PLATFORM_EMOJI = {
     "multiple": "🌐",
     "unknown": "❔",
 }
-# An embed description caps at 4,096; lines are clipped and chunked against that.
-# One embed per message, so Discord's 6,000-across-all-embeds budget never binds.
-MAX_DESCRIPTION_CHARS = 4096
+# Discord's cap on one message's content. Lines are clipped and chunked against it.
+MAX_MESSAGE_CHARS = 2000
 SUMMARY_CHARS = 160
 ROOT_CAUSE_CHARS = 140
 MAX_HIGHLIGHTS = 27
-# The left border is the only colour left: one glance says whether today needs
-# attention, without reading a word of it.
-COLOR_ATTENTION = 0xE67E22  # orange — something is worth looking into
-COLOR_CLEAR = 0x2ECC71      # green — nothing flagged
 
 
 def ticket_url(subdomain, ticket_id):
@@ -875,7 +869,7 @@ def build_header(findings, highlights, stats=None):
     updated = stats.get("updated_count") or 0
     backlog = stats.get("total_unsolved")
 
-    window = f"Analyzed **{len(findings)}**"
+    window = f"🗂️ **Zendesk triage** — analyzed **{len(findings)}**"
     if matched is not None:
         window += f" of **{matched}**"
     window += " tickets in the window"
@@ -917,7 +911,7 @@ def build_header(findings, highlights, stats=None):
 
 
 def chunk_entries(entries):
-    """Group (line, ticket_ids) pairs into messages within MAX_DESCRIPTION_CHARS.
+    """Group (line, ticket_ids) pairs into messages within MAX_MESSAGE_CHARS.
 
     Lines are joined with a newline, so each one after the first costs a character
     more than its own length. An entry longer than the cap still gets its own message
@@ -926,7 +920,7 @@ def chunk_entries(entries):
     chunks, current, current_chars = [], [], 0
     for text, ids in entries:
         projected = current_chars + len(text) + (1 if current else 0)
-        if current and projected > MAX_DESCRIPTION_CHARS:
+        if current and projected > MAX_MESSAGE_CHARS:
             chunks.append(current)
             current, current_chars = [], 0
             projected = len(text)
@@ -976,15 +970,8 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
     ]
 
     messages, coverage = [], []
-    for index, chunk in enumerate(chunk_entries(entries)):
-        embed = {
-            "description": "\n".join(text for text, _ in chunk),
-            "color": COLOR_ATTENTION if shown or omitted else COLOR_CLEAR,
-        }
-        # Only the first embed is titled; the rest are continuations of one digest.
-        if index == 0:
-            embed["title"] = "🗂️ Zendesk triage"
-        messages.append({"embeds": [embed]})
+    for chunk in chunk_entries(entries):
+        messages.append({"content": "\n".join(text for text, _ in chunk)})
         covered = set()
         for _, ids in chunk:
             covered |= ids

@@ -65,8 +65,8 @@ def build_messages(*args, **kwargs):
 
 
 def digest_text(messages):
-    """The digest as one string: every embed description, in order."""
-    return "\n".join(e["description"] for m in messages for e in m["embeds"])
+    """The digest as one string: every message's content, in order."""
+    return "\n".join(m["content"] for m in messages)
 
 
 class FakeResponse:
@@ -331,7 +331,7 @@ class TestHeader(unittest.TestCase):
 
     def test_reports_analyzed_against_matched(self):
         text = self.header([finding(1)], {"matched": 47})
-        self.assertIn("Analyzed **1** of **47** tickets in the window", text)
+        self.assertIn("analyzed **1** of **47** tickets in the window", text)
 
     def test_names_the_window(self):
         text = self.header([finding(1)], {"matched": 5, "scope": "created in the past 2 days"})
@@ -361,7 +361,7 @@ class TestHeader(unittest.TestCase):
 
     def test_works_with_no_stats_at_all(self):
         text = self.header([finding(1)], None)
-        self.assertIn("Analyzed **1**", text)
+        self.assertIn("analyzed **1**", text)
         self.assertNotIn("of **", text)
 
     def test_tallies_categories_by_emoji(self):
@@ -437,24 +437,9 @@ class TestBuildMessages(unittest.TestCase):
         self.assertIn("🔄 [#2]", text)
         self.assertNotIn("🔄 [#1]", text)
 
-    def test_the_first_embed_is_titled_and_the_rest_are_continuations(self):
-        findings = [finding(i, priority_rank=i, summary="s" * 400, likely_root_cause="r" * 400)
-                    for i in range(triage.MAX_HIGHLIGHTS)]
-        messages = build_messages(findings, "acme")
-        self.assertGreater(len(messages), 1)
-        self.assertEqual(messages[0]["embeds"][0]["title"], "🗂️ Zendesk triage")
-        for message in messages[1:]:
-            self.assertNotIn("title", message["embeds"][0])
-
-    def test_the_header_leads_the_first_embed(self):
+    def test_the_header_leads_the_first_message(self):
         messages = build_messages([finding(1)], "acme", {"matched": 3})
-        self.assertTrue(messages[0]["embeds"][0]["description"].startswith("Analyzed **1**"))
-
-    def test_the_border_flags_whether_anything_needs_attention(self):
-        flagged = build_messages([finding(1)], "acme")
-        quiet = build_messages([finding(1, worth_looking_into=False)], "acme")
-        self.assertEqual(flagged[0]["embeds"][0]["color"], triage.COLOR_ATTENTION)
-        self.assertEqual(quiet[0]["embeds"][0]["color"], triage.COLOR_CLEAR)
+        self.assertTrue(messages[0]["content"].startswith("🗂️ **Zendesk triage**"))
 
     def test_every_highlight_reaches_a_message(self):
         findings = [finding(i, priority_rank=i) for i in range(triage.MAX_HIGHLIGHTS)]
@@ -471,12 +456,9 @@ class TestBuildMessages(unittest.TestCase):
     def test_no_truncation_notice_when_nothing_was_dropped(self):
         self.assertNotIn("Showing the top", digest_text(build_messages([finding(1)], "acme")))
 
-    def test_messages_use_one_embed_and_no_fields(self):
-        """Fields are what made this a wall; the embed is only a bigger text box."""
+    def test_messages_are_plain_content(self):
         for message in build_messages([finding(1)], "acme"):
-            self.assertEqual(set(message), {"embeds"})
-            self.assertEqual(len(message["embeds"]), 1)
-            self.assertNotIn("fields", message["embeds"][0])
+            self.assertEqual(set(message), {"content"})
 
 
 # ---- Parsing helpers -------------------------------------------------------
@@ -681,18 +663,17 @@ class TestContentFreeTickets(unittest.TestCase):
 
 
 class TestMessageCharLimit(unittest.TestCase):
-    """An embed description caps at 4,096 characters. Every line is pre-clipped, and
-    chunking has to account for the newlines that join them."""
+    """Discord caps one message's content at 2,000 characters. Every line is
+    pre-clipped, and chunking has to account for the newlines that join them."""
 
     def fat(self, ticket_id):
         return finding(ticket_id, summary="s" * 400, likely_root_cause="r" * 400)
 
-    def test_every_description_stays_within_the_limit(self):
+    def test_every_message_stays_within_the_limit(self):
         findings = [self.fat(i) for i in range(triage.MAX_HIGHLIGHTS)]
         messages = build_messages(findings, "acme")
         for message in messages:
-            self.assertLessEqual(len(message["embeds"][0]["description"]),
-                                 triage.MAX_DESCRIPTION_CHARS)
+            self.assertLessEqual(len(message["content"]), triage.MAX_MESSAGE_CHARS)
         self.assertGreater(len(messages), 1)  # fat lines must actually split
 
     def test_no_line_is_dropped_while_chunking(self):
@@ -701,24 +682,18 @@ class TestMessageCharLimit(unittest.TestCase):
         for i in range(triage.MAX_HIGHLIGHTS):
             self.assertIn(f"[#{i}]", text)
 
-    def test_a_typical_day_fits_one_message(self):
-        """The point of the embed. A real day is ~16 highlights at ~180 chars a line
-        (55 of which is the masked link): over 2,000 and so two messages under the
-        old plain-text cap, comfortably one inside a 4,096-char description."""
-        findings = [finding(i, summary="s" * 60, likely_root_cause="r" * 40)
-                    for i in range(16)]
-        messages = build_messages(findings, "acme")
-        self.assertEqual(len(messages), 1)
-        self.assertGreater(len(messages[0]["embeds"][0]["description"]), 2000)
+    def test_lean_lines_are_not_split_early(self):
+        findings = [finding(i, summary="s", likely_root_cause="") for i in range(5)]
+        self.assertEqual(len(build_messages(findings, "acme")), 1)
 
     def test_chunking_counts_the_joining_newlines(self):
-        """Two 2,048-char lines are 4,097 joined — over the cap only if the newline
+        """Two 1,000-char lines are 2,001 joined — over the cap only if the newline
         counts, which is the off-by-one this guards."""
-        entries = [("x" * 2048, {1}), ("y" * 2048, {2})]
+        entries = [("x" * 1000, {1}), ("y" * 1000, {2})]
         self.assertEqual(len(triage.chunk_entries(entries)), 2)
 
     def test_an_oversized_entry_still_gets_a_message(self):
-        chunks = triage.chunk_entries([("x" * (triage.MAX_DESCRIPTION_CHARS + 50), {1})])
+        chunks = triage.chunk_entries([("x" * (triage.MAX_MESSAGE_CHARS + 50), {1})])
         self.assertEqual(len(chunks), 1)
 
 
