@@ -697,7 +697,7 @@ def tickets_from_payload(payload, source):
     return validate_findings(found, source)
 
 
-def analyze_via_claude_cli(model, compact_tickets, timeout=1800):
+def analyze_via_claude_cli(model, effort, compact_tickets, timeout=1800):
     """Classify the batch with the local `claude` CLI instead of the Anthropic API.
 
     Local debugging path: it authenticates as Claude Code, so no ANTHROPIC_API_KEY is
@@ -710,6 +710,8 @@ def analyze_via_claude_cli(model, compact_tickets, timeout=1800):
     cmd = ["claude", "-p", "--output-format", "json"]
     if model:
         cmd += ["--model", model]
+    if effort:
+        cmd += ["--effort", effort]
     try:
         # Prompt goes over stdin: a full batch can exceed the argv size limit.
         proc = subprocess.run(
@@ -1194,7 +1196,7 @@ def main():
             return
 
         if args.backend == "claude-cli":
-            analyzer = partial(analyze_via_claude_cli, model)
+            analyzer = partial(analyze_via_claude_cli, model, args.effort)
         else:
             client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
             analyzer = partial(analyze, client, model, args.effort)
