@@ -779,7 +779,7 @@ class TestTicketsFromPayload(unittest.TestCase):
         self.assertEqual(triage.tickets_from_payload({"tickets": []}, "x"), [])
 
     def test_a_finding_missing_renderer_keys_exits(self):
-        """A hand-edited --backend file findings list has nothing enforcing its shape,
+        """A hand-edited --findings list has nothing enforcing its shape,
         so an entry without category/severity would KeyError in build_summary_embed."""
         for entry in ({"id": 1}, {"id": 1, "category": "bug_report"},
                       {"category": "bug_report", "severity": "major"}):
@@ -800,7 +800,7 @@ class TestResolveApiModel(unittest.TestCase):
             self.assertTrue(model_id.startswith("claude-"), model_id)
 
     def test_the_default_model_resolves_to_an_api_id(self):
-        """--backend api 404s on a Claude Code alias, so whatever DEFAULT_MODEL is —
+        """The API 404s on a bare shorthand, so whatever DEFAULT_MODEL is —
         a pinned id today, an alias if that ever changes — it has to resolve to one."""
         resolved = triage.resolve_api_model(triage.DEFAULT_MODEL)
         self.assertNotIn(resolved, triage.API_MODEL_ALIASES)

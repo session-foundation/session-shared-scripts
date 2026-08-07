@@ -21,7 +21,7 @@ Categories Claude sorts each ticket into:
     | question | feature_request | other
 
 Classification goes through the Anthropic API, with structured outputs enforcing
-SCHEMA. --backend file skips it entirely and renders findings produced elsewhere.
+SCHEMA. --findings skips it entirely and renders findings produced elsewhere.
 
 Config (env vars, or flags for local runs):
     ZENDESK_SUBDOMAIN     e.g. "mycompany"  -> https://mycompany.zendesk.com
@@ -50,7 +50,7 @@ Usage:
     # split classification out entirely: dump the batch, classify it by hand,
     # feed the findings back in to render
     python triage.py --dump-batch /tmp/batch.json --max-tickets 20
-    python triage.py --backend file --findings /tmp/findings.json --dry-run
+    python triage.py --findings /tmp/findings.json --dry-run
 """
 import argparse
 import json
@@ -105,7 +105,7 @@ def window_label(hours):
 # move them on someone else's release schedule. Opus rather than a cheaper tier
 # because clustering asks the model to recognise one root cause across 45 tickets in
 # several languages, and the whole job costs single-digit dollars a month either way.
-# Bumping this is a one-line, deliberate change; both backends accept a full id.
+# Bumping this is a one-line, deliberate change.
 DEFAULT_MODEL = "claude-opus-5"
 # Shorthands for the override, so ZENDESK_TRIAGE_MODEL=sonnet works for a big
 # backfill without anyone looking up an id. The API takes ids only, so they are
@@ -668,7 +668,7 @@ def tickets_from_payload(payload, source):
     """Pull the `tickets` list out of a classification payload, or exit clearly.
 
     Structured outputs guarantee the key and the item shape, so on a normal run this
-    never fires; it is the guard for --backend file, whose findings nothing validates,
+    never fires; it is the guard for --findings, whose contents nothing validates,
     and a bare KeyError mid-render is a confusing way to learn a key is missing.
     """
     found = payload.get("tickets") if isinstance(payload, dict) else None
@@ -1007,7 +1007,7 @@ def main():
                         help="Only analyze unsolved tickets created in the last N hours. "
                              "The scheduled daily run uses 48.")
     parser.add_argument("--model", help=f"Claude model id, or an alias (opus, sonnet, "
-                                        f"haiku) which --backend api maps to an id "
+                                        f"haiku) mapped to an id "
                                         f"(else ZENDESK_TRIAGE_MODEL, else {DEFAULT_MODEL}).")
     parser.add_argument("--effort", default="medium", choices=["low", "medium", "high", "xhigh", "max"],
                         help="Claude reasoning effort (default: medium).")
@@ -1019,11 +1019,9 @@ def main():
                              f"(default: {DEFAULT_BATCH_SIZE}).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Fetch and analyze, then print the Discord payload instead of posting.")
-    parser.add_argument("--backend", default="api", choices=["api", "file"],
-                        help="Where classification happens: the Anthropic API (default), "
-                             "or a findings file classified elsewhere.")
-    parser.add_argument("--findings",
-                        help="Findings JSON to render instead of classifying (--backend file).")
+    parser.add_argument("--findings", metavar="PATH",
+                        help="Render findings classified elsewhere, skipping Zendesk and "
+                             "Claude entirely. Pairs with --dump-batch.")
     parser.add_argument("--review-star-floor", type=int, default=DEFAULT_REVIEW_STAR_FLOOR,
                         metavar="N",
                         help=f"Classify app-store reviews of N stars or fewer; count the rest "
@@ -1045,9 +1043,6 @@ def main():
                              "hand-classification. WARNING: writes ticket content to disk.")
     args = parser.parse_args()
 
-    if args.backend == "file" and not args.findings:
-        sys.exit("--backend file requires --findings PATH.")
-
     # Subdomain is always needed: it builds the ticket links in the Discord payload.
     subdomain = get_env("ZENDESK_SUBDOMAIN", args.subdomain)
     # A dump exits before rendering anything, so it never needs the webhook either.
@@ -1060,7 +1055,7 @@ def main():
     classified = []
     updated_ids = set()
 
-    if args.backend == "file":
+    if args.findings:
         # Findings already exist, so neither Zendesk nor a model is involved.
         findings = load_findings(args.findings)
         print(f"Loaded {len(findings)} findings from {args.findings}.")
@@ -1137,7 +1132,7 @@ def main():
             dump_batch(args.dump_batch, compact, model)
             print(f"Wrote {len(compact)} tickets to {args.dump_batch} — this file contains "
                   f"ticket content, so keep it out of the repo.")
-            print("Classify it, then: --backend file --findings <path> --dry-run")
+            print("Classify it, then: --findings <path> --dry-run")
             return
 
         client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY

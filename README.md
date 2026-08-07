@@ -93,7 +93,7 @@ Detection uses the Zendesk `via.channel`, which identified reviews with no false
 
 Twitter DM tickets arrive with `description` identical to `subject` — both just `"Conversation with <handle>"` — which is 15% of non-review tickets and unclassifiable as fetched. For those only, `hydrate_descriptions` fetches a page of up to 10 comments and joins every body that differs from the subject into the description; later replies often carry the actual detail. Hydration is an enrichment, so an HTTP error or an unreachable endpoint leaves the ticket as-is rather than failing the run (`--no-hydrate` to skip it entirely).
 
-The script (`zendesk_triage/triage.py`) fetches the tickets in a rolling time window, classifies the whole batch in one schema-enforced request through the `claude` CLI, and posts Discord embeds: a summary embed plus one embed per highlighted ticket (linking to the ticket in Zendesk).
+The script (`zendesk_triage/triage.py`) fetches the tickets in a rolling time window, classifies the whole batch in one schema-enforced request to the Anthropic API, and posts Discord embeds: a summary embed plus one embed per highlighted ticket (linking to the ticket in Zendesk).
 
 The summary embed accounts for the batch in full, so nothing is dropped silently:
 
@@ -148,8 +148,8 @@ If you go looking for that key and can't find one: an API key only exists inside
 | `--state`              | flag             | *(unset)*                                               | Dedup state file. The workflow points this at the cached `.triage-state/seen.json` |
 | `--state-retention-days` | flag           | `30`                                                    | Forget state entries older than N days |
 | `ZENDESK_QUERY`        | env / `--query`  | *(unset)*                                               | Explicit Zendesk search query. Overrides `--window-hours` entirely |
-| `ZENDESK_TRIAGE_MODEL` | repo variable / `--model` | `claude-opus-5`                                         | Overrides the model. Takes a full id, or an alias (`opus`, `sonnet`, `haiku`) which `--backend api` maps to an id via `API_MODEL_ALIASES`. **Leave it unset for normal operation** — the default lives in the script so there's one place to change it |
-| `--backend`            | flag             | `api`                                                   | `file` instead renders a findings JSON classified elsewhere, skipping the model — pair with `--findings` |
+| `ZENDESK_TRIAGE_MODEL` | repo variable / `--model` | `claude-opus-5`                                         | Overrides the model. Takes a full id, or a shorthand (`opus`, `sonnet`, `haiku`) mapped to an id via `API_MODEL_ALIASES`. **Leave it unset for normal operation** — the default lives in the script so there's one place to change it |
+| `--findings`           | flag             | *(unset)*                                               | Render a findings JSON classified elsewhere, skipping Zendesk and Claude entirely. Pairs with `--dump-batch` |
 | `--max-tickets`        | workflow input / flag | `1000` (workflow) / `100` (flag)                   | Runaway guard on tickets analyzed per run, **not** a batch size. The workflow passes `1000`; a bare `python triage.py` uses the script's own `DEFAULT_MAX_TICKETS` of `100`. Zendesk's search API caps a query at 1000 results, so higher values don't fetch more |
 | `--batch-size`         | flag             | `400`                                                   | Split batches larger than this across multiple requests |
 | `--review-star-floor`  | flag             | `3`                                                     | Classify app-store reviews at or below N stars; count the rest |
@@ -242,7 +242,7 @@ python zendesk_triage/triage.py --window-hours 12 --max-tickets 5 --dry-run
 # or take the model out of the loop: dump the batch, classify it by hand,
 # and feed the findings back in to render
 python zendesk_triage/triage.py --dump-batch /tmp/batch.json --window-hours 48
-python zendesk_triage/triage.py --backend file --findings /tmp/findings.json --dry-run
+python zendesk_triage/triage.py --findings /tmp/findings.json --dry-run
 ```
 
 ## Workflow Failure Notificaiton
