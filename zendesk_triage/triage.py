@@ -132,47 +132,49 @@ MAX_OUTPUT_TOKENS = 128000
 # prompt never explains.
 #
 # Percentages come from a 3,662-ticket sample of the 13 months to 2026-08.
-# Columns: (name, Discord label, urgency colour or None, guidance for the model)
+# Columns: (name, Discord label, urgent, guidance for the model)
 CATEGORY_SPECS = (
-    ("abuse_report", "🚨 Abuse report", 0xC0392B,
+    ("abuse_report", "🚨 Abuse report", True,
      "One user reporting another account for illegal or abusive content (CSAM, "
      "harassment, drugs, impersonation). Usually quotes the offending Session ID. "
      "~11% of non-review tickets. Always set worth_looking_into."),
-    ("security_report", "🔒 Security report", 0xC0392B,
+    ("security_report", "🔒 Security report", True,
      "A vulnerability, exploit, or account-compromise disclosure. Not the same as a "
      "policy question. Always set worth_looking_into."),
-    ("legal_or_data_request", "⚖️ Legal / data request", 0xC0392B,
+    ("legal_or_data_request", "⚖️ Legal / data request", True,
      "GDPR or data-deletion request, subpoena, law-enforcement or court order. "
      "Always set worth_looking_into."),
-    ("bug_report", "🐞 Bug report", None,
+    ("bug_report", "🐞 Bug report", False,
      "Something in the app is broken or misbehaving."),
-    ("account_access", "🔑 Account access", None,
+    ("account_access", "🔑 Account access", False,
      "Lost recovery phrase, locked out, or asking to restore an account. Usually "
      "irreversible by design, but track the volume."),
-    ("policy_question", "📜 Policy question", None,
+    ("policy_question", "📜 Policy question", False,
      "Questions about law, regulation, or policy — 'Chat Control', encryption "
      "backdoors, whether Session complies with something."),
-    ("low_star_review", "⭐ Low-star review", None,
+    ("low_star_review", "⭐ Low-star review", False,
      "An app-store review of 3 stars or fewer. These often hide a real bug — put "
      "the underlying problem in `summary`."),
-    ("positive_review", "👍 Positive review", None,
+    ("positive_review", "👍 Positive review", False,
      "An app-store review of 4-5 stars with no actionable content."),
-    ("feature_request", "💡 Feature request", None,
+    ("feature_request", "💡 Feature request", False,
      "Asking for something the app does not do yet."),
-    ("question", "❓ Question", None,
+    ("question", "❓ Question", False,
      "A how-do-I or usage question that is not a bug."),
-    ("spam_or_solicitation", "🗑️ Spam / solicitation", None,
+    ("spam_or_solicitation", "🗑️ Spam / solicitation", False,
      "Marketing, token or OTC investment offers, partnership pitches, listing spam."),
-    ("other", "• Other", None,
+    ("other", "• Other", False,
      "Genuinely none of the above. Prefer a specific category wherever one fits."),
 )
 CATEGORIES = [name for name, _, _, _ in CATEGORY_SPECS]
 CATEGORY_LABEL = {name: label for name, label, _, _ in CATEGORY_SPECS}
 # Categories whose urgency `severity` cannot express. They are not bugs, so the model
-# rates them not_applicable — which would otherwise paint the most serious ticket in
-# the batch the calmest colour and sort it last.
-CATEGORY_COLOR = {name: color for name, _, color, _ in CATEGORY_SPECS if color}
-URGENT_CATEGORIES = frozenset(CATEGORY_COLOR)
+# rates them not_applicable — which would otherwise give the most serious ticket in
+# the batch the calmest marker and sort it last.
+# The emoji on its own, for the per-ticket lines. Derived from the label so the
+# table stays the single place a category is described.
+CATEGORY_EMOJI = {name: label.split(" ", 1)[0] for name, label, _, _ in CATEGORY_SPECS}
+URGENT_CATEGORIES = frozenset(name for name, _, urgent, _ in CATEGORY_SPECS if urgent)
 CATEGORY_GUIDANCE = "\n".join(f"- {name}: {desc}" for name, _, _, desc in CATEGORY_SPECS)
 
 SEVERITIES = ["crash", "data_loss", "major", "minor", "cosmetic", "not_applicable"]
@@ -650,8 +652,8 @@ REQUIRED_FINDING_KEYS = ("id", "category", "severity")
 def validate_findings(findings, label):
     """Exit unless every entry is an object carrying the keys the renderer indexes.
 
-    build_summary_embed does f["category"] / f["severity"] and build_highlight_embed
-    does f["id"], so a missing key surfaces as a KeyError halfway through building a
+    build_header does f["category"] / f["severity"] and build_ticket_line does
+    f["id"], so a missing key surfaces as a KeyError halfway through building a
     Discord payload. Failing here names the offending entry instead.
     """
     for position, entry in enumerate(findings):
@@ -756,18 +758,27 @@ def analyze(client, model, effort, compact_tickets):
 
 
 # ---- Discord rendering -----------------------------------------------------
+#
+# The digest is plain message text: a short header, then one line per ticket. Its job
+# is to be skimmed, and a labelled box per field reads as a wall at 16 tickets a day.
 
-SEVERITY_COLOR = {
-    "crash": 0xE74C3C,      # red
-    "data_loss": 0xC0392B,  # dark red
-    "major": 0xE67E22,      # orange
-    "minor": 0xF1C40F,      # yellow
-    "cosmetic": 0x95A5A6,   # grey
-    "not_applicable": 0x3498DB,  # blue
+# Leads each line so severity is scannable straight down the left edge. Urgent
+# categories get URGENT_MARKER instead: they are not bugs, so the model rates them
+# not_applicable, and the calmest marker on the most serious ticket is backwards.
+SEVERITY_EMOJI = {
+    "crash": "🔥",
+    "data_loss": "💥",
+    "major": "🟠",
+    "minor": "🟡",
+    "cosmetic": "⚪",
+    "not_applicable": "▫️",
 }
-MAX_EMBEDS_PER_MESSAGE = 10
-MAX_EMBED_CHARS_PER_MESSAGE = 6000  # Discord's aggregate limit across one message
-MAX_HIGHLIGHTS = 27  # 3 messages of ~9 highlights + a summary embed
+URGENT_MARKER = "🚨"
+# Discord's cap on one message's content. Lines are clipped and chunked against it.
+MAX_MESSAGE_CHARS = 2000
+SUMMARY_CHARS = 160
+ROOT_CAUSE_CHARS = 140
+MAX_HIGHLIGHTS = 27  # ~3 messages' worth of lines, plus the header
 
 
 def ticket_url(subdomain, ticket_id):
@@ -779,7 +790,53 @@ def clip(text, limit):
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def build_summary_embed(findings, highlights, subdomain, stats=None):
+def is_urgent(finding):
+    return finding.get("category") in URGENT_CATEGORIES
+
+
+def severity_marker(finding):
+    """The leading emoji: category urgency first, then severity."""
+    if is_urgent(finding):
+        return URGENT_MARKER
+    return SEVERITY_EMOJI.get(finding.get("severity", "not_applicable"), "▫️")
+
+
+def build_ticket_line(finding, subdomain, is_update=False):
+    """One skimmable line per ticket:
+
+        🔥 | 🐞 | #27605 · Notifications only arrive… | Likely cause: push service…
+
+    The id is a masked link, so the ticket stays one click away without spending the
+    character budget on a visible URL.
+    """
+    tid = finding["id"]
+    # 🔄 marks a ticket already shown that has since changed, so the reader knows it
+    # is a follow-up rather than a duplicate post.
+    marker = "🔄 " if is_update else ""
+    parts = [
+        severity_marker(finding),
+        CATEGORY_EMOJI.get(finding.get("category"), "•"),
+        f"{marker}[#{tid}]({ticket_url(subdomain, tid)}) · "
+        f"{clip(finding.get('summary'), SUMMARY_CHARS) or '(no summary)'}",
+    ]
+    root = clip(finding.get("likely_root_cause"), ROOT_CAUSE_CHARS)
+    if root:
+        parts.append(f"Likely cause: {root}")
+    # The reported account is the actionable part of an abuse report — carrying it on
+    # the line saves opening the ticket to copy it.
+    reported = clip(finding.get("reported_session_id"), 70)
+    if reported:
+        parts.append(f"Reported: `{reported}`")
+    return " | ".join(parts)
+
+
+def build_header(findings, highlights, stats=None):
+    """The lead lines: what was looked at, the category tally, duplicate clusters.
+
+    Accounts for the batch honestly — how much of the window was analyzed, what was
+    skipped and why, how big the untriaged backlog behind it is — so a short digest
+    never reads as a quiet day when it was really a truncated one.
+    """
     by_category = {}
     by_severity = {}
     clusters = {}
@@ -790,32 +847,16 @@ def build_summary_embed(findings, highlights, subdomain, stats=None):
         if label:
             clusters.setdefault(label, []).append(f["id"])
 
-    cat_lines = "\n".join(
-        f"{CATEGORY_LABEL.get(cat, cat)}: **{count}**"
-        for cat, count in sorted(by_category.items(), key=lambda kv: -kv[1])
-    )
-    serious = by_severity.get("crash", 0) + by_severity.get("data_loss", 0)
-    dup_clusters = {k: v for k, v in clusters.items() if len(v) > 1}
-    fields = [{"name": "By category", "value": cat_lines or "—", "inline": False}]
-    if dup_clusters:
-        cluster_lines = "\n".join(
-            f"**{clip(label, 40)}** — {len(ids)} tickets (#{', #'.join(str(i) for i in ids[:6])})"
-            for label, ids in sorted(dup_clusters.items(), key=lambda kv: -len(kv[1]))[:6]
-        )
-        fields.append({"name": "Likely duplicate clusters", "value": clip(cluster_lines, 1024), "inline": False})
-
-    # Account for the batch honestly: how many of the window we looked at, how many
-    # we skipped as unchanged, and how big the untriaged backlog is behind it.
     stats = stats or {}
     matched = stats.get("matched")
     skipped = stats.get("skipped_unchanged") or 0
     updated = stats.get("updated_count") or 0
     backlog = stats.get("total_unsolved")
 
-    window = f"Analyzed **{len(findings)}**"
+    window = f"🗂️ **Zendesk triage** — analyzed **{len(findings)}**"
     if matched is not None:
         window += f" of **{matched}**"
-    window += f" tickets in the window"
+    window += " tickets in the window"
     if stats.get("scope"):
         window += f" ({stats['scope']})"
     window += "."
@@ -829,99 +870,46 @@ def build_summary_embed(findings, highlights, subdomain, stats=None):
     if backlog is not None:
         lines.append(f"Backlog: **{backlog:,}** unsolved tickets in total (not triaged).")
 
+    serious = by_severity.get("crash", 0) + by_severity.get("data_loss", 0)
     tail = f"**{len(highlights)}** worth looking into"
     tail += f", including **{serious}** crash/data-loss." if serious else "."
     if updated:
         tail += f" 🔄 **{updated}** changed since last reported."
     lines.append(tail)
 
-    return {
-        "title": "🗂️ Zendesk triage",
-        "description": "\n".join(lines),
-        "color": 0xE67E22 if highlights else 0x2ECC71,
-        "fields": fields,
-    }
+    if by_category:
+        lines.append(clip(" · ".join(
+            f"{CATEGORY_EMOJI.get(cat, '•')} **{count}**"
+            for cat, count in sorted(by_category.items(), key=lambda kv: -kv[1])
+        ), 300))
 
+    dup_clusters = {k: v for k, v in clusters.items() if len(v) > 1}
+    if dup_clusters:
+        cluster_lines = " · ".join(
+            f"**{clip(label, 40)}** ×{len(ids)} (#{', #'.join(str(i) for i in ids[:4])})"
+            for label, ids in sorted(dup_clusters.items(), key=lambda kv: -len(kv[1]))[:4]
+        )
+        lines.append(f"Likely duplicates: {clip(cluster_lines, 400)}")
 
-def is_urgent(finding):
-    return finding.get("category") in URGENT_CATEGORIES
-
-
-def embed_color(finding):
-    """Colour by category urgency first, then severity.
-
-    An abuse or legal report is not a bug, so the model rates it not_applicable —
-    which maps to the calmest blue. Category has to win, or the most serious ticket
-    in the digest looks the most benign.
-    """
-    urgent = CATEGORY_COLOR.get(finding.get("category"))
-    if urgent:
-        return urgent
-    return SEVERITY_COLOR.get(finding.get("severity", "not_applicable"), 0x95A5A6)
-
-
-def build_highlight_embed(finding, subdomain, is_update=False):
-    tid = finding["id"]
-    sev = finding.get("severity", "not_applicable")
-    cat = CATEGORY_LABEL.get(finding.get("category"), finding.get("category", ""))
-    # 🔄 marks a ticket we already showed that has since changed, so the reader
-    # knows it is a follow-up rather than a duplicate post.
-    marker = "🔄 " if is_update else ""
-    title = f"{marker}#{tid} · {clip(finding.get('summary'), 200) or '(no summary)'}"
-    fields = [
-        {"name": "Category", "value": clip(cat, 60) or "—", "inline": True},
-        {"name": "Severity", "value": sev, "inline": True},
-        {"name": "Language", "value": clip(finding.get("language"), 40) or "—", "inline": True},
-    ]
-    platform = finding.get("platform")
-    if platform and platform != "unknown":
-        fields.append({"name": "Platform", "value": clip(platform, 40), "inline": True})
-    component = clip(finding.get("affected_component"), 100)
-    if component:
-        fields.append({"name": "Component", "value": component, "inline": True})
-    version = clip(finding.get("app_version"), 40)
-    if version:
-        fields.append({"name": "Version", "value": version, "inline": True})
-    # The reported account is the actionable part of an abuse report — surfacing it
-    # here saves opening the ticket to copy it.
-    reported = clip(finding.get("reported_session_id"), 100)
-    if reported:
-        fields.append({"name": "Reported account", "value": f"`{reported}`", "inline": False})
-    root = clip(finding.get("likely_root_cause"), 300)
-    description = f"Likely cause: {root}" if root else ""
-    return {
-        "title": clip(title, 256),
-        "url": ticket_url(subdomain, tid),
-        "description": description,
-        "color": embed_color(finding),
-        "fields": fields,
-    }
-
-
-def embed_char_count(embed):
-    """Characters Discord counts against the per-message embed budget."""
-    total = len(embed.get("title") or "") + len(embed.get("description") or "")
-    for field in embed.get("fields") or []:
-        total += len(field.get("name") or "") + len(field.get("value") or "")
-    return total
+    return "\n".join(lines)
 
 
 def chunk_entries(entries):
-    """Group (embed, ticket_ids) pairs into messages within both Discord limits.
+    """Group (line, ticket_ids) pairs into messages within MAX_MESSAGE_CHARS.
 
-    Discord caps a message at 10 embeds *and* 6,000 characters summed across them;
-    chunking on count alone can produce a payload that is rejected as too large.
+    Lines are joined with a newline, so each one after the first costs a character
+    more than its own length. An entry longer than the cap still gets its own message
+    rather than being dropped; the pieces are pre-clipped so that shouldn't arise.
     """
     chunks, current, current_chars = [], [], 0
-    for embed, ids in entries:
-        size = embed_char_count(embed)
-        too_many = len(current) >= MAX_EMBEDS_PER_MESSAGE
-        too_long = current_chars + size > MAX_EMBED_CHARS_PER_MESSAGE
-        if current and (too_many or too_long):
+    for text, ids in entries:
+        projected = current_chars + len(text) + (1 if current else 0)
+        if current and projected > MAX_MESSAGE_CHARS:
             chunks.append(current)
             current, current_chars = [], 0
-        current.append((embed, ids))
-        current_chars += size
+            projected = len(text)
+        current.append((text, ids))
+        current_chars = projected
     if current:
         chunks.append(current)
     return chunks
@@ -951,27 +939,23 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
     shown_ids = {f.get("id") for f in shown}
     omitted_ids = {f.get("id") for f in omitted}
 
-    # The summary embed accounts for every classified ticket except the highlights
-    # that didn't fit; those are covered by no message and stay eligible.
-    summary_ids = {f.get("id") for f in findings} - shown_ids - omitted_ids
-    entries = [(build_summary_embed(findings, shown + omitted, subdomain, stats), summary_ids)]
+    # The header accounts for every classified ticket except the highlights that
+    # didn't fit; those are covered by no message and stay eligible next run.
+    header_ids = {f.get("id") for f in findings} - shown_ids - omitted_ids
+    header = build_header(findings, shown + omitted, stats)
+    if omitted:
+        header += (f"\nShowing the top **{len(shown)}** of "
+                   f"**{len(shown) + len(omitted)}** worth looking into.")
+    entries = [(header, header_ids)]
     entries += [
-        (build_highlight_embed(f, subdomain, is_update=f.get("id") in updated_ids),
+        (build_ticket_line(f, subdomain, is_update=f.get("id") in updated_ids),
          {f.get("id")})
         for f in shown
     ]
 
-    content = None
-    if omitted:
-        content = (f"Showing the top {len(shown)} of {len(shown) + len(omitted)} "
-                   f"tickets worth looking into.")
-
     messages, coverage = [], []
-    for index, chunk in enumerate(chunk_entries(entries)):
-        payload = {"embeds": [embed for embed, _ in chunk]}
-        if index == 0 and content:
-            payload["content"] = content
-        messages.append(payload)
+    for chunk in chunk_entries(entries):
+        messages.append({"content": "\n".join(text for text, _ in chunk)})
         covered = set()
         for _, ids in chunk:
             covered |= ids
@@ -1151,7 +1135,7 @@ def main():
             print(f"Note: {len(analyzed) - len(classified)} ticket(s) came back without a "
                   f"classification; they stay eligible for the next run.")
 
-    # Same selection the embeds use, so the console count can't disagree with the
+    # Same selection the digest uses, so the console count can't disagree with the
     # digest — worth_looking_into alone would miss urgent categories the model
     # failed to flag.
     shown, omitted = select_highlights(findings)

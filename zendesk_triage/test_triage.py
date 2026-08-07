@@ -319,108 +319,146 @@ class TestStateDegradation(unittest.TestCase):
 # ---- Discord rendering -----------------------------------------------------
 
 
-class TestSummaryEmbed(unittest.TestCase):
-    def description(self, findings, stats):
+class TestHeader(unittest.TestCase):
+    def header(self, findings, stats):
         highlights = [f for f in findings if f.get("worth_looking_into")]
-        return triage.build_summary_embed(findings, highlights, "acme", stats)["description"]
+        return triage.build_header(findings, highlights, stats)
 
     def test_reports_analyzed_against_matched(self):
-        text = self.description([finding(1)], {"matched": 47})
-        self.assertIn("Analyzed **1** of **47** tickets in the window", text)
+        text = self.header([finding(1)], {"matched": 47})
+        self.assertIn("analyzed **1** of **47** tickets in the window", text)
 
     def test_names_the_window(self):
-        text = self.description([finding(1)], {"matched": 5, "scope": "created in the past 2 days"})
+        text = self.header([finding(1)], {"matched": 5, "scope": "created in the past 2 days"})
         self.assertIn("(created in the past 2 days)", text)
 
     def test_reports_skipped_unchanged_tickets(self):
-        text = self.description([finding(1)], {"matched": 47, "skipped_unchanged": 45})
+        text = self.header([finding(1)], {"matched": 47, "skipped_unchanged": 45})
         self.assertIn("Skipped **45** already reported and unchanged", text)
 
     def test_omits_the_skip_line_when_nothing_was_skipped(self):
-        self.assertNotIn("Skipped", self.description([finding(1)], {"skipped_unchanged": 0}))
+        self.assertNotIn("Skipped", self.header([finding(1)], {"skipped_unchanged": 0}))
 
     def test_reports_the_untriaged_backlog_with_thousands_separators(self):
-        text = self.description([finding(1)], {"total_unsolved": 5609})
+        text = self.header([finding(1)], {"total_unsolved": 5609})
         self.assertIn("Backlog: **5,609** unsolved tickets in total", text)
 
     def test_omits_the_backlog_line_when_the_count_is_unavailable(self):
-        self.assertNotIn("Backlog", self.description([finding(1)], {"total_unsolved": None}))
+        self.assertNotIn("Backlog", self.header([finding(1)], {"total_unsolved": None}))
 
     def test_flags_how_many_were_re_reports(self):
-        text = self.description([finding(1)], {"updated_count": 3})
+        text = self.header([finding(1)], {"updated_count": 3})
         self.assertIn("🔄 **3** changed since last reported", text)
 
     def test_counts_crash_and_data_loss_as_serious(self):
         findings = [finding(1, severity="crash"), finding(2, severity="data_loss")]
-        self.assertIn("**2** crash/data-loss", self.description(findings, {}))
+        self.assertIn("**2** crash/data-loss", self.header(findings, {}))
 
     def test_works_with_no_stats_at_all(self):
-        text = self.description([finding(1)], None)
-        self.assertIn("Analyzed **1**", text)
+        text = self.header([finding(1)], None)
+        self.assertIn("analyzed **1**", text)
         self.assertNotIn("of **", text)
+
+    def test_tallies_categories_by_emoji(self):
+        findings = [finding(1), finding(2), finding(3, category="question")]
+        text = self.header(findings, {})
+        self.assertIn(f"{triage.CATEGORY_EMOJI['bug_report']} **2**", text)
+        self.assertIn(f"{triage.CATEGORY_EMOJI['question']} **1**", text)
 
     def test_groups_repeated_clusters(self):
         findings = [finding(1, cluster="push"), finding(2, cluster="push"), finding(3, cluster="solo")]
-        embed = triage.build_summary_embed(findings, findings, "acme", {})
-        names = [f["name"] for f in embed["fields"]]
-        self.assertIn("Likely duplicate clusters", names)
-        clusters = next(f for f in embed["fields"] if f["name"] == "Likely duplicate clusters")
-        self.assertIn("push", clusters["value"])
-        self.assertNotIn("solo", clusters["value"])  # a single ticket is not a cluster
+        text = triage.build_header(findings, findings, {})
+        self.assertIn("Likely duplicates:", text)
+        self.assertIn("push", text)
+        self.assertNotIn("solo", text)  # a single ticket is not a cluster
 
 
-class TestHighlightEmbed(unittest.TestCase):
+class TestTicketLine(unittest.TestCase):
+    def test_reads_as_markers_then_id_then_summary(self):
+        line = triage.build_ticket_line(
+            finding(27605, severity="crash", summary="Notifications only appear after opening"),
+            "acme",
+        )
+        self.assertTrue(line.startswith(f"🔥 | {triage.CATEGORY_EMOJI['bug_report']} | "))
+        self.assertIn("[#27605](https://acme.zendesk.com/agent/tickets/27605)", line)
+        self.assertIn("· Notifications only appear after opening", line)
+        self.assertIn("| Likely cause: cause", line)
+
     def test_update_marker_only_appears_for_re_reports(self):
-        fresh = triage.build_highlight_embed(finding(1), "acme", is_update=False)
-        repeat = triage.build_highlight_embed(finding(1), "acme", is_update=True)
-        self.assertFalse(fresh["title"].startswith("🔄"))
-        self.assertTrue(repeat["title"].startswith("🔄"))
+        fresh = triage.build_ticket_line(finding(1), "acme", is_update=False)
+        repeat = triage.build_ticket_line(finding(1), "acme", is_update=True)
+        self.assertNotIn("🔄", fresh)
+        self.assertIn("🔄 [#1]", repeat)
 
-    def test_links_back_to_the_ticket(self):
-        embed = triage.build_highlight_embed(finding(42), "acme")
-        self.assertEqual(embed["url"], "https://acme.zendesk.com/agent/tickets/42")
+    def test_omits_the_cause_segment_when_there_is_none(self):
+        line = triage.build_ticket_line(finding(1, likely_root_cause=""), "acme")
+        self.assertNotIn("Likely cause", line)
 
-    def test_title_stays_within_the_discord_limit(self):
-        embed = triage.build_highlight_embed(finding(1, summary="x" * 500), "acme", is_update=True)
-        self.assertLessEqual(len(embed["title"]), 256)
+    def test_carries_the_reported_account_for_abuse_reports(self):
+        """The one field worth the characters: it is what an abuse report is for."""
+        line = triage.build_ticket_line(
+            finding(1, category="abuse_report", reported_session_id="05" + "a" * 64), "acme"
+        )
+        self.assertIn("Reported: `05" + "a" * 64 + "`", line)
+
+    def test_an_urgent_category_outranks_a_benign_severity(self):
+        line = triage.build_ticket_line(
+            finding(1, category="legal_or_data_request", severity="not_applicable"), "acme"
+        )
+        self.assertTrue(line.startswith(triage.URGENT_MARKER))
+
+    def test_a_long_summary_is_clipped(self):
+        line = triage.build_ticket_line(finding(1, summary="x" * 500), "acme")
+        self.assertIn("…", line)
+        self.assertLess(len(line), 500)
 
 
 class TestBuildMessages(unittest.TestCase):
-    def test_only_tickets_worth_looking_into_get_their_own_embed(self):
+    def lines(self, messages):
+        return "\n".join(m["content"] for m in messages).splitlines()
+
+    def test_only_tickets_worth_looking_into_get_a_line(self):
         findings = [finding(1), finding(2, worth_looking_into=False)]
-        messages = build_messages(findings, "acme")
-        self.assertEqual(len(messages[0]["embeds"]), 2)  # summary + one highlight
+        lines = self.lines(build_messages(findings, "acme"))
+        self.assertEqual(sum(1 for line in lines if "[#" in line), 1)
+        self.assertIn("[#1]", "\n".join(lines))
 
     def test_highlights_are_ordered_by_priority_rank(self):
         findings = [finding(1, priority_rank=3), finding(2, priority_rank=1)]
-        embeds = build_messages(findings, "acme")[0]["embeds"]
-        self.assertIn("#2", embeds[1]["title"])
-        self.assertIn("#1", embeds[2]["title"])
+        ticket_lines = [line for line in self.lines(build_messages(findings, "acme")) if "[#" in line]
+        self.assertIn("[#2]", ticket_lines[0])
+        self.assertIn("[#1]", ticket_lines[1])
 
-    def test_updated_ids_reach_the_right_embed(self):
+    def test_updated_ids_mark_the_right_line(self):
         findings = [finding(1), finding(2)]
-        embeds = build_messages(findings, "acme", {}, updated_ids={2})[0]["embeds"]
-        titles = {e["title"].lstrip("🔄 ").split(" ")[0]: e["title"] for e in embeds[1:]}
-        self.assertFalse(titles["#1"].startswith("🔄"))
-        self.assertTrue(titles["#2"].startswith("🔄"))
+        text = "\n".join(m["content"] for m in build_messages(findings, "acme", {}, updated_ids={2}))
+        self.assertIn("🔄 [#2]", text)
+        self.assertNotIn("🔄 [#1]", text)
 
-    def test_embeds_are_chunked_to_the_discord_per_message_limit(self):
+    def test_the_header_leads_the_first_message(self):
+        messages = build_messages([finding(1)], "acme", {"matched": 3})
+        self.assertTrue(messages[0]["content"].startswith("🗂️ **Zendesk triage**"))
+
+    def test_every_highlight_reaches_a_message(self):
         findings = [finding(i, priority_rank=i) for i in range(triage.MAX_HIGHLIGHTS)]
         messages = build_messages(findings, "acme")
-        for message in messages:
-            self.assertLessEqual(len(message["embeds"]), triage.MAX_EMBEDS_PER_MESSAGE)
-        total = sum(len(m["embeds"]) for m in messages)
-        self.assertEqual(total, triage.MAX_HIGHLIGHTS + 1)  # + the summary
+        text = "\n".join(m["content"] for m in messages)
+        for i in range(triage.MAX_HIGHLIGHTS):
+            self.assertIn(f"[#{i}]", text)
 
     def test_highlights_beyond_the_cap_are_dropped_but_announced(self):
         over = triage.MAX_HIGHLIGHTS + 5
         findings = [finding(i, priority_rank=i) for i in range(over)]
         messages = build_messages(findings, "acme")
-        self.assertIn(f"top {triage.MAX_HIGHLIGHTS} of {over}", messages[0]["content"])
+        self.assertIn(f"top **{triage.MAX_HIGHLIGHTS}** of **{over}**", messages[0]["content"])
 
-    def test_no_content_line_when_nothing_was_dropped(self):
+    def test_no_truncation_notice_when_nothing_was_dropped(self):
         messages = build_messages([finding(1)], "acme")
-        self.assertNotIn("content", messages[0])
+        self.assertNotIn("Showing the top", messages[0]["content"])
+
+    def test_messages_carry_no_embeds(self):
+        for message in build_messages([finding(1)], "acme"):
+            self.assertEqual(set(message), {"content"})
 
 
 # ---- Parsing helpers -------------------------------------------------------
@@ -461,37 +499,24 @@ class TestTaxonomyIsDerived(unittest.TestCase):
 
 class TestUrgency(unittest.TestCase):
     def test_urgent_category_beats_a_benign_severity(self):
-        """An abuse report is not a bug, so severity is not_applicable — which used to
-        paint the most serious ticket in the digest the calmest colour."""
+        """An abuse report is not a bug, so the model rates it not_applicable — the
+        calmest marker on the most serious ticket in the digest is backwards."""
         abuse = finding(1, category="abuse_report", severity="not_applicable")
-        self.assertEqual(triage.embed_color(abuse), triage.CATEGORY_COLOR["abuse_report"])
-        self.assertNotEqual(triage.embed_color(abuse),
-                            triage.SEVERITY_COLOR["not_applicable"])
+        self.assertEqual(triage.severity_marker(abuse), triage.URGENT_MARKER)
+        self.assertNotEqual(triage.severity_marker(abuse),
+                            triage.SEVERITY_EMOJI["not_applicable"])
 
     def test_non_urgent_category_still_uses_severity(self):
-        self.assertEqual(triage.embed_color(finding(1, category="bug_report", severity="crash")),
-                         triage.SEVERITY_COLOR["crash"])
+        self.assertEqual(
+            triage.severity_marker(finding(1, category="bug_report", severity="crash")),
+            triage.SEVERITY_EMOJI["crash"])
 
-    def test_unknown_severity_falls_back_to_grey(self):
-        self.assertEqual(triage.embed_color({"category": "other", "severity": "???"}), 0x95A5A6)
+    def test_unknown_severity_falls_back_to_a_neutral_marker(self):
+        self.assertEqual(triage.severity_marker({"category": "other", "severity": "???"}), "▫️")
 
-    def test_urgent_tickets_are_highlighted_even_if_not_flagged(self):
-        abuse = finding(1, category="abuse_report", worth_looking_into=False)
-        shown, _ = triage.select_highlights([abuse])
-        self.assertEqual([f["id"] for f in shown], [1])
-
-    def test_urgent_tickets_sort_ahead_of_better_ranked_ordinary_ones(self):
-        ordinary = finding(1, category="bug_report", priority_rank=1)
-        abuse = finding(2, category="abuse_report", priority_rank=99)
-        shown, _ = triage.select_highlights([ordinary, abuse])
-        self.assertEqual([f["id"] for f in shown], [2, 1])
-
-    def test_urgent_tickets_cannot_be_pushed_out_by_the_display_cap(self):
-        ordinary = [finding(i, priority_rank=i) for i in range(triage.MAX_HIGHLIGHTS + 5)]
-        abuse = finding(9999, category="abuse_report", priority_rank=9999)
-        shown, omitted = triage.select_highlights(ordinary + [abuse])
-        self.assertIn(9999, [f["id"] for f in shown])
-        self.assertNotIn(9999, [f["id"] for f in omitted])
+    def test_every_severity_has_a_marker(self):
+        missing = [sev for sev in triage.SEVERITIES if sev not in triage.SEVERITY_EMOJI]
+        self.assertEqual(missing, [])
 
 
 class TestReviewFiltering(unittest.TestCase):
@@ -637,46 +662,39 @@ class TestContentFreeTickets(unittest.TestCase):
         self.assertEqual(triage.hydrate_descriptions(session, "acme", [row]), 0)
 
 
-class TestEmbedCharLimit(unittest.TestCase):
-    """Discord caps a message at 10 embeds *and* 6,000 chars across them; chunking on
-    count alone can build a payload Discord rejects."""
+class TestMessageCharLimit(unittest.TestCase):
+    """Discord caps one message's content at 2,000 characters. Every line is
+    pre-clipped, and chunking has to account for the newlines that join them."""
 
     def fat(self, ticket_id):
-        # ~1,300 chars of field text: 10 of these would be ~13,000, over the limit.
-        return finding(ticket_id, summary="s" * 200, likely_root_cause="r" * 300,
-                       affected_component="c" * 100, language="l" * 40)
+        return finding(ticket_id, summary="s" * 400, likely_root_cause="r" * 400)
 
-    def test_every_message_respects_both_limits(self):
+    def test_every_message_stays_within_the_limit(self):
         findings = [self.fat(i) for i in range(triage.MAX_HIGHLIGHTS)]
-        for message in build_messages(findings, "acme"):
-            self.assertLessEqual(len(message["embeds"]), triage.MAX_EMBEDS_PER_MESSAGE)
-            total = sum(triage.embed_char_count(e) for e in message["embeds"])
-            self.assertLessEqual(total, triage.MAX_EMBED_CHARS_PER_MESSAGE)
-
-    def test_char_limit_splits_where_the_count_limit_would_not(self):
-        """9 fat highlights + summary = 10 embeds: within the count limit, over 6,000 chars."""
-        messages = build_messages([self.fat(i) for i in range(9)], "acme")
-        embeds = sum(len(m["embeds"]) for m in messages)
-        self.assertLessEqual(embeds, triage.MAX_EMBEDS_PER_MESSAGE)  # count alone: 1 message
-        self.assertGreater(len(messages), 1)                         # chars forced the split
-
-    def test_lean_embeds_are_not_split_early(self):
-        """The char limit must not fragment ordinary digests."""
-        messages = build_messages([finding(i, priority_rank=i) for i in range(9)], "acme")
-        self.assertEqual(len(messages), 1)
-
-    def test_no_embed_is_dropped_while_chunking(self):
-        findings = [self.fat(i) for i in range(15)]
         messages = build_messages(findings, "acme")
-        self.assertEqual(sum(len(m["embeds"]) for m in messages), 16)  # 15 + summary
+        for message in messages:
+            self.assertLessEqual(len(message["content"]), triage.MAX_MESSAGE_CHARS)
+        self.assertGreater(len(messages), 1)  # fat lines must actually split
 
-    def test_char_count_covers_titles_descriptions_and_fields(self):
-        embed = {"title": "abc", "description": "de",
-                 "fields": [{"name": "fg", "value": "hij"}]}
-        self.assertEqual(triage.embed_char_count(embed), 3 + 2 + 2 + 3)
+    def test_no_line_is_dropped_while_chunking(self):
+        findings = [self.fat(i) for i in range(triage.MAX_HIGHLIGHTS)]
+        text = "\n".join(m["content"] for m in build_messages(findings, "acme"))
+        for i in range(triage.MAX_HIGHLIGHTS):
+            self.assertIn(f"[#{i}]", text)
 
-    def test_char_count_tolerates_missing_keys(self):
-        self.assertEqual(triage.embed_char_count({}), 0)
+    def test_lean_lines_are_not_split_early(self):
+        findings = [finding(i, summary="s", likely_root_cause="") for i in range(5)]
+        self.assertEqual(len(build_messages(findings, "acme")), 1)
+
+    def test_chunking_counts_the_joining_newlines(self):
+        """Two 1,200-char lines are 2,401 joined — over the cap only if the newline
+        counts, which is the off-by-one this guards."""
+        entries = [("x" * 1200, {1}), ("y" * 1200, {2})]
+        self.assertEqual(len(triage.chunk_entries(entries)), 2)
+
+    def test_an_oversized_entry_still_gets_a_message(self):
+        chunks = triage.chunk_entries([("x" * (triage.MAX_MESSAGE_CHARS + 50), {1})])
+        self.assertEqual(len(chunks), 1)
 
 
 class TestCoverage(unittest.TestCase):
