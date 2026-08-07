@@ -95,24 +95,30 @@ Twitter DM tickets arrive with `description` identical to `subject` — both jus
 
 The script (`zendesk_triage/triage.py`) fetches the tickets in a rolling time window, classifies the whole batch in one schema-enforced request to the Anthropic API, and posts a Discord digest: a short header, then one line per ticket worth looking into.
 
-The digest is plain message text rather than embeds — its job is to be skimmed, and a labelled box per field reads as a wall at 16 tickets a day. Each line leads with a severity marker and a category emoji, links the ticket id, and carries the model's one-line summary plus its root-cause guess:
+Each line leads with a severity marker, a category emoji and a platform icon, links the ticket id, and carries the model's one-line summary plus its root-cause guess:
 
 ```
-🗂️ **Zendesk triage** — analyzed **5** of **47** tickets in the window (created in the past 2 days). Skipped **31** positive app-store review(s).
+🗂️ Zendesk triage
+Analyzed **5** of **47** tickets in the window (created in the past 2 days). Skipped **31** positive app-store review(s).
 Backlog: **5,609** unsolved tickets in total (not triaged).
-**4** worth looking into, including **1** crash/data-loss. 🔄 **1** changed since last reported.
-🐞 **2** · ⚖️ **1** · 🚨 **1** · ❓ **1**
+**5** worth looking into, including **1** crash/data-loss. 🔄 **1** changed since last reported.
+🐞 **3** · ⚖️ **1** · 🚨 **1**
 Likely duplicates: **push-wake** ×2 (#27605, #27610)
-🚨 | ⚖️ | #27612 · GDPR request to delete all account data
-🔥 | 🐞 | #27605 · Notifications only appear after manually opening the app | Likely cause: Background push service not waking client
-🟠 | 🐞 | 🔄 #27610 · Keine Benachrichtigungen bis die App geöffnet wird | Likely cause: Same push wake issue
+🚨 | ⚖️ | ❔ | #27612 · GDPR request to delete all account data
+🔥 | 🐞 | 🤖 | #27605 · Notifications only appear after manually opening the app | Likely cause: Background push service not waking client
+🟠 | 🐞 | 🍎 | 🔄 #27610 · Attachments fail to download on cellular | Likely cause: Same push wake issue
+🟡 | 🐞 | 🖥️ | #27611 · Window does not restore after minimise to tray
 ```
 
-The header accounts for the batch in full, so nothing is dropped silently. Severity markers are 🔥 crash · 💥 data loss · 🟠 major · 🟡 minor · ⚪ cosmetic · ▫️ not applicable, with 🚨 replacing them on the urgent categories. An abuse report also carries the reported Session ID on its line, since that is the actionable part and it saves opening the ticket.
+| Column | Values |
+| --- | --- |
+| Severity | 🔥 crash · 💥 data loss · 🟠 major · 🟡 minor · ⚪ cosmetic · ▫️ not applicable — replaced by 🚨 on the urgent categories |
+| Category | The emoji from `CATEGORY_SPECS`, so it matches the tally line |
+| Platform | 🤖 Android · 🍎 iOS · 🖥️ desktop (all three) · 🌐 multiple · ❔ unknown |
 
-Discord caps one message's content at 2,000 characters, so lines are clipped (`SUMMARY_CHARS`, `ROOT_CAUSE_CHARS`) and chunked across messages; each message records which ticket ids it accounts for, which is what makes a partial post failure recoverable.
+The header accounts for the batch in full, so nothing is dropped silently, and the embed's left border is orange when something is worth looking into and green when nothing is — a glance answers "does today need me?". An abuse report also carries the reported Session ID on its line, since that is the actionable part and it saves opening the ticket.
 
-> **Scope:** the window covers tickets *created* recently, so the long tail of older unsolved tickets is counted in the backlog line but not triaged. That is deliberate — the job is a new-ticket digest, not a backlog sweep.
+**Why an embed for plain lines.** Discord caps message content at 2,000 characters but an embed description at 4,096, and no `fields` are used — the embed is only a bigger text box with a coloured border. A typical day is ~16 lines at ~180 characters (55 of which is the masked link on the id), which is two messages as plain text and one inside an embed. Lines are clipped (`SUMMARY_CHARS`, `ROOT_CAUSE_CHARS`) and chunked against 4,096, counting the newlines that join them; each message records which ticket ids it accounts for, which is what makes a partial post failure recoverable.
 
 ### Deduplication
 
