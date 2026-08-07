@@ -407,8 +407,8 @@ def fetch_tickets(session, subdomain, query, max_tickets):
     return tickets, total_matched
 
 
-def fetch_total_unsolved(session, subdomain):
-    """Count the whole unsolved backlog. Best effort: returns None on failure.
+def fetch_total_unsolved(session, subdomain, query=BACKLOG_QUERY):
+    """Count an unsolved backlog. Best effort: returns None on failure.
 
     Context for the digest, not something to hold the run up for — hence the
     short retry budget.
@@ -416,7 +416,7 @@ def fetch_total_unsolved(session, subdomain):
     url = f"https://{subdomain}.zendesk.com/api/v2/search/count.json"
     try:
         resp = request_with_retry(
-            session, "GET", url, attempts=2, params={"query": BACKLOG_QUERY}
+            session, "GET", url, attempts=2, params={"query": query}
         )
         if resp.status_code >= 400:
             print(f"Note: could not count the unsolved backlog ({resp.status_code}).")
@@ -531,6 +531,9 @@ def save_state(path, state, reported, retention_days):
 # channel, not on tags. 4-5 star reviews were 59% of *all* tickets and are never
 # actionable, so counting them beats paying tokens to classify them.
 REVIEW_CHANNEL = "any_channel"
+# The same backlog minus store reviews. 92% of unsolved tickets are AppFollow
+# reviews, so the unqualified number reads as ~13x the queue that needs a human.
+BACKLOG_NON_REVIEW_QUERY = f"{BACKLOG_QUERY} -via:{REVIEW_CHANNEL}"
 STAR_SUBJECT = re.compile(r"^\s*([★☆]{1,10})")
 DEFAULT_REVIEW_STAR_FLOOR = 3
 
@@ -886,7 +889,11 @@ def build_header(findings, highlights, stats=None):
         window += f" Skipped **{reviews}** positive app-store review(s)."
     lines = [window]
 
-    if backlog is not None:
+    non_review = stats.get("total_unsolved_non_review")
+    if backlog is not None and non_review is not None:
+        lines.append(f"Backlog: **{non_review:,}** unsolved excluding app-store reviews "
+                     f"(**{backlog - non_review:,}** more are reviews, not triaged).")
+    elif backlog is not None:
         lines.append(f"Backlog: **{backlog:,}** unsolved tickets in total (not triaged).")
 
     serious = by_severity.get("crash", 0) + by_severity.get("data_loss", 0)
@@ -1096,6 +1103,8 @@ def main():
 
         stats["matched"] = total_matched
         stats["total_unsolved"] = fetch_total_unsolved(zd, subdomain)
+        stats["total_unsolved_non_review"] = fetch_total_unsolved(
+            zd, subdomain, BACKLOG_NON_REVIEW_QUERY)
 
         # Drop positive store reviews before anything expensive: they were 59% of all
         # tickets in the sample and never actionable.

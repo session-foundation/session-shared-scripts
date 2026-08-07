@@ -99,7 +99,7 @@ Each line leads with a severity marker, a category emoji and a platform icon, li
 
 ```
 🗂️ **Zendesk triage** — analyzed **16** of **46** tickets in the window (created in the past 2 days). Skipped **30** positive app-store review(s).
-Backlog: **5,680** unsolved tickets in total (not triaged).
+Backlog: **428** unsolved excluding app-store reviews (**5,252** more are reviews, not triaged).
 **9** worth looking into.
 ⭐ **6** · 🐛 **3** · ❓ **2** · 🔑 **1** · ⚖️ **1** · 🔒 **1**
 Likely duplicates: **push-notifications-not-delivered** ×5 (#27637, #27610, #27606, #27605)
@@ -115,7 +115,7 @@ Likely duplicates: **push-notifications-not-delivered** ×5 (#27637, #27610, #27
 | Category | The emoji from `CATEGORY_SPECS`, so it matches the tally line |
 | Platform | 🤖 Android · 🍎 iOS · 🖥️ desktop (all three) · 🌐 multiple · ❔ unknown |
 
-The header accounts for the batch in full, so nothing is dropped silently. An abuse report also carries the reported Session ID on its line, since that is the actionable part and it saves opening the ticket.
+The header accounts for the batch in full, so nothing is dropped silently. The backlog line deliberately **excludes app-store reviews**: 92% of unsolved tickets are AppFollow reviews, so the unqualified number reads as roughly 13× the queue that actually needs a human (5,680 against 428). Both counts come from Zendesk's count-only search endpoint, one request each and both best-effort — if the review-excluded count fails, the line falls back to the plain total rather than disappearing. An abuse report also carries the reported Session ID on its line, since that is the actionable part and it saves opening the ticket.
 
 **Plain message content, no embeds.** The lines carry their own structure, so an embed added a border and nothing else. The cost is the character budget: Discord caps message content at 2,000 against an embed description's 4,096, and a masked link on the id spends 54 characters that the reader never sees. A real 9-highlight day comes to ~2,400 characters, so it arrives as two messages. Lines are clipped (`SUMMARY_CHARS`, `ROOT_CAUSE_CHARS`) and chunked against 2,000, counting the newlines that join them; each message records which ticket ids it accounts for, which is what makes a partial post failure recoverable.
 
