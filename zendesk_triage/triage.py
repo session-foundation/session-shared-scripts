@@ -27,7 +27,7 @@ Config (env vars, or CLI flags for local runs):
     ANTHROPIC_API_KEY     Claude API key (read by the SDK automatically)
     DISCORD_WEBHOOK_URL   Discord incoming webhook
     ZENDESK_QUERY         (optional) Zendesk search query; see DEFAULT_QUERY
-    ZENDESK_TRIAGE_MODEL  (optional) Claude model id; defaults to claude-opus-4-8
+    ZENDESK_TRIAGE_MODEL  (optional) Claude model alias or id; defaults to `opus`
 
 Usage:
     # real run (CI): reads everything from the environment
@@ -97,7 +97,10 @@ def window_label(hours):
         days = hours // 24
         return f"created in the past {days} day{'s' if days > 1 else ''}"
     return f"created in the past {hours}h"
-DEFAULT_MODEL = "claude-opus-4-8"
+# An alias, not a pinned id: the CLI resolves `opus` to the newest Opus the
+# authenticated plan allows, so a model release needs no edit here and a plan
+# without Opus access degrades instead of 404-ing on a dead id.
+DEFAULT_MODEL = "opus"
 DEFAULT_MAX_TICKETS = 100
 DESCRIPTION_CHARS = 1500  # per-ticket description sent to Claude (triage only)
 # One classification runs ~100 output tokens per ticket, and adaptive thinking draws
@@ -1041,7 +1044,8 @@ def main():
     parser.add_argument("--window-hours", type=int, metavar="N",
                         help="Only analyze unsolved tickets created in the last N hours. "
                              "The scheduled daily run uses 48.")
-    parser.add_argument("--model", help="Claude model id (else ZENDESK_TRIAGE_MODEL, else claude-opus-4-8).")
+    parser.add_argument("--model", help="Claude model alias (opus, sonnet, haiku) or full "
+                                       "id (else ZENDESK_TRIAGE_MODEL, else opus).")
     parser.add_argument("--effort", default="medium", choices=["low", "medium", "high", "xhigh", "max"],
                         help="Claude reasoning effort (default: medium).")
     parser.add_argument("--max-tickets", type=int, default=DEFAULT_MAX_TICKETS,

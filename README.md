@@ -142,13 +142,15 @@ Two caveats worth knowing:
 | `--state`              | flag             | *(unset)*                                               | Dedup state file. The workflow points this at the cached `.triage-state/seen.json` |
 | `--state-retention-days` | flag           | `30`                                                    | Forget state entries older than N days |
 | `ZENDESK_QUERY`        | env / `--query`  | *(unset)*                                               | Explicit Zendesk search query. Overrides `--window-hours` entirely |
-| `ZENDESK_TRIAGE_MODEL` | repo variable / `--model` | `claude-opus-4-8`                             | Set to a cheaper model (e.g. `claude-haiku-4-5`) to reduce cost on large batches |
+| `ZENDESK_TRIAGE_MODEL` | repo variable / `--model` | `opus`                                        | Model alias (`opus`, `sonnet`, `haiku`) or a full id. Set it to `sonnet` to reduce cost on large batches |
 | `--max-tickets`        | workflow input / flag | `1000` (workflow) / `100` (flag)                   | Runaway guard on tickets analyzed per run, **not** a batch size. The workflow passes `1000`; a bare `python triage.py` uses the script's own `DEFAULT_MAX_TICKETS` of `100`. Zendesk's search API caps a query at 1000 results, so higher values don't fetch more |
 | `--batch-size`         | flag             | `400`                                                   | Split batches larger than this across multiple requests |
 | `--review-star-floor`  | flag             | `3`                                                     | Classify app-store reviews at or below N stars; count the rest |
 | `--include-positive-reviews` | flag       | off                                                     | Classify every review, including 4-5★ ones |
 | `--no-hydrate`         | flag             | off                                                     | Skip fetching comments for content-free tickets |
 | `--effort`             | flag             | `medium`                                                | Claude reasoning effort (`low`–`max`) |
+
+> **Why an alias and not a pinned model id:** the alias is resolved at run time against whatever the authenticated plan allows, so a new Opus release needs no edit here, and a plan without Opus access falls back rather than failing on an id it can't serve. Pin a full id (`claude-opus-4-8`) only when you need a specific version — for reproducing a past run, say.
 
 #### Batch size vs. ticket cap
 
