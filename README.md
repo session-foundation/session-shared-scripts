@@ -131,8 +131,25 @@ Two caveats worth knowing:
 | `ZENDESK_SUBDOMAIN`   | Zendesk subdomain (`mycompany` → `mycompany.zendesk.com`) |
 | `ZENDESK_EMAIL`       | Agent email used for Zendesk API-token auth             |
 | `ZENDESK_API_TOKEN`   | Zendesk API token                                       |
-| `ANTHROPIC_API_KEY`   | Claude API key                                          |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Claude subscription OAuth token — see [Claude authentication](#claude-authentication) |
 | `DISCORD_WEBHOOK_URL` | Discord webhook (reused from the failure-notification setup) |
+
+### Claude Authentication
+
+Classification runs through Claude Code (`--backend claude-cli`), not the Anthropic API, so the job authenticates with a **subscription OAuth token** rather than an API key. Generate one on a machine where you're logged into Claude Code:
+
+```
+claude setup-token
+```
+
+It runs the browser authorization flow and prints the token once — it is not saved anywhere. Store it as the `CLAUDE_CODE_OAUTH_TOKEN` repo secret. Requires a Pro, Max, Team, or Enterprise plan; see [Generate a long-lived token](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token).
+
+Four things worth knowing before you rely on it:
+
+- **The token lasts one year.** It expires silently from the workflow's point of view — the run just fails to authenticate. Put the renewal date somewhere you'll see it.
+- **Never add `ANTHROPIC_API_KEY` to that step.** An API key [outranks the OAuth token](https://code.claude.com/docs/en/authentication#authentication-precedence) in Claude Code's credential precedence, and in `-p` mode a key that is present is always used — so the job would quietly bill the API instead of the subscription.
+- **Runs draw on that subscription's usage limits**, not API credits, and the token is tied to whoever minted it. A scheduled run competes with that person's own interactive Claude Code usage, and hitting a limit fails the run (the tickets stay eligible and get picked up by the next one, per the dedup rules above). Anthropic's own guidance is to use an API key for a secret shared across an org for exactly this reason.
+- **The CLI must be v2.1.205 or newer** for `--json-schema`. The workflow installs the `stable` channel and echoes `claude --version` into the run log, because the script's "no structured_output" error points here.
 
 ### Optional Configuration
 
@@ -219,10 +236,10 @@ export ZENDESK_SUBDOMAIN=... ZENDESK_EMAIL=... ZENDESK_API_TOKEN=... ANTHROPIC_A
 python zendesk_triage/triage.py --window-hours 48 --dry-run
 ```
 
-No `ANTHROPIC_API_KEY`? Two debug backends skip the Anthropic API entirely:
+Locally, `--backend claude-cli` needs no token at all — it reuses your own Claude Code login:
 
 ```
-# classify via the local `claude` CLI (authenticates as Claude Code)
+# what CI runs: classify through Claude Code
 python zendesk_triage/triage.py --backend claude-cli --window-hours 48 --dry-run
 
 # or dump the batch, classify it by hand, and feed the findings back
@@ -230,7 +247,10 @@ python zendesk_triage/triage.py --dump-batch /tmp/batch.json --window-hours 48
 python zendesk_triage/triage.py --backend file --findings /tmp/findings.json --dry-run
 ```
 
-The `claude-cli` backend has no structured-output enforcement, so its field values are looser than the API path's (e.g. `"en"` where the schema asks for `"English"`), and each invocation carries ~25K tokens of Claude Code system-prompt overhead. Use it for debugging, not for scheduled runs.
+Two properties of the `claude-cli` backend to keep in mind:
+
+- Each invocation carries ~25K tokens of Claude Code system-prompt overhead on top of the batch, so the per-run cost is dominated by that on small windows. It's one invocation per chunk, not per ticket — a typical 48h window is a single call.
+- **Do not add `--bare`.** It's otherwise the right flag for a scripted call (it skips hook, plugin, MCP and `CLAUDE.md` discovery, so the runner behaves the same as your laptop), but bare mode reads `ANTHROPIC_API_KEY` or an `apiKeyHelper` **only** — it never touches OAuth credentials, which is exactly what both CI and your local login use. See [bare mode](https://code.claude.com/docs/en/headless#start-faster-with-bare-mode); the docs say it will become the default for `-p` in a future release, so this is worth re-checking on CLI upgrades.
 
 ## Workflow Failure Notificaiton
 

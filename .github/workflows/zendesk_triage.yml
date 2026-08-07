@@ -55,6 +55,20 @@ jobs:
       - name: Install dependencies
         run: pip install -r zendesk_triage/requirements.txt
 
+      # Classification runs through Claude Code, not the Anthropic API, so the job
+      # authenticates with a subscription OAuth token instead of an API key. The
+      # `stable` channel is ~a week behind `latest` and skips releases with known
+      # major regressions, which is what a scheduled job wants; the version is
+      # echoed because a CLI older than v2.1.205 ignores --json-schema and the
+      # script's error for that names this line.
+      - name: Install Claude Code
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash -s stable
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Report Claude Code version
+        run: claude --version
+
       # Unique key so every run writes a fresh entry; the restore-keys prefix pulls
       # in the most recent previous one. run_attempt is in the key because cache
       # entries are immutable: a re-run reuses run_id, so without it attempt 2's save
@@ -97,18 +111,25 @@ jobs:
           fi
           echo "Window: ${window}h, max tickets: ${max}"
 
+      # ANTHROPIC_API_KEY is deliberately absent: it outranks the OAuth token in
+      # Claude Code's credential precedence, and in -p mode a key that is present is
+      # always used — so setting it here would silently bill the API instead.
+      # DISABLE_AUTOUPDATER keeps the CLI from downloading a new version mid-run,
+      # so the version echoed above is the one that actually classifies.
       - name: Run triage
         env:
           ZENDESK_SUBDOMAIN: ${{ secrets.ZENDESK_SUBDOMAIN }}
           ZENDESK_EMAIL: ${{ secrets.ZENDESK_EMAIL }}
           ZENDESK_API_TOKEN: ${{ secrets.ZENDESK_API_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          DISABLE_AUTOUPDATER: "1"
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           ZENDESK_QUERY: ${{ github.event.inputs.query }}
           ZENDESK_TRIAGE_MODEL: ${{ vars.ZENDESK_TRIAGE_MODEL }}
         run: |
           mkdir -p .triage-state
           python zendesk_triage/triage.py \
+            --backend claude-cli \
             --window-hours "${{ steps.cfg.outputs.window }}" \
             --max-tickets "${{ steps.cfg.outputs.max }}" \
             --state .triage-state/seen.json
