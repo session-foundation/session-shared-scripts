@@ -103,7 +103,7 @@ jobs:
           ZENDESK_EMAIL: ${{ secrets.ZENDESK_EMAIL }}
           ZENDESK_API_TOKEN: ${{ secrets.ZENDESK_API_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ZENDESK_DISCORD_WEBHOOK_URL: ${{ secrets.ZENDESK_DISCORD_WEBHOOK_URL }}
           ZENDESK_QUERY: ${{ github.event.inputs.query }}
           ZENDESK_TRIAGE_MODEL: ${{ vars.ZENDESK_TRIAGE_MODEL }}
         run: |

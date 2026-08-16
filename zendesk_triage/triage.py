@@ -28,7 +28,10 @@ Config (env vars, or flags for local runs):
     ZENDESK_EMAIL         agent email for API token auth
     ZENDESK_API_TOKEN     Zendesk API token
     ANTHROPIC_API_KEY     Claude API key (read by the SDK itself)
-    DISCORD_WEBHOOK_URL   Discord incoming webhook (not needed with --dry-run)
+    ZENDESK_DISCORD_WEBHOOK_URL
+                          Discord incoming webhook for the triage channel, which is
+                          its own webhook rather than the shared DISCORD_WEBHOOK_URL
+                          the failure notifier uses (not needed with --dry-run)
     ZENDESK_QUERY         (optional) Zendesk search query; see DEFAULT_QUERY
     ZENDESK_TRIAGE_MODEL  (optional) Claude model id or alias; defaults to
                           claude-opus-5. Set it to override, e.g. `sonnet` for a
@@ -1000,7 +1003,7 @@ def main():
     parser.add_argument("--subdomain", help="Zendesk subdomain (else ZENDESK_SUBDOMAIN).")
     parser.add_argument("--email", help="Zendesk agent email (else ZENDESK_EMAIL).")
     parser.add_argument("--api-token", help="Zendesk API token (else ZENDESK_API_TOKEN).")
-    parser.add_argument("--webhook", help="Discord webhook URL (else DISCORD_WEBHOOK_URL).")
+    parser.add_argument("--webhook", help="Discord webhook URL (else ZENDESK_DISCORD_WEBHOOK_URL).")
     parser.add_argument("--query", help="Zendesk search query (else ZENDESK_QUERY, else default). "
                                         "Takes precedence over --window-hours.")
     parser.add_argument("--window-hours", type=int, metavar="N",
@@ -1047,7 +1050,7 @@ def main():
     subdomain = get_env("ZENDESK_SUBDOMAIN", args.subdomain)
     # A dump exits before rendering anything, so it never needs the webhook either.
     needs_webhook = not (args.dry_run or args.dump_batch)
-    webhook = get_env("DISCORD_WEBHOOK_URL", args.webhook, required=needs_webhook)
+    webhook = get_env("ZENDESK_DISCORD_WEBHOOK_URL", args.webhook, required=needs_webhook)
     model = args.model or os.environ.get("ZENDESK_TRIAGE_MODEL") or DEFAULT_MODEL
 
     stats = {}

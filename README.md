@@ -146,7 +146,7 @@ Two caveats worth knowing:
 | `ZENDESK_EMAIL`       | Agent email used for Zendesk API-token auth             |
 | `ZENDESK_API_TOKEN`   | Zendesk API token                                       |
 | `ANTHROPIC_API_KEY`   | Claude API key — see [Claude authentication](#claude-authentication) |
-| `DISCORD_WEBHOOK_URL` | Discord webhook (reused from the failure-notification setup) |
+| `ZENDESK_DISCORD_WEBHOOK_URL` | Discord webhook for the triage channel. Deliberately its own secret, not the `DISCORD_WEBHOOK_URL` the failure notifier and Crowdin report share — a Discord webhook is bound to the channel it was created in, so pointing triage elsewhere means a separate webhook. Note that triage *failures* still go to `DISCORD_WEBHOOK_URL` via the failure-notification workflow |
 
 ### Claude Authentication
 
