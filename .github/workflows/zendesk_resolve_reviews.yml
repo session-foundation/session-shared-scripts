@@ -7,6 +7,10 @@ name: Zendesk Resolve Positive Reviews
 # No state file is needed — a solved ticket drops out of the query, so runs are
 # idempotent and the first few drain the backlog before the schedule just keeps pace.
 #
+# An applied run reports its tally to the same Discord channel as the daily triage,
+# so a job that bulk-edits tickets is visible where the tickets are discussed. A dry
+# run posts nothing, and neither does a run that solved nothing.
+#
 # ⚠️  This workflow writes to Zendesk. A scheduled run always applies; a manual run
 #     is a dry run unless you tick `apply`. Solving a ticket can fire triggers and
 #     automations (satisfaction surveys among them), so read the warning in
@@ -76,6 +80,9 @@ jobs:
           ZENDESK_SUBDOMAIN: ${{ secrets.ZENDESK_SUBDOMAIN }}
           ZENDESK_EMAIL: ${{ secrets.ZENDESK_EMAIL }}
           ZENDESK_API_TOKEN: ${{ secrets.ZENDESK_API_TOKEN }}
+          # Only read on an applied run; the script requires it before it solves
+          # anything, so a missing secret fails the run instead of losing the report.
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           python zendesk_triage/resolve_reviews.py \
             ${{ steps.cfg.outputs.flags }} \

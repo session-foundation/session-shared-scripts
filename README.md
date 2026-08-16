@@ -283,9 +283,20 @@ Solving a ticket fires triggers and automations, and an AppFollow requester may 
 
 No state file: a solved ticket drops out of the query, so runs are idempotent. Zendesk's search API caps at 1,000 results, so a run can never see more than that — the first few runs work the backlog down and after that the weekly schedule comfortably clears the ~420 reviews a week that arrive. `update_many` takes [100 ids per request](https://developer.zendesk.com/api-reference/ticketing/tickets/tickets/#update-many-tickets) and is asynchronous, so each batch's job is polled to completion and per-ticket failures fail the run rather than being reported as success.
 
+### What it posts
+
+An applied run reports its tally to the same Discord channel as the daily triage, so a job that bulk-edits tickets is visible where those tickets are already discussed:
+
+> ✅ Marked **12** 4★ and **31** 5★ app-store reviews as solved in Zendesk.
+> 📥 **4,769** more tickets match than this run looked at; the next run picks them up.
+
+The rating split is the point — a bare total wouldn't say which reviews went. The tally counts the ids each bulk job **confirmed**, not the ids submitted, so the number is what Zendesk actually changed; a batch with per-ticket failures adds a line saying so, next to the count it contradicts. The leftover line appears only while there's a backlog left to drain.
+
+A run that solved nothing posts nothing — a weekly "0 reviews" message is noise the channel learns to skip, and that's exactly what a drained backlog would produce every week. A dry run prints the message it would have posted instead of posting it, and `--no-discord` solves without reporting. The message is a tally rather than a per-ticket list, so unlike the triage digest it can't spill into a second message.
+
 ### Required Secrets
 
-`ZENDESK_SUBDOMAIN`, `ZENDESK_EMAIL`, `ZENDESK_API_TOKEN` — the same three the triage uses. No Claude or Discord credentials: it posts nothing.
+`ZENDESK_SUBDOMAIN`, `ZENDESK_EMAIL`, `ZENDESK_API_TOKEN` — the same three the triage uses — plus `DISCORD_WEBHOOK_URL`, the same webhook the triage posts to. No Claude credentials: it classifies nothing. The webhook is resolved before the run fetches anything, so a missing secret stops it rather than letting it bulk-edit tickets it then can't report; a dry run doesn't need one.
 
 ### Schedule
 

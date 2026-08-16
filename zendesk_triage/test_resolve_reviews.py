@@ -174,7 +174,7 @@ class TestWaitForJob(unittest.TestCase):
         ])
         with NoSleep():
             solved, failures = resolve_reviews.wait_for_job(session, "acme", "job1")
-        self.assertEqual((solved, failures), (1, []))
+        self.assertEqual((solved, failures), ([1], []))
         self.assertEqual(len(session.calls), 3)
 
     def test_per_ticket_failures_are_surfaced(self):
@@ -185,14 +185,25 @@ class TestWaitForJob(unittest.TestCase):
         ])])
         with NoSleep():
             solved, failures = resolve_reviews.wait_for_job(session, "acme", "job1")
-        self.assertEqual(solved, 1)
+        self.assertEqual(solved, [1])
         self.assertEqual([f["id"] for f in failures], [2])
 
     def test_a_failed_job_still_reports_its_results(self):
         session = FakeSession([self.job("failed", [{"id": 1, "error": "boom"}])])
         with NoSleep():
             solved, failures = resolve_reviews.wait_for_job(session, "acme", "job1")
-        self.assertEqual((solved, len(failures)), (0, 1))
+        self.assertEqual((solved, len(failures)), ([], 1))
+
+    def test_a_result_without_an_id_is_not_counted_as_solved(self):
+        """It can't be attributed to a ticket, so it can't be tallied by rating —
+        undercounting beats a summary that claims tickets it can't name."""
+        session = FakeSession([self.job("completed", [
+            {"id": 1, "status": "Updated"},
+            {"status": "Updated"},
+        ])])
+        with NoSleep():
+            solved, failures = resolve_reviews.wait_for_job(session, "acme", "job1")
+        self.assertEqual((solved, failures), ([1], []))
 
     def test_a_job_that_never_finishes_exits(self):
         session = FakeSession([self.job("working") for _ in range(50)])
@@ -205,6 +216,78 @@ class TestWaitForJob(unittest.TestCase):
         with NoSleep():
             with self.assertRaises(SystemExit):
                 resolve_reviews.wait_for_job(session, "acme", "job1")
+
+
+class TestSummaryMessage(unittest.TestCase):
+    def test_tally_splits_by_rating(self):
+        counts = resolve_reviews.tally_by_stars(
+            [review(1, stars=5), review(2, stars=4), review(3, stars=5)])
+        self.assertEqual(counts, {5: 2, 4: 1})
+
+    def test_ratings_read_in_ascending_order(self):
+        self.assertEqual(resolve_reviews.format_tally({5: 31, 4: 12}),
+                         "**12** 4★ and **31** 5★")
+
+    def test_a_single_rating_needs_no_conjunction(self):
+        self.assertEqual(resolve_reviews.format_tally({5: 3}), "**3** 5★")
+
+    def test_the_message_says_what_was_marked_resolved(self):
+        message = resolve_reviews.build_message({4: 12, 5: 31})
+        self.assertEqual(
+            message,
+            "✅ Marked **12** 4★ and **31** 5★ app-store reviews as solved in Zendesk.")
+
+    def test_one_review_is_not_reviews(self):
+        self.assertIn("**1** 5★ app-store review as solved",
+                      resolve_reviews.build_message({5: 1}))
+
+    def test_large_counts_are_grouped_for_reading(self):
+        self.assertIn("**1,204** 5★", resolve_reviews.build_message({5: 1204}))
+
+    def test_a_run_that_solved_nothing_says_nothing(self):
+        """A weekly "0 reviews" post is noise the channel learns to skip."""
+        self.assertIsNone(resolve_reviews.build_message({}))
+
+    def test_failures_are_reported_next_to_the_count_they_contradict(self):
+        message = resolve_reviews.build_message({5: 2}, failures=3)
+        self.assertIn("**2** 5★", message)
+        self.assertIn("**3** tickets failed to update", message)
+
+    def test_failures_alone_still_post(self):
+        message = resolve_reviews.build_message({}, failures=1)
+        self.assertIn("**1** ticket failed to update", message)
+        self.assertNotIn("Marked", message)
+
+    def test_the_leftover_line_appears_only_when_there_is_a_leftover(self):
+        self.assertNotIn("📥", resolve_reviews.build_message({5: 2}))
+        self.assertIn("**4,769** more tickets match",
+                      resolve_reviews.build_message({5: 2}, remaining=4769))
+
+    def test_a_dry_run_message_is_hypothetical(self):
+        message = resolve_reviews.build_message({5: 2}, dry_run=True)
+        self.assertIn("Would mark", message)
+        self.assertNotIn("Marked", message)
+
+    def test_the_message_fits_one_discord_post(self):
+        """No chunking here, unlike the triage — a tally can't grow into a second
+        message, and this proves the worst case stays inside the cap."""
+        message = resolve_reviews.build_message({4: 999999, 5: 999999},
+                                                remaining=999999, failures=999999)
+        self.assertLess(len(message), triage.MAX_MESSAGE_CHARS)
+
+    def test_the_summary_does_not_reuse_the_zendesk_session(self):
+        """That session carries the API-token auth header; Discord must not see it."""
+        posted = []
+        original = triage.post_to_discord
+        triage.post_to_discord = lambda session, url, messages: (
+            posted.append((session, url, messages)) or len(messages))
+        try:
+            self.assertTrue(resolve_reviews.post_summary("https://hook", "hi"))
+        finally:
+            triage.post_to_discord = original
+        session, url, messages = posted[0]
+        self.assertIsNone(session.auth)
+        self.assertEqual((url, messages), ("https://hook", [{"content": "hi"}]))
 
 
 class TestSharedDetectionIsNotReimplemented(unittest.TestCase):
