@@ -99,7 +99,7 @@ Each line leads with a severity marker, a category emoji and a platform icon, li
 
 ```
 🗂️ **Zendesk triage** — analyzed **16** of **46** tickets in the window (created in the past 2 days). Skipped **30** positive app-store review(s).
-Backlog: **5,680** unsolved tickets in total (not triaged).
+Backlog: **428** unsolved excluding app-store reviews (**5,252** more are reviews, not triaged).
 **9** worth looking into.
 ⭐ **6** · 🐛 **3** · ❓ **2** · 🔑 **1** · ⚖️ **1** · 🔒 **1**
 Likely duplicates: **push-notifications-not-delivered** ×5 (#27637, #27610, #27606, #27605)
@@ -115,7 +115,7 @@ Likely duplicates: **push-notifications-not-delivered** ×5 (#27637, #27610, #27
 | Category | The emoji from `CATEGORY_SPECS`, so it matches the tally line |
 | Platform | 🤖 Android · 🍎 iOS · 🖥️ desktop (all three) · 🌐 multiple · ❔ unknown |
 
-The header accounts for the batch in full, so nothing is dropped silently. An abuse report also carries the reported Session ID on its line, since that is the actionable part and it saves opening the ticket.
+The header accounts for the batch in full, so nothing is dropped silently. The backlog line deliberately **excludes app-store reviews**: 92% of unsolved tickets are AppFollow reviews, so the unqualified number reads as roughly 13× the queue that actually needs a human (5,680 against 428). Both counts come from Zendesk's count-only search endpoint, one request each and both best-effort — if the review-excluded count fails, the line falls back to the plain total rather than disappearing. An abuse report also carries the reported Session ID on its line, since that is the actionable part and it saves opening the ticket.
 
 **Plain message content, no embeds.** The lines carry their own structure, so an embed added a border and nothing else. The cost is the character budget: Discord caps message content at 2,000 against an embed description's 4,096, and a masked link on the id spends 54 characters that the reader never sees. A real 9-highlight day comes to ~2,400 characters, so it arrives as two messages. Lines are clipped (`SUMMARY_CHARS`, `ROOT_CAUSE_CHARS`) and chunked against 2,000, counting the newlines that join them; each message records which ticket ids it accounts for, which is what makes a partial post failure recoverable.
 
@@ -258,6 +258,51 @@ python zendesk_triage/triage.py --window-hours 12 --max-tickets 5 --dry-run
 python zendesk_triage/triage.py --dump-batch /tmp/batch.json --window-hours 48
 python zendesk_triage/triage.py --findings /tmp/findings.json --dry-run
 ```
+
+## Zendesk Resolve Positive Reviews
+
+Weekly counterpart to the triage: it solves the 4-5★ AppFollow reviews that were never going to be actioned, so the unsolved backlog reflects work that actually exists. When this was written **5,253** reviews were unsolved — **4,812** of them still `new` — against **428** non-review unsolved tickets. Solving reviews was already being done by hand: **4,959** were already solved or closed.
+
+> ⚠️ **This workflow writes to Zendesk.** A scheduled run always applies. A manual run is a **dry run** unless you tick `apply`, so the dispatch button cannot solve tickets by accident. Read the warning at the top of [resolve_reviews.py](zendesk_triage/resolve_reviews.py) before the first applied run.
+
+### What it will and will not touch
+
+Deliberately narrow, because a mis-aimed bulk status change is not recoverable by re-running:
+
+- **App-store reviews only**, by the same detection the triage uses — `triage.is_store_review`, so the two can't drift apart. Every fetched ticket is re-checked locally, since the query can't express the rating.
+- **Rated 4★ or better.** A fixed floor (`MIN_STARS`), not a flag — 3★ and below are what the triage reads as bug reports in disguise, so a lower floor would have this job close the reviews most worth looking at. A review whose stars can't be parsed from the subject is skipped, never solved.
+- **`new` only** — untouched reviews. The other 441 unsolved reviews are `open`, and every one of a 100-ticket sample had an assignee, a group, and an `updated_at` past its `created_at`: something already acted on them, so a bulk status change has no business there. There is deliberately no flag to widen this.
+- **`solved`, never `closed`.** Solved is reversible; closed is not.
+- **Tagged** `auto-resolved-review`, so they stay identifiable and a trigger can exclude them, and annotated with a **private** note — a public comment would email the person who wrote the review.
+
+### Before the first applied run
+
+Solving a ticket fires triggers and automations, and an AppFollow requester may carry a real email address. **A satisfaction survey trigger would email thousands of app-store reviewers.** Check Admin Center → Objects and rules → Business rules first, then do the first applied run with `--max-tickets 5` so the effects are observable before they're bulk.
+
+### How it drains
+
+No state file: a solved ticket drops out of the query, so runs are idempotent. Zendesk's search API caps at 1,000 results, so a run can never see more than that — the first few runs work the backlog down and after that the weekly schedule comfortably clears the ~420 reviews a week that arrive. `update_many` takes [100 ids per request](https://developer.zendesk.com/api-reference/ticketing/tickets/tickets/#update-many-tickets) and is asynchronous, so each batch's job is polled to completion and per-ticket failures fail the run rather than being reported as success.
+
+### What it posts
+
+An applied run reports its tally to the same Discord channel as the daily triage, so a job that bulk-edits tickets is visible where those tickets are already discussed:
+
+> ✅ Marked **12** 4★ and **31** 5★ app-store reviews as solved in Zendesk.
+> 📥 **4,769** more tickets match than this run looked at; the next run picks them up.
+
+The rating split is the point — a bare total wouldn't say which reviews went. The tally counts the ids each bulk job **confirmed**, not the ids submitted, so the number is what Zendesk actually changed; a batch with per-ticket failures adds a line saying so, next to the count it contradicts. The leftover line appears only while there's a backlog left to drain.
+
+A run that solved nothing posts nothing — a weekly "0 reviews" message is noise the channel learns to skip, and that's exactly what a drained backlog would produce every week. A dry run prints the message it would have posted instead of posting it, and `--no-discord` solves without reporting. The message is a tally rather than a per-ticket list, so unlike the triage digest it can't spill into a second message.
+
+### Required Secrets
+
+`ZENDESK_SUBDOMAIN`, `ZENDESK_EMAIL`, `ZENDESK_API_TOKEN` — the same three the triage uses — plus `ZENDESK_DISCORD_WEBHOOK_URL`, the triage channel's own webhook, so the tally lands next to the digests it accounts for. Not the shared `DISCORD_WEBHOOK_URL`: a webhook is bound to the channel it was created in, and this job's *failures* still go there via the failure-notification workflow. No Claude credentials: it classifies nothing.
+
+The webhook is resolved before the run fetches anything, so a missing secret stops it rather than letting it bulk-edit tickets it then can't report; a dry run doesn't need one.
+
+### Schedule
+
+Mondays at 05:00 UTC. Failures are reported through the Discord failure-notification workflow, which watches this workflow by name — renaming `Zendesk Resolve Positive Reviews` means updating the `workflows:` list in [`notify_failure.yml`](.github/workflows/notify_failure.yml) too.
 
 ## Workflow Failure Notificaiton
 

@@ -344,8 +344,18 @@ class TestHeader(unittest.TestCase):
     def test_omits_the_skip_line_when_nothing_was_skipped(self):
         self.assertNotIn("Skipped", self.header([finding(1)], {"skipped_unchanged": 0}))
 
-    def test_reports_the_untriaged_backlog_with_thousands_separators(self):
-        text = self.header([finding(1)], {"total_unsolved": 5609})
+    def test_reports_the_backlog_excluding_store_reviews(self):
+        """The unqualified number is ~13x the queue that needs a human, because 92%
+        of unsolved tickets are AppFollow reviews."""
+        text = self.header([finding(1)], {"total_unsolved": 5680,
+                                          "total_unsolved_non_review": 428})
+        self.assertIn("Backlog: **428** unsolved excluding app-store reviews", text)
+        self.assertIn("**5,252** more are reviews", text)
+
+    def test_falls_back_to_the_total_when_the_review_count_is_unavailable(self):
+        """Both counts are best-effort; losing one must not lose the whole line."""
+        text = self.header([finding(1)], {"total_unsolved": 5609,
+                                          "total_unsolved_non_review": None})
         self.assertIn("Backlog: **5,609** unsolved tickets in total", text)
 
     def test_omits_the_backlog_line_when_the_count_is_unavailable(self):
@@ -1034,6 +1044,19 @@ class TestFetchTickets(unittest.TestCase):
         session = FakeSession([FakeResponse({"error": "invalid"}, status_code=422)])
         with self.assertRaises(SystemExit):
             triage.fetch_tickets(session, "acme", "q", 100)
+
+
+class TestBacklogQueries(unittest.TestCase):
+    def test_the_non_review_query_is_the_backlog_minus_the_review_channel(self):
+        self.assertTrue(triage.BACKLOG_NON_REVIEW_QUERY.startswith(triage.BACKLOG_QUERY))
+        self.assertIn(f"-via:{triage.REVIEW_CHANNEL}", triage.BACKLOG_NON_REVIEW_QUERY)
+
+    def test_the_counter_honours_the_query_it_is_given(self):
+        session = FakeSession([FakeResponse({"count": 428})])
+        count = triage.fetch_total_unsolved(session, "acme", triage.BACKLOG_NON_REVIEW_QUERY)
+        self.assertEqual(count, 428)
+        self.assertEqual(session.calls[0][2]["params"]["query"],
+                         triage.BACKLOG_NON_REVIEW_QUERY)
 
 
 class TestFetchTotalUnsolved(unittest.TestCase):
