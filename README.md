@@ -296,7 +296,9 @@ A run that solved nothing posts nothing — a weekly "0 reviews" message is nois
 
 ### Required Secrets
 
-`ZENDESK_SUBDOMAIN`, `ZENDESK_EMAIL`, `ZENDESK_API_TOKEN` — the same three the triage uses — plus `DISCORD_WEBHOOK_URL`, the same webhook the triage posts to. No Claude credentials: it classifies nothing. The webhook is resolved before the run fetches anything, so a missing secret stops it rather than letting it bulk-edit tickets it then can't report; a dry run doesn't need one.
+`ZENDESK_SUBDOMAIN`, `ZENDESK_EMAIL`, `ZENDESK_API_TOKEN` — the same three the triage uses — plus `ZENDESK_DISCORD_WEBHOOK_URL`, the triage channel's own webhook, so the tally lands next to the digests it accounts for. Not the shared `DISCORD_WEBHOOK_URL`: a webhook is bound to the channel it was created in, and this job's *failures* still go there via the failure-notification workflow. No Claude credentials: it classifies nothing.
+
+The webhook is resolved before the run fetches anything, so a missing secret stops it rather than letting it bulk-edit tickets it then can't report; a dry run doesn't need one.
 
 ### Schedule
 

@@ -80,9 +80,11 @@ jobs:
           ZENDESK_SUBDOMAIN: ${{ secrets.ZENDESK_SUBDOMAIN }}
           ZENDESK_EMAIL: ${{ secrets.ZENDESK_EMAIL }}
           ZENDESK_API_TOKEN: ${{ secrets.ZENDESK_API_TOKEN }}
-          # Only read on an applied run; the script requires it before it solves
-          # anything, so a missing secret fails the run instead of losing the report.
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          # The triage channel's webhook, the same one the daily digest posts to, not
+          # the shared DISCORD_WEBHOOK_URL the failure notifier uses. Only read on an
+          # applied run, and required before the script solves anything, so a missing
+          # secret fails the run instead of losing the report.
+          ZENDESK_DISCORD_WEBHOOK_URL: ${{ secrets.ZENDESK_DISCORD_WEBHOOK_URL }}
         run: |
           python zendesk_triage/resolve_reviews.py \
             ${{ steps.cfg.outputs.flags }} \

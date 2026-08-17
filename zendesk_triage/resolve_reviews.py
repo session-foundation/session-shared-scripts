@@ -41,7 +41,11 @@ Config (env vars, or flags for local runs):
     ZENDESK_SUBDOMAIN     e.g. "mycompany"  -> https://mycompany.zendesk.com
     ZENDESK_EMAIL         agent email for API token auth
     ZENDESK_API_TOKEN     Zendesk API token
-    DISCORD_WEBHOOK_URL   Discord incoming webhook (only needed with --apply)
+    ZENDESK_DISCORD_WEBHOOK_URL
+                          Discord incoming webhook for the triage channel — the same
+                          one the daily digest posts to, not the shared
+                          DISCORD_WEBHOOK_URL the failure notifier uses (only needed
+                          with --apply)
 
 Usage:
     # report what would be solved, touch nothing (the default)
@@ -271,17 +275,23 @@ def main():
     parser.add_argument("--subdomain", help="Zendesk subdomain (else ZENDESK_SUBDOMAIN).")
     parser.add_argument("--email", help="Zendesk agent email (else ZENDESK_EMAIL).")
     parser.add_argument("--api-token", help="Zendesk API token (else ZENDESK_API_TOKEN).")
-    parser.add_argument("--webhook", help="Discord webhook URL (else DISCORD_WEBHOOK_URL).")
+    parser.add_argument("--webhook",
+                        help="Discord webhook URL (else ZENDESK_DISCORD_WEBHOOK_URL).")
     args = parser.parse_args()
 
     subdomain = triage.get_env("ZENDESK_SUBDOMAIN", args.subdomain)
     email = triage.get_env("ZENDESK_EMAIL", args.email)
     api_token = triage.get_env("ZENDESK_API_TOKEN", args.api_token)
+    # The triage channel's own webhook, the one the daily digest posts to — a Discord
+    # webhook is bound to the channel it was created in, so posting alongside the
+    # digest means using its secret rather than the shared DISCORD_WEBHOOK_URL.
+    #
     # Resolved up front, before anything is fetched or solved: a missing webhook
     # should stop the run rather than have it bulk-edit tickets it cannot report. A
     # dry run posts nothing, so it never needs one.
     needs_webhook = args.apply and not args.no_discord
-    webhook = triage.get_env("DISCORD_WEBHOOK_URL", args.webhook, required=needs_webhook)
+    webhook = triage.get_env("ZENDESK_DISCORD_WEBHOOK_URL", args.webhook,
+                             required=needs_webhook)
 
     session = triage.zendesk_session(email, api_token)
     query = build_query()
