@@ -63,11 +63,11 @@ Runs automatically every Monday at 00:00 UTC.
 
 ## Zendesk Ticket Triage
 
-Claude reviews recently-created unsolved Zendesk tickets via the API and posts a summary to Discord that links back to each original ticket and highlights the ones worth looking into. For each ticket it assigns a category, infers severity, guesses a likely root cause, identifies platform and app version, groups likely duplicates into clusters, and ranks by priority.
+Claude reviews recently-created unsolved Zendesk tickets fetched from the Zendesk API and posts a summary to Discord that links back to each original ticket and highlights the ones worth looking into. For each ticket it assigns a category, infers severity, guesses a likely root cause, identifies platform and app version, groups likely duplicates into clusters, and ranks by priority.
 
 ### Categories
 
-`CATEGORY_SPECS` in [triage.py](zendesk_triage/triage.py) is the single source of truth — the schema enum, the Discord labels, the urgency colours, and the prompt guidance are all derived from it, so adding a category is one edit.
+`CATEGORY_SPECS` in [triage.py](zendesk_triage/triage.py) is the single source of truth — the schema enum, the Discord labels and emoji, which categories count as urgent, and the prompt guidance are all derived from it, so adding a category is one edit.
 
 | Category | Notes |
 | --- | --- |
@@ -81,7 +81,7 @@ Claude reviews recently-created unsolved Zendesk tickets via the API and posts a
 | `positive_review` | 4-5★ review, no actionable content |
 | `feature_request`, `question`, `spam_or_solicitation`, `other` | |
 
-The first three are **urgent categories**: they are not bugs, so the model rates their severity `not_applicable`. Colouring by severity alone painted them the calmest blue and sorted them last, so category urgency wins — they render dark red, sort ahead of everything else, and cannot be pushed out of the digest by the display cap.
+The first three are **urgent categories**: they are not bugs, so the model rates their severity `not_applicable`. Marking by severity alone gave them the calmest marker and sorted them last, so category urgency wins — they lead their line with 🚨, sort ahead of everything else, and cannot be pushed out of the digest by the display cap.
 
 ### App-store review filtering
 
@@ -93,17 +93,31 @@ Detection uses the Zendesk `via.channel`, which identified reviews with no false
 
 Twitter DM tickets arrive with `description` identical to `subject` — both just `"Conversation with <handle>"` — which is 15% of non-review tickets and unclassifiable as fetched. For those only, `hydrate_descriptions` fetches a page of up to 10 comments and joins every body that differs from the subject into the description; later replies often carry the actual detail. Hydration is an enrichment, so an HTTP error or an unreachable endpoint leaves the ticket as-is rather than failing the run (`--no-hydrate` to skip it entirely).
 
-The script (`zendesk_triage/triage.py`) fetches the tickets in a rolling time window, sends the whole batch to Claude in one structured-output request, and posts Discord embeds: a summary embed plus one embed per highlighted ticket (linking to the ticket in Zendesk).
+The script (`zendesk_triage/triage.py`) fetches the tickets in a rolling time window, classifies the whole batch in one schema-enforced request to the Anthropic API, and posts a Discord digest: a short header, then one line per ticket worth looking into.
 
-The summary embed accounts for the batch in full, so nothing is dropped silently:
+Each line leads with a severity marker, a category emoji and a platform icon, links the ticket id, and carries the model's one-line summary plus its root-cause guess:
 
 ```
-Analyzed **2** of **47** tickets in the window (created in the past 2 days). Skipped **45** already reported and unchanged.
-Backlog: **5,609** unsolved tickets in total (not triaged).
-**1** worth looking into. 🔄 **1** changed since last reported.
+🗂️ **Zendesk triage** — analyzed **16** of **46** tickets in the window (created in the past 2 days). Skipped **30** positive app-store review(s).
+Backlog: **5,680** unsolved tickets in total (not triaged).
+**9** worth looking into.
+⭐ **6** · 🐛 **3** · ❓ **2** · 🔑 **1** · ⚖️ **1** · 🔒 **1**
+Likely duplicates: **push-notifications-not-delivered** ×5 (#27637, #27610, #27606, #27605)
+🚨 | ⚖️ | ❔ | #27632 · Police summons demanding user details for a Session ID
+🚨 | 🔒 | 🤖 | #27603 · Exported component lets another app obtain internal SharedPreferences | Likely cause: Improperly exported provider allowing external apps to trigger file sharing
+🟠 | ⭐ | 🍎 | #27610 · Messages not delivered for days; nothing shows even after opening | Likely cause: Push notification delivery / message retrieval failure
+🟠 | 🐛 | 🤖 | 🔄 #27605 · Message and call notifications only appear when the app is opened | Likely cause: Push notification service failure on Android
 ```
 
-> **Scope:** the window covers tickets *created* recently, so the long tail of older unsolved tickets is counted in the backlog line but not triaged. That is deliberate — the job is a new-ticket digest, not a backlog sweep.
+| Column | Values |
+| --- | --- |
+| Severity | 🔥 crash · 💥 data loss · 🟠 major · 🟡 minor · ⚪ cosmetic · ▫️ not applicable — replaced by 🚨 on the urgent categories |
+| Category | The emoji from `CATEGORY_SPECS`, so it matches the tally line |
+| Platform | 🤖 Android · 🍎 iOS · 🖥️ desktop (all three) · 🌐 multiple · ❔ unknown |
+
+The header accounts for the batch in full, so nothing is dropped silently. An abuse report also carries the reported Session ID on its line, since that is the actionable part and it saves opening the ticket.
+
+**Plain message content, no embeds.** The lines carry their own structure, so an embed added a border and nothing else. The cost is the character budget: Discord caps message content at 2,000 against an embed description's 4,096, and a masked link on the id spends 54 characters that the reader never sees. A real 9-highlight day comes to ~2,400 characters, so it arrives as two messages. Lines are clipped (`SUMMARY_CHARS`, `ROOT_CAUSE_CHARS`) and chunked against 2,000, counting the newlines that join them; each message records which ticket ids it accounts for, which is what makes a partial post failure recoverable.
 
 ### Deduplication
 
@@ -113,7 +127,7 @@ The daily window is 48h, so consecutive runs overlap. A state file (`--state`) r
 | ------ | ------- |
 | Not seen before | Analyzed and reported |
 | Seen, `updated_at` unchanged | **Skipped before the model call** — costs no tokens |
-| Seen, `updated_at` moved | Re-analyzed, reported, and flagged 🔄 in the embed title |
+| Seen, `updated_at` moved | Re-analyzed, reported, and flagged 🔄 on its line |
 
 State is written only on a real run, and only for tickets covered by messages Discord **accepted**. Each message carries the ticket ids it accounts for, so a partial failure records exactly what landed: already-posted messages aren't repeated next run, and undelivered tickets stay eligible. The run then exits non-zero. `--dry-run` never writes state.
 
@@ -131,8 +145,14 @@ Two caveats worth knowing:
 | `ZENDESK_SUBDOMAIN`   | Zendesk subdomain (`mycompany` → `mycompany.zendesk.com`) |
 | `ZENDESK_EMAIL`       | Agent email used for Zendesk API-token auth             |
 | `ZENDESK_API_TOKEN`   | Zendesk API token                                       |
-| `ANTHROPIC_API_KEY`   | Claude API key                                          |
-| `DISCORD_WEBHOOK_URL` | Discord webhook (reused from the failure-notification setup) |
+| `ANTHROPIC_API_KEY`   | Claude API key — see [Claude authentication](#claude-authentication) |
+| `ZENDESK_DISCORD_WEBHOOK_URL` | Discord webhook for the triage channel. Deliberately its own secret, not the `DISCORD_WEBHOOK_URL` the failure notifier and Crowdin report share — a Discord webhook is bound to the channel it was created in, so pointing triage elsewhere means a separate webhook. Note that triage *failures* still go to `DISCORD_WEBHOOK_URL` via the failure-notification workflow |
+
+### Claude Authentication
+
+Classification goes through the Anthropic API with an `ANTHROPIC_API_KEY`, in CI and locally alike — an organization-owned credential that doesn't draw on any individual's subscription quota.
+
+If you go looking for that key and can't find one: an API key only exists inside a **Claude Console organization** (`platform.claude.com`), which is a separate organization from a claude.ai Pro/Max/Team/Enterprise subscription, with its own membership and billing. A claude.ai admin console has no API keys in it at all, so the usual answer is that no Console organization exists yet rather than that you're missing a permission.
 
 ### Optional Configuration
 
@@ -142,13 +162,25 @@ Two caveats worth knowing:
 | `--state`              | flag             | *(unset)*                                               | Dedup state file. The workflow points this at the cached `.triage-state/seen.json` |
 | `--state-retention-days` | flag           | `30`                                                    | Forget state entries older than N days |
 | `ZENDESK_QUERY`        | env / `--query`  | *(unset)*                                               | Explicit Zendesk search query. Overrides `--window-hours` entirely |
-| `ZENDESK_TRIAGE_MODEL` | repo variable / `--model` | `claude-opus-4-8`                             | Set to a cheaper model (e.g. `claude-haiku-4-5`) to reduce cost on large batches |
+| `ZENDESK_TRIAGE_MODEL` | repo variable / `--model` | `claude-opus-5`                                         | Overrides the model. Takes a full id, or a shorthand (`opus`, `sonnet`, `haiku`) mapped to an id via `API_MODEL_ALIASES`. **Leave it unset for normal operation** — the default lives in the script so there's one place to change it |
+| `--findings`           | flag             | *(unset)*                                               | Render a findings JSON classified elsewhere, skipping Zendesk and Claude entirely. Pairs with `--dump-batch` |
 | `--max-tickets`        | workflow input / flag | `1000` (workflow) / `100` (flag)                   | Runaway guard on tickets analyzed per run, **not** a batch size. The workflow passes `1000`; a bare `python triage.py` uses the script's own `DEFAULT_MAX_TICKETS` of `100`. Zendesk's search API caps a query at 1000 results, so higher values don't fetch more |
 | `--batch-size`         | flag             | `400`                                                   | Split batches larger than this across multiple requests |
 | `--review-star-floor`  | flag             | `3`                                                     | Classify app-store reviews at or below N stars; count the rest |
 | `--include-positive-reviews` | flag       | off                                                     | Classify every review, including 4-5★ ones |
 | `--no-hydrate`         | flag             | off                                                     | Skip fetching comments for content-free tickets |
 | `--effort`             | flag             | `medium`                                                | Claude reasoning effort (`low`–`max`) |
+
+#### Why this model, and why pinned
+
+**Opus**, because the hard part of this job isn't per-ticket classification — enum-constrained categories with prompt guidance is squarely mid-tier work. It's the two batch-wide fields: `cluster` has to spot that a German app-store review and an English bug report describe one root cause, and `priority_rank` has to stay consistent across the whole batch. Those need the model to hold ~45 heterogeneous tickets in mind at once. The exact-transcription requirement (a 66-character Session ID copied verbatim) points the same way. And the entire job costs **single-digit dollars a month** on any current model — roughly $10 on Opus 5 against $6 on Sonnet 5 and $2 on Haiku 4.5 — so trading classification quality for a few dollars would be optimising the wrong thing when the cost of a miss is an unseen abuse report.
+
+**Pinned to an id rather than the `opus` alias**, because this is an unattended digest. An alias resolves to the newest Opus the credential allows, so severity calibration and cluster labels would shift on someone else's release schedule, with no run in between to notice it. Bumping the pin is a deliberate one-line change in [triage.py](zendesk_triage/triage.py) (`DEFAULT_MODEL`).
+
+Two cases for overriding it:
+
+- **Large backfills.** A `reset_state` run at `--max-tickets 1000` chunks into 400-ticket requests, where Opus latency and spend actually show up and cross-chunk cluster fidelity is already reduced by design. `ZENDESK_TRIAGE_MODEL=sonnet` for those.
+- **Never Fable 5.** It prices above Opus tier, targets long-horizon agentic reasoning, and requires 30-day data retention — all wrong for batch classification of support tickets.
 
 #### Batch size vs. ticket cap
 
@@ -157,7 +189,7 @@ These do different jobs, and conflating them is how you get a silently truncated
 - **`--max-tickets`** bounds how much of the Zendesk result set is fetched. At the workflow's 1000 it never binds on a 48h window (~45 tickets); it exists so a spam flood or a wide `reset_state` backfill can't run away. 1000 is also [Zendesk's own search result limit](https://developer.zendesk.com/api-reference/ticketing/ticket-management/search/#results-limit) — the API returns `422` for any page past it, so the fetch stops at 1000 regardless of what you pass, and reports the matched-vs-analyzed gap rather than failing.
 - **`--batch-size`** bounds how many tickets go into a *single* model request. Anything larger is split across requests and the findings are concatenated.
 
-The split is necessary because output tokens, not context, are the binding constraint. Measured on real tickets: **~118 input tokens and ~102 output tokens per ticket**, with adaptive thinking drawing from the same `max_tokens` budget.
+The split is necessary because output tokens, not context, are the binding constraint. Measured on real tickets: **~118 input tokens and ~102 output tokens per ticket**, with adaptive thinking drawing from the same output budget.
 
 | Batch | Input | Output needed | Fits in one request? |
 | ----- | ----- | ------------- | -------------------- |
@@ -165,7 +197,7 @@ The split is necessary because output tokens, not context, are the binding const
 | 400 (`--batch-size`) | ~47K | ~41K | Yes, with room for thinking |
 | 1000 (`--max-tickets`) | ~118K | ~102K | **No** — leaves only ~26K of the 128K output ceiling for thinking |
 
-If a single request ever does hit the ceiling, the script exits with that explicit reason rather than failing on an incomplete-JSON parse error.
+If a single request ever does hit the ceiling, the JSON never closes and no `structured_output` comes back — the script exits naming that and the `--batch-size` to lower, rather than rendering a digest that is silently short.
 
 > Chunking is per-request, so `cluster` labels and `priority_rank` are only meaningful within a chunk. Batches large enough to split are ones where completing at all matters more than cross-chunk cluster fidelity.
 
@@ -205,30 +237,27 @@ If you outgrow the cache's guarantees, the next step up is a private store (a pr
 python -m unittest discover -s zendesk_triage -v
 ```
 
-Offline tests covering the window arithmetic, dedup partitioning, state round-trip and pruning, corrupt-state degradation, Discord embed rendering and chunking, defensive JSON parsing, and the retry/pagination behaviour with a stub session. No secrets or network access needed. They run in CI on any push or PR touching `zendesk_triage/`.
+Offline tests covering the window arithmetic, dedup partitioning, state round-trip and pruning, corrupt-state degradation, Discord line rendering and message chunking, defensive JSON parsing, and the retry/pagination behaviour with a stub session. No secrets or network access needed. They run in CI on any push or PR touching `zendesk_triage/`.
 
 ### Local Testing
+
+Local runs use the same Anthropic API path as CI, so they need an `ANTHROPIC_API_KEY` alongside the Zendesk credentials. `--dry-run` prints the Discord payload instead of posting, so no webhook is needed:
 
 ```
 pip install -r zendesk_triage/requirements.txt
 export ZENDESK_SUBDOMAIN=... ZENDESK_EMAIL=... ZENDESK_API_TOKEN=... ANTHROPIC_API_KEY=...
 
-# fetch + analyze, print the Discord payload, post nothing
+# what CI runs, minus the Discord post and the state file
 python zendesk_triage/triage.py --window-hours 48 --dry-run
-```
 
-No `ANTHROPIC_API_KEY`? Two debug backends skip the Anthropic API entirely:
+# keep it cheap while iterating on the rendering
+python zendesk_triage/triage.py --window-hours 12 --max-tickets 5 --dry-run
 
-```
-# classify via the local `claude` CLI (authenticates as Claude Code)
-python zendesk_triage/triage.py --backend claude-cli --window-hours 48 --dry-run
-
-# or dump the batch, classify it by hand, and feed the findings back
+# or take the model out of the loop: dump the batch, classify it by hand,
+# and feed the findings back in to render
 python zendesk_triage/triage.py --dump-batch /tmp/batch.json --window-hours 48
-python zendesk_triage/triage.py --backend file --findings /tmp/findings.json --dry-run
+python zendesk_triage/triage.py --findings /tmp/findings.json --dry-run
 ```
-
-The `claude-cli` backend has no structured-output enforcement, so its field values are looser than the API path's (e.g. `"en"` where the schema asks for `"English"`), and each invocation carries ~25K tokens of Claude Code system-prompt overhead. Use it for debugging, not for scheduled runs.
 
 ## Workflow Failure Notificaiton
 

@@ -2,10 +2,10 @@
 """
 Daily Zendesk ticket triage with Claude, delivered to Discord.
 
-Fetches open Zendesk tickets (broad query by default, not just bugs), sends the
-whole batch to Claude in a single structured-output request, and posts a Discord
-summary that links back to each original ticket and highlights the ones worth
-looking into (crashes, data loss, legal requests, security/legislation, etc.).
+Fetches open Zendesk tickets (broad query by default, not just bugs), classifies the
+whole batch in one schema-enforced request, and posts a Discord summary that links
+back to each original ticket and highlights the ones worth looking into (crashes,
+data loss, legal requests, security/legislation, etc.).
 
 Because this repo is public, ticket content is never written to the job summary or
 anywhere public: in a normal run the only place ticket detail goes is the Discord
@@ -20,14 +20,22 @@ Categories Claude sorts each ticket into:
     bug_report | low_star_review | legal_request | security_or_legislation
     | question | feature_request | other
 
-Config (env vars, or CLI flags for local runs):
+Classification goes through the Anthropic API, with structured outputs enforcing
+SCHEMA. --findings skips it entirely and renders findings produced elsewhere.
+
+Config (env vars, or flags for local runs):
     ZENDESK_SUBDOMAIN     e.g. "mycompany"  -> https://mycompany.zendesk.com
     ZENDESK_EMAIL         agent email for API token auth
     ZENDESK_API_TOKEN     Zendesk API token
-    ANTHROPIC_API_KEY     Claude API key (read by the SDK automatically)
-    DISCORD_WEBHOOK_URL   Discord incoming webhook
+    ANTHROPIC_API_KEY     Claude API key (read by the SDK itself)
+    ZENDESK_DISCORD_WEBHOOK_URL
+                          Discord incoming webhook for the triage channel, which is
+                          its own webhook rather than the shared DISCORD_WEBHOOK_URL
+                          the failure notifier uses (not needed with --dry-run)
     ZENDESK_QUERY         (optional) Zendesk search query; see DEFAULT_QUERY
-    ZENDESK_TRIAGE_MODEL  (optional) Claude model id; defaults to claude-opus-4-8
+    ZENDESK_TRIAGE_MODEL  (optional) Claude model id or alias; defaults to
+                          claude-opus-5. Set it to override, e.g. `sonnet` for a
+                          large backfill.
 
 Usage:
     # real run (CI): reads everything from the environment
@@ -42,19 +50,16 @@ Usage:
     # or an explicit query, which overrides --window-hours
     python triage.py --query "type:ticket status:open tags:bug" --max-tickets 50
 
-    # local debugging without an ANTHROPIC_API_KEY: classify via the `claude` CLI
-    python triage.py --backend claude-cli --dry-run --max-tickets 20
-
-    # or split it in two: dump the batch, classify it by hand, feed it back
+    # split classification out entirely: dump the batch, classify it by hand,
+    # feed the findings back in to render
     python triage.py --dump-batch /tmp/batch.json --max-tickets 20
-    python triage.py --backend file --findings /tmp/findings.json --dry-run
+    python triage.py --findings /tmp/findings.json --dry-run
 """
 import argparse
 import json
 import math
 import os
 import re
-import subprocess
 import sys
 import textwrap
 import time
@@ -97,11 +102,27 @@ def window_label(hours):
         days = hours // 24
         return f"created in the past {days} day{'s' if days > 1 else ''}"
     return f"created in the past {hours}h"
-DEFAULT_MODEL = "claude-opus-4-8"
+# A pinned id rather than the `opus` alias, deliberately. This is an unattended
+# digest a human skims: the batch-wide fields (`cluster`, `priority_rank`) and the
+# severity calibration shift when the model underneath changes, and an alias would
+# move them on someone else's release schedule. Opus rather than a cheaper tier
+# because clustering asks the model to recognise one root cause across 45 tickets in
+# several languages, and the whole job costs single-digit dollars a month either way.
+# Bumping this is a one-line, deliberate change.
+DEFAULT_MODEL = "claude-opus-5"
+# Shorthands for the override, so ZENDESK_TRIAGE_MODEL=sonnet works for a big
+# backfill without anyone looking up an id. The API takes ids only, so they are
+# mapped here; each is the newest model in its family, and a full id passes through
+# untouched.
+API_MODEL_ALIASES = {
+    "opus": "claude-opus-5",
+    "sonnet": "claude-sonnet-5",
+    "haiku": "claude-haiku-4-5",
+}
 DEFAULT_MAX_TICKETS = 100
 DESCRIPTION_CHARS = 1500  # per-ticket description sent to Claude (triage only)
 # One classification runs ~100 output tokens per ticket, and adaptive thinking draws
-# from the same max_tokens budget. 400 keeps a chunk far under the 128K output
+# from the same output budget. 400 keeps a chunk far under the model's 128K output
 # ceiling; batches larger than this are split rather than truncated.
 DEFAULT_BATCH_SIZE = 400
 MAX_OUTPUT_TOKENS = 128000
@@ -114,47 +135,49 @@ MAX_OUTPUT_TOKENS = 128000
 # prompt never explains.
 #
 # Percentages come from a 3,662-ticket sample of the 13 months to 2026-08.
-# Columns: (name, Discord label, urgency colour or None, guidance for the model)
+# Columns: (name, Discord label, urgent, guidance for the model)
 CATEGORY_SPECS = (
-    ("abuse_report", "🚨 Abuse report", 0xC0392B,
+    ("abuse_report", "🚨 Abuse report", True,
      "One user reporting another account for illegal or abusive content (CSAM, "
      "harassment, drugs, impersonation). Usually quotes the offending Session ID. "
      "~11% of non-review tickets. Always set worth_looking_into."),
-    ("security_report", "🔒 Security report", 0xC0392B,
+    ("security_report", "🔒 Security report", True,
      "A vulnerability, exploit, or account-compromise disclosure. Not the same as a "
      "policy question. Always set worth_looking_into."),
-    ("legal_or_data_request", "⚖️ Legal / data request", 0xC0392B,
+    ("legal_or_data_request", "⚖️ Legal / data request", True,
      "GDPR or data-deletion request, subpoena, law-enforcement or court order. "
      "Always set worth_looking_into."),
-    ("bug_report", "🐞 Bug report", None,
+    ("bug_report", "🐛 Bug report", False,
      "Something in the app is broken or misbehaving."),
-    ("account_access", "🔑 Account access", None,
+    ("account_access", "🔑 Account access", False,
      "Lost recovery phrase, locked out, or asking to restore an account. Usually "
      "irreversible by design, but track the volume."),
-    ("policy_question", "📜 Policy question", None,
+    ("policy_question", "📜 Policy question", False,
      "Questions about law, regulation, or policy — 'Chat Control', encryption "
      "backdoors, whether Session complies with something."),
-    ("low_star_review", "⭐ Low-star review", None,
+    ("low_star_review", "⭐ Low-star review", False,
      "An app-store review of 3 stars or fewer. These often hide a real bug — put "
      "the underlying problem in `summary`."),
-    ("positive_review", "👍 Positive review", None,
+    ("positive_review", "👍 Positive review", False,
      "An app-store review of 4-5 stars with no actionable content."),
-    ("feature_request", "💡 Feature request", None,
+    ("feature_request", "💡 Feature request", False,
      "Asking for something the app does not do yet."),
-    ("question", "❓ Question", None,
+    ("question", "❓ Question", False,
      "A how-do-I or usage question that is not a bug."),
-    ("spam_or_solicitation", "🗑️ Spam / solicitation", None,
+    ("spam_or_solicitation", "🗑️ Spam / solicitation", False,
      "Marketing, token or OTC investment offers, partnership pitches, listing spam."),
-    ("other", "• Other", None,
+    ("other", "• Other", False,
      "Genuinely none of the above. Prefer a specific category wherever one fits."),
 )
 CATEGORIES = [name for name, _, _, _ in CATEGORY_SPECS]
 CATEGORY_LABEL = {name: label for name, label, _, _ in CATEGORY_SPECS}
 # Categories whose urgency `severity` cannot express. They are not bugs, so the model
-# rates them not_applicable — which would otherwise paint the most serious ticket in
-# the batch the calmest colour and sort it last.
-CATEGORY_COLOR = {name: color for name, _, color, _ in CATEGORY_SPECS if color}
-URGENT_CATEGORIES = frozenset(CATEGORY_COLOR)
+# rates them not_applicable — which would otherwise give the most serious ticket in
+# the batch the calmest marker and sort it last.
+# The emoji on its own, for the per-ticket lines. Derived from the label so the
+# table stays the single place a category is described.
+CATEGORY_EMOJI = {name: label.split(" ", 1)[0] for name, label, _, _ in CATEGORY_SPECS}
+URGENT_CATEGORIES = frozenset(name for name, _, urgent, _ in CATEGORY_SPECS if urgent)
 CATEGORY_GUIDANCE = "\n".join(f"- {name}: {desc}" for name, _, _, desc in CATEGORY_SPECS)
 
 SEVERITIES = ["crash", "data_loss", "major", "minor", "cosmetic", "not_applicable"]
@@ -609,6 +632,15 @@ def compact_ticket(ticket):
     }
 
 
+def resolve_api_model(model):
+    """Map a shorthand model name onto the id the Anthropic API expects.
+
+    Anything that isn't a known shorthand passes through untouched, so a pinned id
+    (`claude-opus-4-8`) or a model newer than this table still works.
+    """
+    return API_MODEL_ALIASES.get(model, model)
+
+
 def build_analysis_prompt(compact_tickets):
     return (
         "Classify every ticket in this batch and return one object per ticket.\n\n"
@@ -617,60 +649,14 @@ def build_analysis_prompt(compact_tickets):
     )
 
 
-def _cli_field_lines():
-    """Describe every schema field for the CLI path, derived from TICKET_PROPERTIES.
-
-    The API path has structured outputs to enforce the shape; the CLI path only has
-    this text. Hardcoding the field list here is how three fields (platform,
-    app_version, reported_session_id) silently came back empty on the CLI backend
-    after being added to the schema.
-    """
-    lines = []
-    for name, spec in TICKET_PROPERTIES.items():
-        shape = spec.get("type", "string")
-        if "enum" in spec:
-            shape += "; one of: " + ", ".join(spec["enum"])
-        description = spec.get("description", "")
-        lines.append(f"- {name} ({shape}){': ' + description if description else ''}")
-    return "\n".join(lines)
-
-
-# The API path gets the shape enforced by structured outputs. The CLI path has no
-# such enforcement, so the shape is spelled out here — from the same schema.
-CLI_JSON_INSTRUCTIONS = textwrap.dedent(
-    """
-    Return ONLY a single JSON object — no prose, no explanation, no markdown code
-    fence. The object has exactly one key, "tickets", whose value is an array with
-    one object per input ticket, each with exactly these keys:
-    __FIELDS__
-
-    Every key is required on every object. Use an empty string for text fields you
-    cannot fill, and the enum's catch-all value ('unknown', 'not_applicable', 'other')
-    rather than inventing a new one.
-    """
-).strip().replace("__FIELDS__", _cli_field_lines())
-
-
-def extract_json_object(text):
-    """Pull the outermost JSON object out of model prose (tolerates code fences)."""
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end <= start:
-        sys.exit(f"No JSON object found in the model output:\n{text[:500]}")
-    try:
-        return json.loads(text[start : end + 1])
-    except json.JSONDecodeError as exc:
-        sys.exit(f"Model output was not valid JSON ({exc}):\n{text[start : start + 500]}")
-
-
 REQUIRED_FINDING_KEYS = ("id", "category", "severity")
 
 
 def validate_findings(findings, label):
     """Exit unless every entry is an object carrying the keys the renderer indexes.
 
-    build_summary_embed does f["category"] / f["severity"] and build_highlight_embed
-    does f["id"], so a missing key surfaces as a KeyError halfway through building a
+    build_header does f["category"] / f["severity"] and build_ticket_line does
+    f["id"], so a missing key surfaces as a KeyError halfway through building a
     Discord payload. Failing here names the offending entry instead.
     """
     for position, entry in enumerate(findings):
@@ -686,9 +672,9 @@ def validate_findings(findings, label):
 def tickets_from_payload(payload, source):
     """Pull the `tickets` list out of a classification payload, or exit clearly.
 
-    Structured outputs guarantee the key and the item shape on the API path, but the
-    CLI path has neither — a bare KeyError mid-render is a confusing way to learn
-    that, so both paths are validated here before anything renders them.
+    Structured outputs guarantee the key and the item shape, so on a normal run this
+    never fires; it is the guard for --findings, whose contents nothing validates,
+    and a bare KeyError mid-render is a confusing way to learn a key is missing.
     """
     found = payload.get("tickets") if isinstance(payload, dict) else None
     if not isinstance(found, list):
@@ -697,47 +683,11 @@ def tickets_from_payload(payload, source):
     return validate_findings(found, source)
 
 
-def analyze_via_claude_cli(model, compact_tickets, timeout=1800):
-    """Classify the batch with the local `claude` CLI instead of the Anthropic API.
-
-    Local debugging path: it authenticates as Claude Code, so no ANTHROPIC_API_KEY is
-    needed. There is no structured-output enforcement here, so the response is parsed
-    defensively and the schema is described in the prompt.
-    """
-    prompt = "\n\n".join(
-        [SYSTEM_PROMPT, CLI_JSON_INSTRUCTIONS, build_analysis_prompt(compact_tickets)]
-    )
-    cmd = ["claude", "-p", "--output-format", "json"]
-    if model:
-        cmd += ["--model", model]
-    try:
-        # Prompt goes over stdin: a full batch can exceed the argv size limit.
-        proc = subprocess.run(
-            cmd, input=prompt, capture_output=True, text=True, timeout=timeout
-        )
-    except FileNotFoundError:
-        sys.exit("`claude` not found on PATH. Install Claude Code, or use --backend api.")
-    except subprocess.TimeoutExpired:
-        sys.exit(f"`claude` timed out after {timeout}s. Try a smaller --max-tickets.")
-    if proc.returncode != 0:
-        sys.exit(f"`claude` failed ({proc.returncode}): {proc.stderr[:500]}")
-
-    envelope = extract_json_object(proc.stdout)
-    if envelope.get("is_error") or envelope.get("subtype") != "success":
-        sys.exit(f"`claude` reported an error: {envelope.get('result') or envelope}")
-    cost = envelope.get("total_cost_usd")
-    if cost is not None:
-        print(f"claude CLI reported ${cost:.4f} for this batch.")
-    result = extract_json_object(envelope.get("result") or "")
-    return tickets_from_payload(result, "`claude` CLI")
-
-
 def dump_batch(path, compact_tickets, model):
     """Write the batch to disk so it can be classified by hand. Contains ticket text."""
     payload = {
         "model": model,
         "system_prompt": SYSTEM_PROMPT,
-        "instructions": CLI_JSON_INSTRUCTIONS,
         "schema": SCHEMA,
         "tickets": compact_tickets,
     }
@@ -811,18 +761,42 @@ def analyze(client, model, effort, compact_tickets):
 
 
 # ---- Discord rendering -----------------------------------------------------
+#
+# A short header, then one line per ticket — the digest is read by skimming, so the
+# lines are the layout. Plain message content, no embeds: the lines carry their own
+# structure, so the box added nothing but a border. The cost is the character budget
+# (2,000 for content against 4,096 for an embed description), which a busy day can
+# spill into a second message — see chunk_entries.
 
-SEVERITY_COLOR = {
-    "crash": 0xE74C3C,      # red
-    "data_loss": 0xC0392B,  # dark red
-    "major": 0xE67E22,      # orange
-    "minor": 0xF1C40F,      # yellow
-    "cosmetic": 0x95A5A6,   # grey
-    "not_applicable": 0x3498DB,  # blue
+# Leads each line so severity is scannable straight down the left edge. Urgent
+# categories get URGENT_MARKER instead: they are not bugs, so the model rates them
+# not_applicable, and the calmest marker on the most serious ticket is backwards.
+SEVERITY_EMOJI = {
+    "crash": "🔥",
+    "data_loss": "💥",
+    "major": "🟠",
+    "minor": "🟡",
+    "cosmetic": "⚪",
+    "not_applicable": "▫️",
 }
-MAX_EMBEDS_PER_MESSAGE = 10
-MAX_EMBED_CHARS_PER_MESSAGE = 6000  # Discord's aggregate limit across one message
-MAX_HIGHLIGHTS = 27  # 3 messages of ~9 highlights + a summary embed
+URGENT_MARKER = "🚨"
+# Second marker column, so "is this mine?" is answerable without reading the summary.
+# Every PLATFORMS value needs an entry; the three desktops share one icon because the
+# distinction rarely changes who picks the ticket up.
+PLATFORM_EMOJI = {
+    "android": "🤖",
+    "ios": "🍎",
+    "desktop_windows": "🖥️",
+    "desktop_macos": "🖥️",
+    "desktop_linux": "🖥️",
+    "multiple": "🌐",
+    "unknown": "❔",
+}
+# Discord's cap on one message's content. Lines are clipped and chunked against it.
+MAX_MESSAGE_CHARS = 2000
+SUMMARY_CHARS = 160
+ROOT_CAUSE_CHARS = 140
+MAX_HIGHLIGHTS = 27
 
 
 def ticket_url(subdomain, ticket_id):
@@ -834,7 +808,54 @@ def clip(text, limit):
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def build_summary_embed(findings, highlights, subdomain, stats=None):
+def is_urgent(finding):
+    return finding.get("category") in URGENT_CATEGORIES
+
+
+def severity_marker(finding):
+    """The leading emoji: category urgency first, then severity."""
+    if is_urgent(finding):
+        return URGENT_MARKER
+    return SEVERITY_EMOJI.get(finding.get("severity", "not_applicable"), "▫️")
+
+
+def build_ticket_line(finding, subdomain, is_update=False):
+    """One skimmable line per ticket:
+
+        🔥 | 🐛 | 🤖 | #27605 · Notifications only arrive… | Likely cause: push service…
+
+    The id is a masked link, so the ticket stays one click away without spending the
+    character budget on a visible URL.
+    """
+    tid = finding["id"]
+    # 🔄 marks a ticket already shown that has since changed, so the reader knows it
+    # is a follow-up rather than a duplicate post.
+    marker = "🔄 " if is_update else ""
+    parts = [
+        severity_marker(finding),
+        CATEGORY_EMOJI.get(finding.get("category"), "•"),
+        PLATFORM_EMOJI.get(finding.get("platform"), PLATFORM_EMOJI["unknown"]),
+        f"{marker}[#{tid}]({ticket_url(subdomain, tid)}) · "
+        f"{clip(finding.get('summary'), SUMMARY_CHARS) or '(no summary)'}",
+    ]
+    root = clip(finding.get("likely_root_cause"), ROOT_CAUSE_CHARS)
+    if root:
+        parts.append(f"Likely cause: {root}")
+    # The reported account is the actionable part of an abuse report — carrying it on
+    # the line saves opening the ticket to copy it.
+    reported = clip(finding.get("reported_session_id"), 70)
+    if reported:
+        parts.append(f"Reported: `{reported}`")
+    return " | ".join(parts)
+
+
+def build_header(findings, highlights, stats=None):
+    """The lead lines: what was looked at, the category tally, duplicate clusters.
+
+    Accounts for the batch honestly — how much of the window was analyzed, what was
+    skipped and why, how big the untriaged backlog behind it is — so a short digest
+    never reads as a quiet day when it was really a truncated one.
+    """
     by_category = {}
     by_severity = {}
     clusters = {}
@@ -845,32 +866,16 @@ def build_summary_embed(findings, highlights, subdomain, stats=None):
         if label:
             clusters.setdefault(label, []).append(f["id"])
 
-    cat_lines = "\n".join(
-        f"{CATEGORY_LABEL.get(cat, cat)}: **{count}**"
-        for cat, count in sorted(by_category.items(), key=lambda kv: -kv[1])
-    )
-    serious = by_severity.get("crash", 0) + by_severity.get("data_loss", 0)
-    dup_clusters = {k: v for k, v in clusters.items() if len(v) > 1}
-    fields = [{"name": "By category", "value": cat_lines or "—", "inline": False}]
-    if dup_clusters:
-        cluster_lines = "\n".join(
-            f"**{clip(label, 40)}** — {len(ids)} tickets (#{', #'.join(str(i) for i in ids[:6])})"
-            for label, ids in sorted(dup_clusters.items(), key=lambda kv: -len(kv[1]))[:6]
-        )
-        fields.append({"name": "Likely duplicate clusters", "value": clip(cluster_lines, 1024), "inline": False})
-
-    # Account for the batch honestly: how many of the window we looked at, how many
-    # we skipped as unchanged, and how big the untriaged backlog is behind it.
     stats = stats or {}
     matched = stats.get("matched")
     skipped = stats.get("skipped_unchanged") or 0
     updated = stats.get("updated_count") or 0
     backlog = stats.get("total_unsolved")
 
-    window = f"Analyzed **{len(findings)}**"
+    window = f"🗂️ **Zendesk triage** — analyzed **{len(findings)}**"
     if matched is not None:
         window += f" of **{matched}**"
-    window += f" tickets in the window"
+    window += " tickets in the window"
     if stats.get("scope"):
         window += f" ({stats['scope']})"
     window += "."
@@ -884,99 +889,46 @@ def build_summary_embed(findings, highlights, subdomain, stats=None):
     if backlog is not None:
         lines.append(f"Backlog: **{backlog:,}** unsolved tickets in total (not triaged).")
 
+    serious = by_severity.get("crash", 0) + by_severity.get("data_loss", 0)
     tail = f"**{len(highlights)}** worth looking into"
     tail += f", including **{serious}** crash/data-loss." if serious else "."
     if updated:
         tail += f" 🔄 **{updated}** changed since last reported."
     lines.append(tail)
 
-    return {
-        "title": "🗂️ Zendesk triage",
-        "description": "\n".join(lines),
-        "color": 0xE67E22 if highlights else 0x2ECC71,
-        "fields": fields,
-    }
+    if by_category:
+        lines.append(clip(" · ".join(
+            f"{CATEGORY_EMOJI.get(cat, '•')} **{count}**"
+            for cat, count in sorted(by_category.items(), key=lambda kv: -kv[1])
+        ), 300))
 
+    dup_clusters = {k: v for k, v in clusters.items() if len(v) > 1}
+    if dup_clusters:
+        cluster_lines = " · ".join(
+            f"**{clip(label, 40)}** ×{len(ids)} (#{', #'.join(str(i) for i in ids[:4])})"
+            for label, ids in sorted(dup_clusters.items(), key=lambda kv: -len(kv[1]))[:4]
+        )
+        lines.append(f"Likely duplicates: {clip(cluster_lines, 400)}")
 
-def is_urgent(finding):
-    return finding.get("category") in URGENT_CATEGORIES
-
-
-def embed_color(finding):
-    """Colour by category urgency first, then severity.
-
-    An abuse or legal report is not a bug, so the model rates it not_applicable —
-    which maps to the calmest blue. Category has to win, or the most serious ticket
-    in the digest looks the most benign.
-    """
-    urgent = CATEGORY_COLOR.get(finding.get("category"))
-    if urgent:
-        return urgent
-    return SEVERITY_COLOR.get(finding.get("severity", "not_applicable"), 0x95A5A6)
-
-
-def build_highlight_embed(finding, subdomain, is_update=False):
-    tid = finding["id"]
-    sev = finding.get("severity", "not_applicable")
-    cat = CATEGORY_LABEL.get(finding.get("category"), finding.get("category", ""))
-    # 🔄 marks a ticket we already showed that has since changed, so the reader
-    # knows it is a follow-up rather than a duplicate post.
-    marker = "🔄 " if is_update else ""
-    title = f"{marker}#{tid} · {clip(finding.get('summary'), 200) or '(no summary)'}"
-    fields = [
-        {"name": "Category", "value": clip(cat, 60) or "—", "inline": True},
-        {"name": "Severity", "value": sev, "inline": True},
-        {"name": "Language", "value": clip(finding.get("language"), 40) or "—", "inline": True},
-    ]
-    platform = finding.get("platform")
-    if platform and platform != "unknown":
-        fields.append({"name": "Platform", "value": clip(platform, 40), "inline": True})
-    component = clip(finding.get("affected_component"), 100)
-    if component:
-        fields.append({"name": "Component", "value": component, "inline": True})
-    version = clip(finding.get("app_version"), 40)
-    if version:
-        fields.append({"name": "Version", "value": version, "inline": True})
-    # The reported account is the actionable part of an abuse report — surfacing it
-    # here saves opening the ticket to copy it.
-    reported = clip(finding.get("reported_session_id"), 100)
-    if reported:
-        fields.append({"name": "Reported account", "value": f"`{reported}`", "inline": False})
-    root = clip(finding.get("likely_root_cause"), 300)
-    description = f"Likely cause: {root}" if root else ""
-    return {
-        "title": clip(title, 256),
-        "url": ticket_url(subdomain, tid),
-        "description": description,
-        "color": embed_color(finding),
-        "fields": fields,
-    }
-
-
-def embed_char_count(embed):
-    """Characters Discord counts against the per-message embed budget."""
-    total = len(embed.get("title") or "") + len(embed.get("description") or "")
-    for field in embed.get("fields") or []:
-        total += len(field.get("name") or "") + len(field.get("value") or "")
-    return total
+    return "\n".join(lines)
 
 
 def chunk_entries(entries):
-    """Group (embed, ticket_ids) pairs into messages within both Discord limits.
+    """Group (line, ticket_ids) pairs into messages within MAX_MESSAGE_CHARS.
 
-    Discord caps a message at 10 embeds *and* 6,000 characters summed across them;
-    chunking on count alone can produce a payload that is rejected as too large.
+    Lines are joined with a newline, so each one after the first costs a character
+    more than its own length. An entry longer than the cap still gets its own message
+    rather than being dropped; the pieces are pre-clipped so that shouldn't arise.
     """
     chunks, current, current_chars = [], [], 0
-    for embed, ids in entries:
-        size = embed_char_count(embed)
-        too_many = len(current) >= MAX_EMBEDS_PER_MESSAGE
-        too_long = current_chars + size > MAX_EMBED_CHARS_PER_MESSAGE
-        if current and (too_many or too_long):
+    for text, ids in entries:
+        projected = current_chars + len(text) + (1 if current else 0)
+        if current and projected > MAX_MESSAGE_CHARS:
             chunks.append(current)
             current, current_chars = [], 0
-        current.append((embed, ids))
-        current_chars += size
+            projected = len(text)
+        current.append((text, ids))
+        current_chars = projected
     if current:
         chunks.append(current)
     return chunks
@@ -1006,27 +958,23 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
     shown_ids = {f.get("id") for f in shown}
     omitted_ids = {f.get("id") for f in omitted}
 
-    # The summary embed accounts for every classified ticket except the highlights
-    # that didn't fit; those are covered by no message and stay eligible.
-    summary_ids = {f.get("id") for f in findings} - shown_ids - omitted_ids
-    entries = [(build_summary_embed(findings, shown + omitted, subdomain, stats), summary_ids)]
+    # The header accounts for every classified ticket except the highlights that
+    # didn't fit; those are covered by no message and stay eligible next run.
+    header_ids = {f.get("id") for f in findings} - shown_ids - omitted_ids
+    header = build_header(findings, shown + omitted, stats)
+    if omitted:
+        header += (f"\nShowing the top **{len(shown)}** of "
+                   f"**{len(shown) + len(omitted)}** worth looking into.")
+    entries = [(header, header_ids)]
     entries += [
-        (build_highlight_embed(f, subdomain, is_update=f.get("id") in updated_ids),
+        (build_ticket_line(f, subdomain, is_update=f.get("id") in updated_ids),
          {f.get("id")})
         for f in shown
     ]
 
-    content = None
-    if omitted:
-        content = (f"Showing the top {len(shown)} of {len(shown) + len(omitted)} "
-                   f"tickets worth looking into.")
-
     messages, coverage = [], []
-    for index, chunk in enumerate(chunk_entries(entries)):
-        payload = {"embeds": [embed for embed, _ in chunk]}
-        if index == 0 and content:
-            payload["content"] = content
-        messages.append(payload)
+    for chunk in chunk_entries(entries):
+        messages.append({"content": "\n".join(text for text, _ in chunk)})
         covered = set()
         for _, ids in chunk:
             covered |= ids
@@ -1055,13 +1003,15 @@ def main():
     parser.add_argument("--subdomain", help="Zendesk subdomain (else ZENDESK_SUBDOMAIN).")
     parser.add_argument("--email", help="Zendesk agent email (else ZENDESK_EMAIL).")
     parser.add_argument("--api-token", help="Zendesk API token (else ZENDESK_API_TOKEN).")
-    parser.add_argument("--webhook", help="Discord webhook URL (else DISCORD_WEBHOOK_URL).")
+    parser.add_argument("--webhook", help="Discord webhook URL (else ZENDESK_DISCORD_WEBHOOK_URL).")
     parser.add_argument("--query", help="Zendesk search query (else ZENDESK_QUERY, else default). "
                                         "Takes precedence over --window-hours.")
     parser.add_argument("--window-hours", type=int, metavar="N",
                         help="Only analyze unsolved tickets created in the last N hours. "
                              "The scheduled daily run uses 48.")
-    parser.add_argument("--model", help="Claude model id (else ZENDESK_TRIAGE_MODEL, else claude-opus-4-8).")
+    parser.add_argument("--model", help=f"Claude model id, or an alias (opus, sonnet, "
+                                        f"haiku) mapped to an id "
+                                        f"(else ZENDESK_TRIAGE_MODEL, else {DEFAULT_MODEL}).")
     parser.add_argument("--effort", default="medium", choices=["low", "medium", "high", "xhigh", "max"],
                         help="Claude reasoning effort (default: medium).")
     parser.add_argument("--max-tickets", type=int, default=DEFAULT_MAX_TICKETS,
@@ -1072,11 +1022,9 @@ def main():
                              f"(default: {DEFAULT_BATCH_SIZE}).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Fetch and analyze, then print the Discord payload instead of posting.")
-    parser.add_argument("--backend", default="api", choices=["api", "claude-cli", "file"],
-                        help="Where classification happens: the Anthropic API (default), the "
-                             "local `claude` CLI (no API key needed), or a findings file.")
-    parser.add_argument("--findings",
-                        help="Findings JSON to render instead of classifying (--backend file).")
+    parser.add_argument("--findings", metavar="PATH",
+                        help="Render findings classified elsewhere, skipping Zendesk and "
+                             "Claude entirely. Pairs with --dump-batch.")
     parser.add_argument("--review-star-floor", type=int, default=DEFAULT_REVIEW_STAR_FLOOR,
                         metavar="N",
                         help=f"Classify app-store reviews of N stars or fewer; count the rest "
@@ -1098,14 +1046,11 @@ def main():
                              "hand-classification. WARNING: writes ticket content to disk.")
     args = parser.parse_args()
 
-    if args.backend == "file" and not args.findings:
-        sys.exit("--backend file requires --findings PATH.")
-
     # Subdomain is always needed: it builds the ticket links in the Discord payload.
     subdomain = get_env("ZENDESK_SUBDOMAIN", args.subdomain)
     # A dump exits before rendering anything, so it never needs the webhook either.
     needs_webhook = not (args.dry_run or args.dump_batch)
-    webhook = get_env("DISCORD_WEBHOOK_URL", args.webhook, required=needs_webhook)
+    webhook = get_env("ZENDESK_DISCORD_WEBHOOK_URL", args.webhook, required=needs_webhook)
     model = args.model or os.environ.get("ZENDESK_TRIAGE_MODEL") or DEFAULT_MODEL
 
     stats = {}
@@ -1113,7 +1058,7 @@ def main():
     classified = []
     updated_ids = set()
 
-    if args.backend == "file":
+    if args.findings:
         # Findings already exist, so neither Zendesk nor a model is involved.
         findings = load_findings(args.findings)
         print(f"Loaded {len(findings)} findings from {args.findings}.")
@@ -1190,14 +1135,11 @@ def main():
             dump_batch(args.dump_batch, compact, model)
             print(f"Wrote {len(compact)} tickets to {args.dump_batch} — this file contains "
                   f"ticket content, so keep it out of the repo.")
-            print("Classify it, then: --backend file --findings <path> --dry-run")
+            print("Classify it, then: --findings <path> --dry-run")
             return
 
-        if args.backend == "claude-cli":
-            analyzer = partial(analyze_via_claude_cli, model)
-        else:
-            client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
-            analyzer = partial(analyze, client, model, args.effort)
+        client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
+        analyzer = partial(analyze, client, resolve_api_model(model), args.effort)
         findings = analyze_in_chunks(analyzer, compact, args.batch_size)
 
         # Keep only findings whose id maps to a fetched ticket, in case of drift.
@@ -1212,7 +1154,7 @@ def main():
             print(f"Note: {len(analyzed) - len(classified)} ticket(s) came back without a "
                   f"classification; they stay eligible for the next run.")
 
-    # Same selection the embeds use, so the console count can't disagree with the
+    # Same selection the digest uses, so the console count can't disagree with the
     # digest — worth_looking_into alone would miss urgent categories the model
     # failed to flag.
     shown, omitted = select_highlights(findings)

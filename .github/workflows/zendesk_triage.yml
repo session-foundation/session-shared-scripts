@@ -65,7 +65,7 @@ jobs:
       # partially-delivered tickets even when a later Discord POST fails, and the
       # combined action would discard that on a failed job.
       - name: Restore triage state
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .triage-state
           key: zendesk-triage-state-${{ github.run_id }}-${{ github.run_attempt }}
@@ -103,7 +103,7 @@ jobs:
           ZENDESK_EMAIL: ${{ secrets.ZENDESK_EMAIL }}
           ZENDESK_API_TOKEN: ${{ secrets.ZENDESK_API_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ZENDESK_DISCORD_WEBHOOK_URL: ${{ secrets.ZENDESK_DISCORD_WEBHOOK_URL }}
           ZENDESK_QUERY: ${{ github.event.inputs.query }}
           ZENDESK_TRIAGE_MODEL: ${{ vars.ZENDESK_TRIAGE_MODEL }}
         run: |
@@ -117,7 +117,7 @@ jobs:
       # later message fails, and that must survive the job's non-zero exit.
       - name: Save triage state
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: .triage-state
           key: zendesk-triage-state-${{ github.run_id }}-${{ github.run_attempt }}
