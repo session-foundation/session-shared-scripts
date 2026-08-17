@@ -275,14 +275,14 @@ Deliberately narrow, because a mis-aimed bulk status change is not recoverable b
 - **`solved`, never `closed`.** Solved is reversible; closed is not.
 - **Tagged** `auto-resolved-review`, so they stay identifiable and a trigger can exclude them, and annotated with a **private** note — a public comment would email the person who wrote the review.
 
-An applied run prints an agent-search link to what it just solved, so the set can be eyeballed — or found again and reopened — without reconstructing the query by hand:
+That tag is also how a run is reviewed afterwards. An applied run prints — and posts — an agent-search link to what it just solved, so the set can be eyeballed, or found again and reopened, without reconstructing the query by hand:
 
 ```
 Solved 7 of 7 ticket(s).
-  review them: https://acme.zendesk.com/agent/search/1?type=ticket&q=tags%3Aauto-resolved-review%20status%3Asolved%20updated%3E2026-08-16
+  review what changed: https://acme.zendesk.com/agent/search/1?type=ticket&q=tags%3Aauto-resolved-review%20status%3Asolved%20updated%3E2026-08-16
 ```
 
-Terminal only, not in the Discord post: opening it needs agent access, so it's for whoever ran the job. The date bound is yesterday rather than today because Zendesk's date search is day-granular and `updated>` is exclusive — today's date would filter out the very tickets the run just solved — and the spare day absorbs the account timezone the search interprets dates in. Since the job runs weekly, that window is this run and nothing else.
+The date bound is yesterday rather than today because Zendesk's date search is day-granular and `updated>` is exclusive — today's date would filter out the very tickets the run just solved — and the spare day absorbs the account timezone the search interprets dates in. Since the job runs weekly, that window is this run and nothing else. A run that solved nothing links the tag without a date bound instead, so the link shows the job's history rather than landing on an empty search.
 
 ### Before the first applied run
 
@@ -294,14 +294,22 @@ No state file: a solved ticket drops out of the query, so runs are idempotent. Z
 
 ### What it posts
 
-An applied run reports its tally to the same Discord channel as the daily triage, so a job that bulk-edits tickets is visible where those tickets are already discussed:
+Every applied run reports to the same Discord channel as the daily triage, so a job that bulk-edits tickets is visible where those tickets are already discussed:
 
 > ✅ Marked **12** 4★ and **31** 5★ app-store reviews as solved in Zendesk.
+> 🔍 [Review what changed](#)
 > 📥 **4,769** more tickets match than this run looked at; the next run picks them up.
 
 The rating split is the point — a bare total wouldn't say which reviews went. The tally counts the ids each bulk job **confirmed**, not the ids submitted, so the number is what Zendesk actually changed; a batch with per-ticket failures adds a line saying so, next to the count it contradicts. The leftover line appears only while there's a backlog left to drain.
 
-A run that solved nothing posts nothing — a weekly "0 reviews" message is noise the channel learns to skip, and that's exactly what a drained backlog would produce every week. A dry run prints the message it would have posted instead of posting it, and `--no-discord` solves without reporting. The message is a tally rather than a per-ticket list, so unlike the triage digest it can't spill into a second message.
+**A run that solved nothing reports that too**, rather than staying quiet:
+
+> 💤 No 4★ or better app-store reviews left to solve — looked at **48** untouched tickets.
+> 🔍 [Everything this job has solved](#)
+
+Silence would be indistinguishable from a job that has quietly stopped working — a broken query, a rotated token, a schedule that no longer fires — and this job exists to keep a number moving that nobody watches directly, so "looked, found nothing" is the half of the week worth hearing. The count of what it examined is what separates the two. Eligible reviews that all *failed* get their own wording (`None of the 3 eligible app-store reviews were solved`), because reporting that as a quiet week would dress a broken run up as a clean one.
+
+A dry run prints the message it would have posted instead of posting it, and `--no-discord` solves without reporting. The message is a tally rather than a per-ticket list, so unlike the triage digest it can't spill into a second message.
 
 ### Required Secrets
 

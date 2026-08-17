@@ -7,9 +7,11 @@ name: Zendesk Resolve Positive Reviews
 # No state file is needed — a solved ticket drops out of the query, so runs are
 # idempotent and the first few drain the backlog before the schedule just keeps pace.
 #
-# An applied run reports its tally to the same Discord channel as the daily triage,
-# so a job that bulk-edits tickets is visible where the tickets are discussed. A dry
-# run posts nothing, and neither does a run that solved nothing.
+# Every applied run reports to the same Discord channel as the daily triage — its
+# tally and a link to review what changed — so a job that bulk-edits tickets is
+# visible where the tickets are discussed. A run that solved nothing says so, because
+# silence reads the same as a job that has quietly stopped working. Only a dry run
+# posts nothing.
 #
 # ⚠️  This workflow writes to Zendesk. A scheduled run always applies; a manual run
 #     is a dry run unless you tick `apply`. Solving a ticket can fire triggers and

@@ -271,19 +271,30 @@ class TestSummaryMessage(unittest.TestCase):
     def test_large_counts_are_grouped_for_reading(self):
         self.assertIn("**1,204** 5★", resolve_reviews.build_message({5: 1204}))
 
-    def test_a_run_that_solved_nothing_says_nothing(self):
-        """A weekly "0 reviews" post is noise the channel learns to skip."""
-        self.assertIsNone(resolve_reviews.build_message({}))
+    def test_a_run_that_solved_nothing_still_reports(self):
+        """Silence is indistinguishable from a job that has quietly broken, so a
+        no-op run says what it looked at instead of saying nothing."""
+        message = resolve_reviews.build_message({}, examined=48)
+        self.assertIn("No 4★ or better app-store reviews left to solve", message)
+        self.assertIn("**48** untouched tickets", message)
 
-    def test_failures_are_reported_next_to_the_count_they_contradict(self):
-        message = resolve_reviews.build_message({5: 2}, failures=3)
-        self.assertIn("**2** 5★", message)
+    def test_one_examined_ticket_is_not_tickets(self):
+        self.assertIn("**1** untouched ticket.",
+                      resolve_reviews.build_message({}, examined=1))
+
+    def test_eligible_reviews_that_all_failed_are_not_a_quiet_week(self):
+        """Tickets went in and none came back solved — reporting that as "nothing to
+        solve" would dress a broken run up as a clean one."""
+        message = resolve_reviews.build_message({}, attempted=3, failures=3)
+        self.assertIn("None of the **3** eligible app-store reviews were solved",
+                      message)
+        self.assertNotIn("left to solve", message)
         self.assertIn("**3** tickets failed to update", message)
 
-    def test_failures_alone_still_post(self):
-        message = resolve_reviews.build_message({}, failures=1)
-        self.assertIn("**1** ticket failed to update", message)
-        self.assertNotIn("Marked", message)
+    def test_failures_are_reported_next_to_the_count_they_contradict(self):
+        message = resolve_reviews.build_message({5: 2}, attempted=5, failures=3)
+        self.assertIn("**2** 5★", message)
+        self.assertIn("**3** tickets failed to update", message)
 
     def test_the_leftover_line_appears_only_when_there_is_a_leftover(self):
         self.assertNotIn("📥", resolve_reviews.build_message({5: 2}))
@@ -295,11 +306,27 @@ class TestSummaryMessage(unittest.TestCase):
         self.assertIn("Would mark", message)
         self.assertNotIn("Marked", message)
 
+    def test_the_link_is_masked_and_labelled_for_what_changed(self):
+        message = resolve_reviews.build_message({5: 2}, url="https://z/search")
+        self.assertIn("🔍 [Review what changed](https://z/search)", message)
+
+    def test_a_no_op_run_links_the_job_s_history_instead(self):
+        """Scoped to this run it would land on an empty search, which reads as "it
+        did nothing" rather than "there was nothing to do"."""
+        message = resolve_reviews.build_message({}, examined=9, url="https://z/search")
+        self.assertIn("🔍 [Everything this job has solved](https://z/search)", message)
+
+    def test_no_link_line_without_a_url(self):
+        self.assertNotIn("🔍", resolve_reviews.build_message({5: 2}))
+
     def test_the_message_fits_one_discord_post(self):
         """No chunking here, unlike the triage — a tally can't grow into a second
         message, and this proves the worst case stays inside the cap."""
-        message = resolve_reviews.build_message({4: 999999, 5: 999999},
-                                                remaining=999999, failures=999999)
+        message = resolve_reviews.build_message(
+            {4: 999999, 5: 999999}, examined=999999, attempted=999999,
+            remaining=999999, failures=999999,
+            url=resolve_reviews.solved_search_url("subdomain", "auto-resolved-review",
+                                                  "2026-08-16"))
         self.assertLess(len(message), triage.MAX_MESSAGE_CHARS)
 
     def test_the_summary_does_not_reuse_the_zendesk_session(self):
