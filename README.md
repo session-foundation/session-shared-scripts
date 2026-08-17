@@ -275,6 +275,15 @@ Deliberately narrow, because a mis-aimed bulk status change is not recoverable b
 - **`solved`, never `closed`.** Solved is reversible; closed is not.
 - **Tagged** `auto-resolved-review`, so they stay identifiable and a trigger can exclude them, and annotated with a **private** note — a public comment would email the person who wrote the review.
 
+An applied run prints an agent-search link to what it just solved, so the set can be eyeballed — or found again and reopened — without reconstructing the query by hand:
+
+```
+Solved 7 of 7 ticket(s).
+  review them: https://acme.zendesk.com/agent/search/1?type=ticket&q=tags%3Aauto-resolved-review%20status%3Asolved%20updated%3E2026-08-16
+```
+
+Terminal only, not in the Discord post: opening it needs agent access, so it's for whoever ran the job. The date bound is yesterday rather than today because Zendesk's date search is day-granular and `updated>` is exclusive — today's date would filter out the very tickets the run just solved — and the spare day absorbs the account timezone the search interprets dates in. Since the job runs weekly, that window is this run and nothing else.
+
 ### Before the first applied run
 
 Solving a ticket fires triggers and automations, and an AppFollow requester may carry a real email address. **A satisfaction survey trigger would email thousands of app-store reviewers.** Check Admin Center → Objects and rules → Business rules first, then do the first applied run with `--max-tickets 5` so the effects are observable before they're bulk.

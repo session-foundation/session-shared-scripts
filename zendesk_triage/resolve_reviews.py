@@ -64,6 +64,8 @@ import argparse
 import os
 import sys
 import time
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import requests
 
@@ -125,6 +127,31 @@ def select_resolvable(tickets, min_stars):
             continue
         resolvable.append(ticket)
     return resolvable, skipped
+
+
+def search_since(days_back=1):
+    """The date to bound a "what did this run touch" search with.
+
+    Yesterday, not today: Zendesk's date search has day granularity and `updated>`
+    is exclusive, so `updated>today` would filter out everything the run just did.
+    The extra day also absorbs the account timezone, which the search interprets
+    dates in and which this script has no reason to know.
+    """
+    return (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y-%m-%d")
+
+
+def solved_search_url(subdomain, tag, since=None):
+    """An agent-search link to the tickets this run solved.
+
+    The tag is what makes them findable, which is half of why every ticket gets one:
+    a bulk status change nobody can review afterwards is not reversible in practice.
+    `since` narrows an all-time tag search down to the current run — approximate, but
+    the job runs weekly, so a day's window is this run and nothing else.
+    """
+    query = f"tags:{tag} status:solved"
+    if since:
+        query += f" updated>{since}"
+    return f"https://{subdomain}.zendesk.com/agent/search/1?type=ticket&q={quote(query)}"
 
 
 def batches(items, size=BATCH_SIZE):
@@ -338,6 +365,11 @@ def main():
         failures.extend(batch_failures)
 
     print(f"Solved {len(solved_ids)} of {len(ids)} ticket(s).")
+    # Terminal only, deliberately not in the Discord message: opening it needs agent
+    # access, so it is for whoever ran the job — to eyeball what went, or to find the
+    # set again if it needs reopening.
+    if solved_ids:
+        print(f"  review them: {solved_search_url(subdomain, args.tag, search_since())}")
 
     # Tallied from the ids the jobs confirmed, not from what was submitted, so the
     # message reports what Zendesk actually changed.

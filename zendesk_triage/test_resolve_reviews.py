@@ -13,6 +13,8 @@ and that an asynchronous job's failures are surfaced instead of swallowed.
 import os
 import sys
 import unittest
+from datetime import datetime, timezone
+from urllib.parse import quote
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import resolve_reviews  # noqa: E402
@@ -216,6 +218,31 @@ class TestWaitForJob(unittest.TestCase):
         with NoSleep():
             with self.assertRaises(SystemExit):
                 resolve_reviews.wait_for_job(session, "acme", "job1")
+
+
+class TestSolvedSearchLink(unittest.TestCase):
+    def test_links_an_agent_search_for_the_tag(self):
+        url = resolve_reviews.solved_search_url("acme", "auto-resolved-review")
+        self.assertTrue(url.startswith("https://acme.zendesk.com/agent/search/1?"))
+        self.assertIn("type=ticket", url)
+        self.assertIn(quote("tags:auto-resolved-review status:solved"), url)
+
+    def test_the_query_is_url_encoded(self):
+        """Spaces and `:` in a raw query would break the link."""
+        url = resolve_reviews.solved_search_url("acme", "t", since="2026-08-16")
+        self.assertNotIn(" ", url)
+        self.assertIn(quote("updated>2026-08-16"), url)
+
+    def test_the_window_starts_before_today(self):
+        """Zendesk dates are day-granular and `updated>` is exclusive, so today's
+        date would exclude the tickets the run just solved."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        self.assertNotEqual(resolve_reviews.search_since(), today)
+        self.assertEqual(resolve_reviews.search_since(days_back=0), today)
+
+    def test_a_custom_tag_is_what_gets_searched(self):
+        url = resolve_reviews.solved_search_url("acme", "my-tag")
+        self.assertIn(quote("tags:my-tag"), url)
 
 
 class TestSummaryMessage(unittest.TestCase):
