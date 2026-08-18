@@ -32,10 +32,12 @@ What it will and will not touch, deliberately narrow:
 No state file: solved tickets drop out of the query, so runs are idempotent and a
 weekly schedule drains the backlog and then keeps pace with new reviews.
 
-An applied run reports what it did to the same Discord channel as the daily triage
-("Marked 12 4★ and 31 5★ app-store reviews as solved"), so a job that quietly bulk-
-edits tickets is visible where the tickets are already discussed. A run that solves
-nothing posts nothing.
+Every applied run reports to the same Discord channel as the daily triage ("Marked 12
+4★ and 31 5★ app-store reviews as solved", plus a link to review them), so a job that
+bulk-edits tickets is visible where those tickets are already discussed. The runs that
+solved nothing report that too: silence is indistinguishable from a job that has
+quietly stopped working, and this one exists to keep a number moving that nobody
+watches directly.
 
 Config (env vars, or flags for local runs):
     ZENDESK_SUBDOMAIN     e.g. "mycompany"  -> https://mycompany.zendesk.com
@@ -64,6 +66,8 @@ import argparse
 import os
 import sys
 import time
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import requests
 
@@ -125,6 +129,31 @@ def select_resolvable(tickets, min_stars):
             continue
         resolvable.append(ticket)
     return resolvable, skipped
+
+
+def search_since(days_back=1):
+    """The date to bound a "what did this run touch" search with.
+
+    Yesterday, not today: Zendesk's date search has day granularity and `updated>`
+    is exclusive, so `updated>today` would filter out everything the run just did.
+    The extra day also absorbs the account timezone, which the search interprets
+    dates in and which this script has no reason to know.
+    """
+    return (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y-%m-%d")
+
+
+def solved_search_url(subdomain, tag, since=None):
+    """An agent-search link to the tickets this run solved.
+
+    The tag is what makes them findable, which is half of why every ticket gets one:
+    a bulk status change nobody can review afterwards is not reversible in practice.
+    `since` narrows an all-time tag search down to the current run — approximate, but
+    the job runs weekly, so a day's window is this run and nothing else.
+    """
+    query = f"tags:{tag} status:solved"
+    if since:
+        query += f" updated>{since}"
+    return f"https://{subdomain}.zendesk.com/agent/search/1?type=ticket&q={quote(query)}"
 
 
 def batches(items, size=BATCH_SIZE):
@@ -216,27 +245,47 @@ def format_tally(counts):
     return parts[0] if parts else ""
 
 
-def build_message(counts, remaining=0, failures=0, dry_run=False):
-    """The run summary, or None when there is nothing worth saying.
+def build_message(counts, *, url=None, examined=0, attempted=0, remaining=0,
+                  failures=0, dry_run=False):
+    """The run summary: what the run did, and what to click to check it.
 
-    Nothing solved and nothing failed means silence: a weekly job that posts "0
-    reviews" every week is noise the channel learns to skip past, and the backlog
-    running dry is exactly when that would start happening.
+    Every applied run posts one, including the runs that solved nothing. A weekly
+    job that only speaks when it acted is indistinguishable from a weekly job that
+    has quietly stopped working — and this one exists to keep a number moving that
+    nobody watches directly — so a no-op run reports what it looked at instead.
+
+    Keyword-only: these are six independent facts about one run, and at a call site
+    `build_message(counts, examined=48, attempted=0)` says which is which.
     """
     total = sum(counts.values())
-    if not total and not failures:
-        return None
     lines = []
     if total:
         prefix = "Would mark" if dry_run else "Marked"
         noun = "review" if total == 1 else "reviews"
         lines.append(f"✅ {prefix} {format_tally(counts)} app-store {noun} as solved "
                      f"in Zendesk.")
+    elif attempted:
+        # Eligible reviews went in and none came back solved. Reporting that as a
+        # quiet week would dress a broken run up as a clean one.
+        noun = "review" if attempted == 1 else "reviews"
+        lines.append(f"⚠️ None of the **{attempted:,}** eligible app-store {noun} "
+                     f"were solved.")
+    else:
+        noun = "ticket" if examined == 1 else "tickets"
+        lines.append(f"💤 No {MIN_STARS}★ or better app-store reviews left to solve — "
+                     f"looked at **{examined:,}** untouched {noun}.")
     if failures:
         # The run exits non-zero too, but the failure notification says only that a
         # workflow failed — the count belongs next to the number it contradicts.
         noun = "ticket" if failures == 1 else "tickets"
         lines.append(f"⚠️ **{failures:,}** {noun} failed to update — see the run log.")
+    if url:
+        # Masked, so the query string doesn't swallow the line. The label follows what
+        # the link is scoped to: a "what changed" link landing on an empty search
+        # would read as "it did nothing", which is a different claim from "there was
+        # nothing to do".
+        label = "Review what changed" if total else "Everything this job has solved"
+        lines.append(f"🔍 [{label}]({url})")
     if remaining:
         # Query matches this run did not look at, not reviews: the query cannot
         # express the star rating, so some of these are not reviews at all.
@@ -306,12 +355,14 @@ def main():
             reasons[reason] = reasons.get(reason, 0) + 1
         for reason, count in sorted(reasons.items(), key=lambda kv: -kv[1]):
             print(f"  skipped {count}: {reason}")
-    if not resolvable:
+    if resolvable:
+        print(f"{len(resolvable)} review(s) at {MIN_STARS}★ or better would be solved "
+              f"and tagged {args.tag!r}.")
+    else:
+        # Not an early return any more: an applied run still has a report to post, and
+        # "looked, found nothing" is the half of the week that proves the job ran.
         print("Nothing to solve.")
-        return
 
-    print(f"{len(resolvable)} review(s) at {MIN_STARS}★ or better would be solved "
-          f"and tagged {args.tag!r}.")
     remaining = 0
     if total_matched is not None and total_matched > len(tickets):
         remaining = total_matched - len(tickets)
@@ -320,7 +371,12 @@ def main():
 
     if not args.apply:
         print("Dry run: nothing was changed. Re-run with --apply to solve them.")
-        preview = build_message(tally_by_stars(resolvable), remaining, dry_run=True)
+        preview = build_message(
+            tally_by_stars(resolvable),
+            url=solved_search_url(subdomain, args.tag,
+                                  search_since() if resolvable else None),
+            examined=len(tickets), attempted=len(resolvable), remaining=remaining,
+            dry_run=True)
         print(f"Discord message that a real run would post:\n{preview}")
         return
 
@@ -339,15 +395,23 @@ def main():
 
     print(f"Solved {len(solved_ids)} of {len(ids)} ticket(s).")
 
+    # Scoped to this run when there is something to scope to, else the tag's whole
+    # history — a run that solved nothing still gets a link, it just points at what
+    # the job has done rather than at an empty search.
+    url = solved_search_url(subdomain, args.tag, search_since() if solved_ids else None)
+    print(f"  {'review what changed' if solved_ids else 'solved by this job'}: {url}")
+
     # Tallied from the ids the jobs confirmed, not from what was submitted, so the
     # message reports what Zendesk actually changed.
     by_id = {t["id"]: t for t in resolvable}
     solved_tickets = [by_id[i] for i in solved_ids if i in by_id]
-    message = build_message(tally_by_stars(solved_tickets), remaining, len(failures))
+    message = build_message(tally_by_stars(solved_tickets), url=url,
+                            examined=len(tickets), attempted=len(ids),
+                            remaining=remaining, failures=len(failures))
     posted = True
-    if message and args.no_discord:
+    if args.no_discord:
         print(f"Discord post skipped (--no-discord):\n{message}")
-    elif message:
+    else:
         posted = post_summary(webhook, message)
 
     if failures:
