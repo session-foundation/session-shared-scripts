@@ -8,6 +8,7 @@ Stdlib unittest so the repo needs no test dependency. Run from anywhere:
 Everything here is offline — no Zendesk, Anthropic, or Discord calls. The fetch
 tests drive fetch_tickets with a stub session instead.
 """
+import inspect
 import json
 import os
 import re
@@ -1226,6 +1227,41 @@ class TestFailureNotificationWiring(unittest.TestCase):
         self.assertIsNotNone(match, "zendesk_triage.yml has no top-level name")
         name = match.group(1).strip("\"'")
         self.assertIn(f'"{name}"', self.read("notify_failure.yml"))
+
+
+class TestNoDiscordWiring(unittest.TestCase):
+    """The dispatch button offers a way to run without posting. It has to be
+    --no-discord and never --dry-run: Actions logs on this public repo would
+    otherwise carry the whole digest, ticket content included.
+    """
+
+    WORKFLOW = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        ".github", "workflows", "zendesk_triage.yml",
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        with open(cls.WORKFLOW, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+        # Comments explain why --dry-run is not used here; only what the job runs
+        # should be matched against.
+        cls.yml = "\n".join(l for l in lines if not l.lstrip().startswith("#"))
+
+    def test_the_workflow_never_passes_dry_run(self):
+        self.assertNotIn("--dry-run", self.yml)
+
+    def test_the_no_discord_input_reaches_the_script(self):
+        self.assertIn("no_discord:", self.yml)
+        self.assertIn("--no-discord", self.yml)
+
+    def test_every_flag_the_workflow_passes_is_one_the_script_defines(self):
+        """The workflow builds the command as a string, so a flag that no longer
+        exists surfaces as a failed scheduled run rather than anything local."""
+        defined = set(re.findall(r'add_argument\("(--[a-z-]+)"',
+                                 inspect.getsource(triage.main)))
+        for flag in set(re.findall(r"(--[a-z-]+)", self.yml)):
+            self.assertIn(flag, defined, msg=f"{flag} is not a triage.py flag")
 
 
 if __name__ == "__main__":
