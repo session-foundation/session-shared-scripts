@@ -10,7 +10,9 @@ data loss, legal requests, security/legislation, etc.).
 Because this repo is public, ticket content is never written to the job summary or
 anywhere public: in a normal run the only place ticket detail goes is the Discord
 webhook (a private channel) and the links point at Zendesk (which needs auth to
-open). Set --dry-run to print the Discord payload locally instead of posting.
+open). Set --dry-run to print the Discord payload locally instead of posting; it
+prints ticket content, so it is for local runs only. --no-discord is the one to
+reach for in CI: same run, no post, and nothing but counts on stdout.
 
 The one exception is --dump-batch, a local debugging flag that writes ticket
 content to a file you name. Keep those files out of the repo (see .gitignore) or
@@ -31,7 +33,8 @@ Config (env vars, or flags for local runs):
     ZENDESK_DISCORD_WEBHOOK_URL
                           Discord incoming webhook for the triage channel, which is
                           its own webhook rather than the shared DISCORD_WEBHOOK_URL
-                          the failure notifier uses (not needed with --dry-run)
+                          the failure notifier uses (not needed with --dry-run
+                          or --no-discord)
     ZENDESK_QUERY         (optional) Zendesk search query; see DEFAULT_QUERY
     ZENDESK_TRIAGE_MODEL  (optional) Claude model id or alias; defaults to
                           claude-opus-5. Set it to override, e.g. `sonnet` for a
@@ -43,6 +46,9 @@ Usage:
 
     # local dry run: fetch + analyze, print the Discord payload, post nothing
     python triage.py --dry-run
+
+    # exercise the whole job without posting, and without printing tickets
+    python triage.py --no-discord
 
     # what the scheduled daily run does: 48h window, skipping unchanged repeats
     python triage.py --window-hours 48 --state .triage-state/seen.json
@@ -1029,6 +1035,10 @@ def main():
                              f"(default: {DEFAULT_BATCH_SIZE}).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Fetch and analyze, then print the Discord payload instead of posting.")
+    parser.add_argument("--no-discord", action="store_true",
+                        help="Fetch and analyze but post nothing, printing counts only. "
+                             "Unlike --dry-run it never prints ticket content, so it is "
+                             "the one to use where the log is public.")
     parser.add_argument("--findings", metavar="PATH",
                         help="Render findings classified elsewhere, skipping Zendesk and "
                              "Claude entirely. Pairs with --dump-batch.")
@@ -1056,7 +1066,7 @@ def main():
     # Subdomain is always needed: it builds the ticket links in the Discord payload.
     subdomain = get_env("ZENDESK_SUBDOMAIN", args.subdomain)
     # A dump exits before rendering anything, so it never needs the webhook either.
-    needs_webhook = not (args.dry_run or args.dump_batch)
+    needs_webhook = not (args.dry_run or args.no_discord or args.dump_batch)
     webhook = get_env("ZENDESK_DISCORD_WEBHOOK_URL", args.webhook, required=needs_webhook)
     model = args.model or os.environ.get("ZENDESK_TRIAGE_MODEL") or DEFAULT_MODEL
 
@@ -1178,6 +1188,16 @@ def main():
             print(f"(dry run: would record "
                   f"{sum(1 for t in classified if t.get('id') in would)} tickets "
                   f"in {args.state})")
+        return
+
+    if args.no_discord:
+        # No payload print, deliberately: this is the flag CI runs with, and Actions
+        # logs on a public repo are as public as the job summary. Nothing is recorded
+        # either — no message was delivered, so every ticket stays eligible, exactly
+        # as it would after a failed post.
+        print(f"Discord post skipped (--no-discord): {len(messages)} message(s) built, "
+              f"none posted, nothing recorded — these tickets stay eligible for the "
+              f"next run.")
         return
 
     posted = post_to_discord(requests.Session(), webhook, messages)

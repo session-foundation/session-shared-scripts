@@ -129,7 +129,7 @@ The daily window is 48h, so consecutive runs overlap. A state file (`--state`) r
 | Seen, `updated_at` unchanged | **Skipped before the model call** — costs no tokens |
 | Seen, `updated_at` moved | Re-analyzed, reported, and flagged 🔄 on its line |
 
-State is written only on a real run, and only for tickets covered by messages Discord **accepted**. Each message carries the ticket ids it accounts for, so a partial failure records exactly what landed: already-posted messages aren't repeated next run, and undelivered tickets stay eligible. The run then exits non-zero. `--dry-run` never writes state.
+State is written only on a real run, and only for tickets covered by messages Discord **accepted**. Each message carries the ticket ids it accounts for, so a partial failure records exactly what landed: already-posted messages aren't repeated next run, and undelivered tickets stay eligible. The run then exits non-zero. Neither `--dry-run` nor `--no-discord` writes state — nothing was delivered, so every ticket stays eligible for the next run.
 
 Two caveats worth knowing:
 
@@ -169,6 +169,7 @@ If you go looking for that key and can't find one: an API key only exists inside
 | `--review-star-floor`  | flag             | `3`                                                     | Classify app-store reviews at or below N stars; count the rest |
 | `--include-positive-reviews` | flag       | off                                                     | Classify every review, including 4-5★ ones |
 | `--no-hydrate`         | flag             | off                                                     | Skip fetching comments for content-free tickets |
+| `--no-discord`         | workflow input / flag | off                                                | Analyze but post nothing, printing counts only. Records no state, so the next run still reports those tickets. Unlike `--dry-run` it prints no ticket content, which is why the workflow exposes this one and not `--dry-run` |
 | `--effort`             | flag             | `medium`                                                | Claude reasoning effort (`low`–`max`) |
 
 #### Why this model, and why pinned
@@ -205,7 +206,7 @@ If a single request ever does hit the ceiling, the JSON never closes and no `str
 
 Runs daily at 07:00 UTC over a 48h window (~45 tickets). The window is 48h rather than 24h so a failed run doesn't silently drop a day of tickets; the resulting overlap doesn't produce duplicate posts because of the dedup state described above.
 
-Triggerable manually via **workflow_dispatch** (optional `query` / `window_hours` / `max_tickets` inputs, plus `reset_state` to re-report the whole window). Failures are reported through the Discord failure-notification workflow, which watches this workflow by name — so renaming `Zendesk Ticket Triage` means updating the `workflows:` list in [`notify_failure.yml`](.github/workflows/notify_failure.yml) too.
+Triggerable manually via **workflow_dispatch** (optional `query` / `window_hours` / `max_tickets` inputs, plus `reset_state` to re-report the whole window and `no_discord` to exercise the job without posting — that run records nothing, so the next one still reports the tickets it saw). Failures are reported through the Discord failure-notification workflow, which watches this workflow by name — so renaming `Zendesk Ticket Triage` means updating the `workflows:` list in [`notify_failure.yml`](.github/workflows/notify_failure.yml) too.
 
 #### How state survives between runs
 
@@ -241,7 +242,7 @@ Offline tests covering the window arithmetic, dedup partitioning, state round-tr
 
 ### Local Testing
 
-Local runs use the same Anthropic API path as CI, so they need an `ANTHROPIC_API_KEY` alongside the Zendesk credentials. `--dry-run` prints the Discord payload instead of posting, so no webhook is needed:
+Local runs use the same Anthropic API path as CI, so they need an `ANTHROPIC_API_KEY` alongside the Zendesk credentials. `--dry-run` prints the Discord payload instead of posting, so no webhook is needed. Keep it to local runs: it prints ticket content, and this repo's Actions logs are public — `--no-discord` is the one to dispatch from CI, and it prints counts only:
 
 ```
 pip install -r zendesk_triage/requirements.txt
@@ -252,6 +253,9 @@ python zendesk_triage/triage.py --window-hours 48 --dry-run
 
 # keep it cheap while iterating on the rendering
 python zendesk_triage/triage.py --window-hours 12 --max-tickets 5 --dry-run
+
+# same run without the payload dump: fetches, classifies, posts nothing
+python zendesk_triage/triage.py --window-hours 48 --no-discord
 
 # or take the model out of the loop: dump the batch, classify it by hand,
 # and feed the findings back in to render

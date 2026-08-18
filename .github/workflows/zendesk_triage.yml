@@ -27,6 +27,10 @@ on:
         description: "Ignore saved state and re-report everything in the window"
         type: boolean
         default: false
+      no_discord:
+        description: "Analyze but post nothing (records nothing either, so the next run still reports these tickets)"
+        type: boolean
+        default: false
 
 # Two overlapping runs would race on the same state file, and the loser's
 # reported tickets would be forgotten. Queue instead of cancelling, so a
@@ -80,6 +84,7 @@ jobs:
           INPUT_WINDOW: ${{ github.event.inputs.window_hours }}
           INPUT_MAX: ${{ github.event.inputs.max_tickets }}
           RESET_STATE: ${{ github.event.inputs.reset_state }}
+          NO_DISCORD: ${{ github.event.inputs.no_discord }}
         run: |
           # The cap is a runaway guard, not a batch size: a 48h window is ~45
           # tickets, and anything over --batch-size is split across requests
@@ -89,11 +94,19 @@ jobs:
           max=$(printf '%s' "${INPUT_MAX:-1000}" | tr -cd '0-9')
           : "${window:=48}"
           : "${max:=1000}"
+          # --no-discord, not --dry-run: this log is public, and a dry run would
+          # print the digest — ticket content and all — straight into it.
+          flags=""
+          if [ "$NO_DISCORD" = "true" ]; then flags="--no-discord"; fi
           echo "window=$window" >> "$GITHUB_OUTPUT"
           echo "max=$max" >> "$GITHUB_OUTPUT"
+          echo "flags=$flags" >> "$GITHUB_OUTPUT"
           if [ "$RESET_STATE" = "true" ]; then
             rm -f .triage-state/seen.json
             echo "State reset: every ticket in the window will be re-reported."
+          fi
+          if [ "$NO_DISCORD" = "true" ]; then
+            echo "Discord disabled: nothing will be posted, and nothing recorded, so the next run still reports these tickets."
           fi
           echo "Window: ${window}h, max tickets: ${max}"
 
@@ -109,6 +122,7 @@ jobs:
         run: |
           mkdir -p .triage-state
           python zendesk_triage/triage.py \
+            ${{ steps.cfg.outputs.flags }} \
             --window-hours "${{ steps.cfg.outputs.window }}" \
             --max-tickets "${{ steps.cfg.outputs.max }}" \
             --state .triage-state/seen.json
