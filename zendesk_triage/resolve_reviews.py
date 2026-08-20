@@ -3,7 +3,7 @@
 Solve the app-store reviews that were never going to be actioned.
 
 59% of all tickets are 4-5★ AppFollow reviews with nothing to act on, and 4,812 of
-them sit unsolved in `new`. The daily triage already counts them without spending
+them sit unsolved in `new`. The triage already counts them without spending
 tokens (see partition_reviews in triage.py); this closes them out so the unsolved
 backlog reflects work that actually exists.
 
@@ -29,10 +29,10 @@ What it will and will not touch, deliberately narrow:
     status change should keep its hands off
   * `solved`, never `closed` — solved is reversible, closed is not
 
-No state file: solved tickets drop out of the query, so runs are idempotent and a
-weekly schedule drains the backlog and then keeps pace with new reviews.
+No state file: solved tickets drop out of the query, so runs are idempotent and the
+schedule drains the backlog and then keeps pace with new reviews.
 
-Every applied run reports to the same Discord channel as the daily triage ("Marked 12
+Every applied run reports to the same Discord channel as the triage ("Marked 12
 4★ and 31 5★ app-store reviews as solved", plus a link to review them), so a job that
 bulk-edits tickets is visible where those tickets are already discussed. The runs that
 solved nothing report that too: silence is indistinguishable from a job that has
@@ -45,7 +45,7 @@ Config (env vars, or flags for local runs):
     ZENDESK_API_TOKEN     Zendesk API token
     ZENDESK_DISCORD_WEBHOOK_URL
                           Discord incoming webhook for the triage channel — the same
-                          one the daily digest posts to, not the shared
+                          one the digest posts to, not the shared
                           DISCORD_WEBHOOK_URL the failure notifier uses (only needed
                           with --apply)
 
@@ -81,7 +81,7 @@ import triage  # noqa: E402  (needs the path insert above)
 MIN_STARS = 4
 # Zendesk's search API returns at most 1000 results, so a run can never see more
 # than that anyway. At ~420 new reviews a week the first few runs drain the
-# backlog and every run after that clears the week's intake.
+# backlog and the five runs after that clear the week's intake.
 DEFAULT_MAX_TICKETS = 1000
 # update_many takes at most 100 ids per request.
 # https://developer.zendesk.com/api-reference/ticketing/tickets/tickets/#update-many-tickets
@@ -148,7 +148,8 @@ def solved_search_url(subdomain, tag, since=None):
     The tag is what makes them findable, which is half of why every ticket gets one:
     a bulk status change nobody can review afterwards is not reversible in practice.
     `since` narrows an all-time tag search down to the current run — approximate, but
-    the job runs weekly, so a day's window is this run and nothing else.
+    the job runs once a day at most, so a day's window is this run and, at worst,
+    yesterday's.
     """
     query = f"tags:{tag} status:solved"
     if since:
@@ -220,7 +221,7 @@ def wait_for_job(session, subdomain, job_id, timeout=JOB_TIMEOUT_SECONDS):
 
 # ---- Discord summary -------------------------------------------------------
 #
-# One plain message, same channel and same no-embed style as the daily triage. It is
+# One plain message, same channel and same no-embed style as the triage. It is
 # a handful of lines by construction — a tally, not a per-ticket list — so unlike the
 # triage it never needs clipping or chunking against Discord's 2,000-character cap.
 
@@ -249,10 +250,12 @@ def build_message(counts, *, url=None, examined=0, attempted=0, remaining=0,
                   failures=0, dry_run=False):
     """The run summary: what the run did, and what to click to check it.
 
-    Every applied run posts one, including the runs that solved nothing. A weekly
-    job that only speaks when it acted is indistinguishable from a weekly job that
-    has quietly stopped working — and this one exists to keep a number moving that
-    nobody watches directly — so a no-op run reports what it looked at instead.
+    Every applied run posts one, including the runs that solved nothing. A job that
+    only speaks when it acted is indistinguishable from a job that has quietly
+    stopped working — and this one exists to keep a number moving that nobody
+    watches directly — so a no-op run reports what it looked at instead. The runs
+    that die before there is a message to post are covered by an if: failure() step
+    in the workflow, which posts to the same channel.
 
     Keyword-only: these are six independent facts about one run, and at a call site
     `build_message(counts, examined=48, attempted=0)` says which is which.
@@ -266,7 +269,7 @@ def build_message(counts, *, url=None, examined=0, attempted=0, remaining=0,
                      f"in Zendesk.")
     elif attempted:
         # Eligible reviews went in and none came back solved. Reporting that as a
-        # quiet week would dress a broken run up as a clean one.
+        # quiet day would dress a broken run up as a clean one.
         noun = "review" if attempted == 1 else "reviews"
         lines.append(f"⚠️ None of the **{attempted:,}** eligible app-store {noun} "
                      f"were solved.")
@@ -331,7 +334,7 @@ def main():
     subdomain = triage.get_env("ZENDESK_SUBDOMAIN", args.subdomain)
     email = triage.get_env("ZENDESK_EMAIL", args.email)
     api_token = triage.get_env("ZENDESK_API_TOKEN", args.api_token)
-    # The triage channel's own webhook, the one the daily digest posts to — a Discord
+    # The triage channel's own webhook, the one the digest posts to — a Discord
     # webhook is bound to the channel it was created in, so posting alongside the
     # digest means using its secret rather than the shared DISCORD_WEBHOOK_URL.
     #
@@ -360,7 +363,7 @@ def main():
               f"and tagged {args.tag!r}.")
     else:
         # Not an early return any more: an applied run still has a report to post, and
-        # "looked, found nothing" is the half of the week that proves the job ran.
+        # "looked, found nothing" is the half that proves the job ran.
         print("Nothing to solve.")
 
     remaining = 0

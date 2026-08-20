@@ -50,8 +50,8 @@ Usage:
     # exercise the whole job without posting, and without printing tickets
     python triage.py --no-discord
 
-    # what the scheduled daily run does: 48h window, skipping unchanged repeats
-    python triage.py --window-hours 48 --state .triage-state/seen.json
+    # what the scheduled weekday run does: 72h window, skipping unchanged repeats
+    python triage.py --window-hours 72 --state .triage-state/seen.json
 
     # or an explicit query, which overrides --window-hours
     python triage.py --query "type:ticket status:open tags:bug" --max-tickets 50
@@ -88,26 +88,32 @@ BACKLOG_QUERY = "type:ticket status<solved"
 # for --max-tickets — instead of failing the run.
 # https://developer.zendesk.com/api-reference/ticketing/ticket-management/search/#results-limit
 SEARCH_RESULT_LIMIT = 1000
-STATE_VERSION = 1
+STATE_VERSION = 2
 
 
 def build_window_query(hours):
-    """Query for unsolved tickets created in the last `hours`, newest first.
+    """Query for unsolved tickets touched in the last `hours`, most recent first.
+
+    `updated>`, not `created>`: a ticket the requester adds detail to days after
+    opening it is worth re-reading, and a created-window would never fetch it again.
+    The dedup state keeps the wider net from being noisy: whatever matched, a ticket
+    the requester hasn't touched is skipped (see activity_key). Measured cost over
+    72h: 56 tickets fetched against 54 for created>.
 
     The cutoff is an explicit UTC timestamp rather than Zendesk's relative
-    `created>48hours` form, so the exact window lands in the run log.
+    `updated>72hours` form, so the exact window lands in the run log.
     """
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
-    return f"type:ticket status<solved created>{cutoff} order_by:created_at sort:desc"
+    return f"type:ticket status<solved updated>{cutoff} order_by:updated_at sort:desc"
 
 
 def window_label(hours):
     if hours % 24 == 0 and hours >= 24:
         days = hours // 24
-        return f"created in the past {days} day{'s' if days > 1 else ''}"
-    return f"created in the past {hours}h"
+        return f"updated in the past {days} day{'s' if days > 1 else ''}"
+    return f"updated in the past {hours}h"
 # A pinned id rather than the `opus` alias, deliberately. This is an unattended
 # digest a human skims: the batch-wide fields (`cluster`, `priority_rank`) and the
 # severity calibration shift when the model underneath changes, and an alias would
@@ -438,9 +444,9 @@ def fetch_total_unsolved(session, subdomain, query=BACKLOG_QUERY):
 
 # ---- Dedup state -----------------------------------------------------------
 #
-# Maps ticket id -> {updated_at, last_reported}. A ticket is re-reported only if
-# Zendesk's updated_at has moved since we last showed it, so the daily 48h window
-# does not repost yesterday's unchanged tickets. The state lives outside the repo
+# Maps ticket id -> {requester_updated_at, last_reported}. A ticket is re-reported
+# only if the requester has touched it since we last showed it, so neither the
+# overlapping window nor our own replies repost yesterday's tickets. The state lives outside the repo
 # (CI restores it from the Actions cache), so every read degrades gracefully: a
 # missing or corrupt file just means everything looks new.
 
@@ -472,12 +478,61 @@ def load_state(path):
     return data
 
 
+def activity_key(ticket):
+    """The timestamp a re-report is judged against.
+
+    `requester_updated_at` (from the ticket's metric set), not `updated_at`: the latter
+    moves on any change at all — our own replies, a tag edit, and in this account an
+    hourly automation that bumps tickets at :01 past the hour. Deduping on it would
+    re-report the same ticket every run until it was solved.
+
+    Falls back to `updated_at` when the metric set is missing, so a failed sideload
+    degrades to the old noisy-but-never-wrong behaviour rather than to silence.
+    """
+    return ticket.get("requester_updated_at") or ticket.get("updated_at")
+
+
+def hydrate_requester_activity(session, subdomain, tickets):
+    """Fill `requester_updated_at` from each ticket's metric set. Returns the count.
+
+    Sideloaded through show_many, so this is one request per 100 tickets rather than
+    one per ticket.
+    """
+    hydrated = 0
+    ids = [t["id"] for t in tickets if t.get("id") is not None]
+    for start in range(0, len(ids), 100):
+        chunk = ids[start : start + 100]
+        url = f"https://{subdomain}.zendesk.com/api/v2/tickets/show_many.json"
+        try:
+            resp = request_with_retry(session, "GET", url, attempts=2, params={
+                "ids": ",".join(str(i) for i in chunk), "include": "metric_sets"})
+        except requests.RequestException as exc:
+            print(f"Note: could not fetch ticket metrics ({exc}); "
+                  f"falling back to updated_at for {len(chunk)} ticket(s).")
+            continue
+        if resp.status_code >= 400:
+            print(f"Note: ticket metrics returned {resp.status_code}; "
+                  f"falling back to updated_at for {len(chunk)} ticket(s).")
+            continue
+        try:
+            metric_sets = resp.json().get("metric_sets", [])
+        except ValueError as exc:
+            print(f"Note: unreadable ticket metrics ({exc}); falling back to updated_at.")
+            continue
+        by_id = {m.get("ticket_id"): m.get("requester_updated_at") for m in metric_sets}
+        for ticket in tickets:
+            stamp = by_id.get(ticket.get("id"))
+            if stamp:
+                ticket["requester_updated_at"] = stamp
+                hydrated += 1
+    return hydrated
+
+
 def partition_by_state(tickets, state):
     """Split into (new, changed, unchanged) against saved state.
 
-    `changed` means Zendesk's updated_at differs from what we recorded — note that
-    any agent action (reply, tag, status change) bumps updated_at, not just an
-    end-user comment.
+    `changed` means the requester has touched the ticket since we last reported it —
+    see activity_key. An agent reply or an automation firing is not a change here.
     """
     seen = state.get("seen", {})
     new, changed, unchanged = [], [], []
@@ -485,7 +540,7 @@ def partition_by_state(tickets, state):
         previous = seen.get(str(ticket.get("id")))
         if previous is None:
             new.append(ticket)
-        elif previous.get("updated_at") != ticket.get("updated_at"):
+        elif previous.get("requester_updated_at") != activity_key(ticket):
             changed.append(ticket)
         else:
             unchanged.append(ticket)
@@ -502,11 +557,11 @@ def save_state(path, state, reported, retention_days):
     seen = dict(state.get("seen", {}))
     for ticket in reported:
         seen[str(ticket.get("id"))] = {
-            "updated_at": ticket.get("updated_at"),
+            "requester_updated_at": activity_key(ticket),
             "last_reported": stamp,
         }
 
-    # Bound the file: the window is 48h, so anything older than retention is moot.
+    # Bound the file: the window is 72h, so anything older than retention is moot.
     cutoff = now - timedelta(days=retention_days)
     kept = {}
     for ticket_id, record in seen.items():
@@ -1020,8 +1075,8 @@ def main():
     parser.add_argument("--query", help="Zendesk search query (else ZENDESK_QUERY, else default). "
                                         "Takes precedence over --window-hours.")
     parser.add_argument("--window-hours", type=int, metavar="N",
-                        help="Only analyze unsolved tickets created in the last N hours. "
-                             "The scheduled daily run uses 48.")
+                        help="Only analyze unsolved tickets updated in the last N hours. "
+                             "The scheduled weekday run uses 72.")
     parser.add_argument("--model", help=f"Claude model id, or an alias (opus, sonnet, "
                                         f"haiku) mapped to an id "
                                         f"(else ZENDESK_TRIAGE_MODEL, else {DEFAULT_MODEL}).")
@@ -1129,6 +1184,10 @@ def main():
                 return
 
         if args.state:
+            # Before partition_by_state, which compares on requester_updated_at, and
+            # after the review filter, so the sideload only covers what can be
+            # reported. One request per 100 tickets.
+            hydrate_requester_activity(zd, subdomain, tickets)
             state = load_state(args.state)
             new, changed, unchanged = partition_by_state(tickets, state)
             print(f"{len(new)} new, {len(changed)} changed since last reported, "
