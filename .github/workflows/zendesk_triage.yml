@@ -18,7 +18,7 @@ on:
         description: "Zendesk search query (overrides the rolling window entirely)"
         required: false
       window_hours:
-        description: "Analyze tickets created in the last N hours (default 72)"
+        description: "Analyze tickets updated in the last N hours (default 72)"
         required: false
       max_tickets:
         description: "Max tickets to analyze (default 1000, Zendesk's search cap)"

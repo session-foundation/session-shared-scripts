@@ -98,7 +98,7 @@ The script (`zendesk_triage/triage.py`) fetches the tickets in a rolling time wi
 Each line leads with a severity marker, a category emoji and a platform icon, links the ticket id, and carries the model's one-line summary plus its root-cause guess:
 
 ```
-🗂️ **Zendesk triage** — analyzed **16** of **46** tickets in the window (created in the past 2 days). Skipped **30** positive app-store review(s).
+🗂️ **Zendesk triage** — analyzed **16** of **46** tickets in the window (updated in the past 3 days). Skipped **30** positive app-store review(s).
 Backlog: **428** unsolved excluding app-store reviews (**5,252** more are reviews, not triaged).
 **9** worth looking into.
 ⭐ **6** · 🐛 **3** · ❓ **2** · 🔑 **1** · ⚖️ **1** · 🔒 **1**
@@ -121,19 +121,19 @@ The header accounts for the batch in full, so nothing is dropped silently. The b
 
 ### Deduplication
 
-The window is 72h against runs a day apart, so consecutive runs overlap. A state file (`--state`) records each reported ticket's Zendesk `updated_at`, giving three outcomes per ticket:
+The window is 72h against runs a day apart, so consecutive runs overlap. A state file (`--state`) records each reported ticket's `requester_updated_at`, giving three outcomes per ticket:
 
 | Ticket | Outcome |
 | ------ | ------- |
 | Not seen before | Analyzed and reported |
-| Seen, `updated_at` unchanged | **Skipped before the model call** — costs no tokens |
-| Seen, `updated_at` moved | Re-analyzed, reported, and flagged 🔄 on its line |
+| Seen, requester hasn't been back | **Skipped before the model call** — costs no tokens |
+| Seen, requester added something | Re-analyzed, reported, and flagged 🔄 on its line |
 
 State is written only on a real run, and only for tickets covered by messages Discord **accepted**. Each message carries the ticket ids it accounts for, so a partial failure records exactly what landed: already-posted messages aren't repeated next run, and undelivered tickets stay eligible. The run then exits non-zero. Neither `--dry-run` nor `--no-discord` writes state — nothing was delivered, so every ticket stays eligible for the next run.
 
 Two caveats worth knowing:
 
-- **Any** agent action bumps `updated_at` (a reply, a tag, a status change), not just an end-user comment, so agent activity can trigger a re-report. Narrowing this to new end-user comments would need per-ticket comment fetches.
+- The comparison is on `requester_updated_at`, from the ticket's metric set, **not** `updated_at`. `updated_at` moves on any change — our own replies, a tag edit, and in this account an hourly automation that bumps tickets at :01 past the hour — so deduping on it re-reports the same ticket every run. Measured on a real window: an automation pass over 18 tickets produced 18 re-reports under `updated_at` and 0 under `requester_updated_at`. The metric sets are sideloaded through `show_many`, one request per 100 tickets, and a failed sideload falls back to `updated_at` — noisy, never silent.
 - Unchanged tickets are filtered out *before* the model call, which is what makes the dedup free. The trade-off is that duplicate-cluster detection only sees the new and changed tickets in a given run, not the whole window.
 
 > **Note:** This repo is public, so ticket content is never written to the run logs or the job summary — ticket detail goes only to the Discord webhook (a private channel), and the links require Zendesk auth to open. The one exception is the local `--dump-batch` debugging flag, which writes ticket content to a file you name; `zendesk_triage/*.json` is gitignored to keep those out of the repo.
@@ -158,7 +158,7 @@ If you go looking for that key and can't find one: an API key only exists inside
 
 | Setting                | Where            | Default                                                 | Description |
 | ---------------------- | ---------------- | ------------------------------------------------------- | ----------- |
-| `--window-hours`       | workflow input / flag | `72`                                               | Analyze unsolved tickets created in the last N hours |
+| `--window-hours`       | workflow input / flag | `72`                                               | Analyze unsolved tickets updated in the last N hours |
 | `--state`              | flag             | *(unset)*                                               | Dedup state file. The workflow points this at the cached `.triage-state/seen.json` |
 | `--state-retention-days` | flag           | `30`                                                    | Forget state entries older than N days |
 | `ZENDESK_QUERY`        | env / `--query`  | *(unset)*                                               | Explicit Zendesk search query. Overrides `--window-hours` entirely |
@@ -206,7 +206,7 @@ If a single request ever does hit the ceiling, the JSON never closes and no `str
 
 Runs **Monday to Friday at 00:00 UTC** over a 72h window (~70 tickets) — 10:00 AEST, 11:00 AEDT under daylight saving, so the digest opens the Australian workday. Cron is UTC-only, so `0 0 * * 1-5` is pinned to UTC+10 rather than UTC+11 (`0 23 * * 0-4`), which keeps the cron's day-of-week aligned with the local one.
 
-The window is 72h rather than the 24h between runs so a failed run doesn't drop a day and Monday still reaches back past the weekend. The overlap doesn't duplicate posts, because of the dedup state above.
+The window is on `updated>`, not `created>`, so a ticket the requester adds detail to days after opening it is fetched again — a created-window would never see it. 72h rather than the 24h between runs so a failed run doesn't drop a day and Monday still reaches back past the weekend. Neither the overlap nor the wider net duplicates posts, because of the dedup state above.
 
 [Zendesk Resolve Positive Reviews](#zendesk-resolve-positive-reviews) runs first, as this workflow's opening job, wired as a [reusable workflow](https://docs.github.com/actions/using-workflows/reusing-workflows) (`uses:` + `secrets: inherit`). Order matters: the triage query is `status<solved`, so a review the resolver solves leaves the window — running second would re-count reviews just closed. The digest `needs:` it but runs `if: always()`, since the resolver is an optimisation for it, not a precondition.
 

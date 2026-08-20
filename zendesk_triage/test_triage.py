@@ -132,29 +132,39 @@ class NoSleep:
 
 class TestWindowQuery(unittest.TestCase):
     def test_cutoff_is_the_requested_number_of_hours_back(self):
-        query = triage.build_window_query(48)
-        cutoff = query.split("created>")[1].split(" ")[0]
+        query = triage.build_window_query(72)
+        cutoff = query.split("updated>")[1].split(" ")[0]
         parsed = datetime.strptime(cutoff, STAMP).replace(tzinfo=timezone.utc)
-        expected = datetime.now(timezone.utc) - timedelta(hours=48)
+        expected = datetime.now(timezone.utc) - timedelta(hours=72)
         self.assertLess(abs((parsed - expected).total_seconds()), 120)
 
+    def test_the_window_is_on_updated_at_not_created_at(self):
+        """A created-window would never re-fetch a ticket the requester adds detail to
+        days after opening it. The dedup state, not the query, is what keeps the wider
+        net from being noisy."""
+        query = triage.build_window_query(72)
+        self.assertIn("updated>", query)
+        self.assertNotIn("created>", query)
+
     def test_query_keeps_unsolved_filter_and_newest_first_ordering(self):
-        query = triage.build_window_query(48)
+        query = triage.build_window_query(72)
         self.assertIn("type:ticket", query)
         self.assertIn("status<solved", query)
-        self.assertIn("order_by:created_at", query)
+        # Ordered by the same field the window bounds, so a fetch truncated at
+        # --max-tickets drops the least recently touched rather than the oldest.
+        self.assertIn("order_by:updated_at", query)
         self.assertIn("sort:desc", query)
 
     def test_a_longer_window_reaches_further_back(self):
-        short = triage.build_window_query(48).split("created>")[1].split(" ")[0]
-        long = triage.build_window_query(168).split("created>")[1].split(" ")[0]
+        short = triage.build_window_query(48).split("updated>")[1].split(" ")[0]
+        long = triage.build_window_query(168).split("updated>")[1].split(" ")[0]
         self.assertLess(long, short)  # ISO-8601 sorts chronologically
 
     def test_window_label_reads_naturally(self):
-        self.assertEqual(triage.window_label(24), "created in the past 1 day")
-        self.assertEqual(triage.window_label(48), "created in the past 2 days")
-        self.assertEqual(triage.window_label(168), "created in the past 7 days")
-        self.assertEqual(triage.window_label(36), "created in the past 36h")
+        self.assertEqual(triage.window_label(24), "updated in the past 1 day")
+        self.assertEqual(triage.window_label(48), "updated in the past 2 days")
+        self.assertEqual(triage.window_label(168), "updated in the past 7 days")
+        self.assertEqual(triage.window_label(36), "updated in the past 36h")
 
 
 # ---- Dedup state -----------------------------------------------------------
@@ -169,27 +179,45 @@ class TestPartitionByState(unittest.TestCase):
         self.assertEqual(changed, [])
         self.assertEqual(unchanged, [])
 
-    def test_same_updated_at_is_unchanged(self):
-        state = {"seen": {"1": {"updated_at": "2026-08-03T12:00:00Z"}}}
+    def test_same_requester_activity_is_unchanged(self):
+        state = {"seen": {"1": {"requester_updated_at": "2026-08-03T12:00:00Z"}}}
         new, changed, unchanged = triage.partition_by_state(
             [ticket(1, updated_at="2026-08-03T12:00:00Z")], state
         )
         self.assertEqual((new, changed), ([], []))
         self.assertEqual([t["id"] for t in unchanged], [1])
 
-    def test_moved_updated_at_is_changed(self):
-        state = {"seen": {"1": {"updated_at": "2026-08-03T12:00:00Z"}}}
+    def test_moved_requester_activity_is_changed(self):
+        state = {"seen": {"1": {"requester_updated_at": "2026-08-03T12:00:00Z"}}}
         new, changed, unchanged = triage.partition_by_state(
             [ticket(1, updated_at="2026-08-04T09:00:00Z")], state
         )
         self.assertEqual((new, unchanged), ([], []))
         self.assertEqual([t["id"] for t in changed], [1])
 
+    def test_our_own_reply_does_not_re_report(self):
+        """updated_at moves on an agent reply, a tag edit, or the hourly automation
+        that bumps tickets at :01. Only the requester coming back counts."""
+        state = {"seen": {"1": {"requester_updated_at": "2026-08-03T12:00:00Z"}}}
+        touched = ticket(1, updated_at="2026-08-04T09:01:00Z")
+        touched["requester_updated_at"] = "2026-08-03T12:00:00Z"
+        _, changed, unchanged = triage.partition_by_state([touched], state)
+        self.assertEqual(changed, [])
+        self.assertEqual([t["id"] for t in unchanged], [1])
+
+    def test_a_missing_metric_set_falls_back_to_updated_at(self):
+        """A failed sideload degrades to the old noisy behaviour, never to silence."""
+        state = {"seen": {"1": {"requester_updated_at": "2026-08-03T12:00:00Z"}}}
+        _, changed, _ = triage.partition_by_state(
+            [ticket(1, updated_at="2026-08-04T09:00:00Z")], state
+        )
+        self.assertEqual([t["id"] for t in changed], [1])
+
     def test_mixed_batch_splits_three_ways(self):
         state = {
             "seen": {
-                "1": {"updated_at": "2026-08-03T12:00:00Z"},
-                "2": {"updated_at": "2026-08-01T00:00:00Z"},
+                "1": {"requester_updated_at": "2026-08-03T12:00:00Z"},
+                "2": {"requester_updated_at": "2026-08-01T00:00:00Z"},
             }
         }
         batch = [
@@ -204,11 +232,63 @@ class TestPartitionByState(unittest.TestCase):
 
     def test_ids_are_matched_as_strings_not_ints(self):
         """State comes back from JSON, where keys are always strings."""
-        state = {"seen": {"27564": {"updated_at": "2026-08-03T12:00:00Z"}}}
+        state = {"seen": {"27564": {"requester_updated_at": "2026-08-03T12:00:00Z"}}}
         _, _, unchanged = triage.partition_by_state(
             [ticket(27564, updated_at="2026-08-03T12:00:00Z")], state
         )
         self.assertEqual(len(unchanged), 1)
+
+
+class TestRequesterActivity(unittest.TestCase):
+    """requester_updated_at comes from the ticket's metric set, sideloaded rather than
+    fetched per ticket."""
+
+    def metrics(self, *pairs):
+        return FakeResponse({"metric_sets": [
+            {"ticket_id": i, "requester_updated_at": stamp} for i, stamp in pairs]})
+
+    def test_it_attaches_the_requester_timestamp(self):
+        tickets = [ticket(1), ticket(2)]
+        session = FakeSession([self.metrics((1, "A"), (2, "B"))])
+        self.assertEqual(triage.hydrate_requester_activity(session, "acme", tickets), 2)
+        self.assertEqual([t["requester_updated_at"] for t in tickets], ["A", "B"])
+
+    def test_it_sideloads_rather_than_fetching_each_ticket(self):
+        session = FakeSession([self.metrics((1, "A"))])
+        triage.hydrate_requester_activity(session, "acme", [ticket(1)])
+        method, url, kwargs = session.calls[0]
+        self.assertEqual(method, "GET")
+        self.assertIn("show_many.json", url)
+        self.assertEqual(kwargs["params"]["include"], "metric_sets")
+
+    def test_it_batches_at_a_hundred_ids(self):
+        """show_many caps at 100 ids, so 150 tickets must be two requests."""
+        tickets = [ticket(i) for i in range(150)]
+        session = FakeSession([self.metrics(), self.metrics()])
+        triage.hydrate_requester_activity(session, "acme", tickets)
+        self.assertEqual(len(session.calls), 2)
+        self.assertEqual(len(session.calls[0][2]["params"]["ids"].split(",")), 100)
+        self.assertEqual(len(session.calls[1][2]["params"]["ids"].split(",")), 50)
+
+    def test_a_failed_sideload_leaves_the_ticket_alone(self):
+        """activity_key then falls back to updated_at: noisy, never silent."""
+        tickets = [ticket(1, updated_at="X")]
+        for response in (FakeResponse({}, status_code=500), NonJsonResponse(),
+                         requests.ConnectionError("unreachable")):
+            with self.subTest(response=type(response).__name__):
+                with NoSleep():
+                    triage.hydrate_requester_activity(
+                        FakeSession([response] * 2), "acme", tickets)
+                self.assertNotIn("requester_updated_at", tickets[0])
+                self.assertEqual(triage.activity_key(tickets[0]), "X")
+
+    def test_a_ticket_the_requester_never_touched_falls_back(self):
+        """A null requester_updated_at must not read as "no activity ever" — that would
+        pin the ticket unchanged forever."""
+        tickets = [ticket(1, updated_at="X")]
+        session = FakeSession([self.metrics((1, None))])
+        triage.hydrate_requester_activity(session, "acme", tickets)
+        self.assertEqual(triage.activity_key(tickets[0]), "X")
 
 
 class TestStateRoundTrip(unittest.TestCase):
@@ -221,7 +301,7 @@ class TestStateRoundTrip(unittest.TestCase):
         triage.save_state(self.path, triage.empty_state(), [ticket(1), ticket(2)], 30)
         state = triage.load_state(self.path)
         self.assertEqual(sorted(state["seen"]), ["1", "2"])
-        self.assertEqual(state["seen"]["1"]["updated_at"], "2026-08-03T12:00:00Z")
+        self.assertEqual(state["seen"]["1"]["requester_updated_at"], "2026-08-03T12:00:00Z")
         self.assertEqual(state["version"], triage.STATE_VERSION)
 
     def test_save_creates_missing_parent_directories(self):
@@ -237,16 +317,17 @@ class TestStateRoundTrip(unittest.TestCase):
         triage.save_state(self.path, triage.empty_state(), [ticket(1, updated_at="A")], 30)
         state = triage.load_state(self.path)
         triage.save_state(self.path, state, [ticket(1, updated_at="B")], 30)
-        self.assertEqual(triage.load_state(self.path)["seen"]["1"]["updated_at"], "B")
+        self.assertEqual(
+            triage.load_state(self.path)["seen"]["1"]["requester_updated_at"], "B")
 
     def test_entries_past_retention_are_pruned(self):
         old = (datetime.now(timezone.utc) - timedelta(days=40)).strftime(STAMP)
         recent = (datetime.now(timezone.utc) - timedelta(days=2)).strftime(STAMP)
         state = {
-            "version": 1,
+            "version": triage.STATE_VERSION,
             "seen": {
-                "1": {"updated_at": "A", "last_reported": old},
-                "2": {"updated_at": "B", "last_reported": recent},
+                "1": {"requester_updated_at": "A", "last_reported": old},
+                "2": {"requester_updated_at": "B", "last_reported": recent},
             },
         }
         kept, pruned = triage.save_state(self.path, state, [], 30)
@@ -254,13 +335,15 @@ class TestStateRoundTrip(unittest.TestCase):
         self.assertEqual(list(triage.load_state(self.path)["seen"]), ["2"])
 
     def test_entries_with_unparseable_timestamps_are_dropped(self):
-        state = {"version": 1, "seen": {"1": {"updated_at": "A", "last_reported": "nonsense"}}}
+        state = {"version": triage.STATE_VERSION,
+                 "seen": {"1": {"requester_updated_at": "A", "last_reported": "nonsense"}}}
         kept, pruned = triage.save_state(self.path, state, [], 30)
         self.assertEqual((kept, pruned), (0, 1))
 
     def test_a_ticket_reported_now_survives_pruning(self):
         old = (datetime.now(timezone.utc) - timedelta(days=40)).strftime(STAMP)
-        state = {"version": 1, "seen": {"1": {"updated_at": "A", "last_reported": old}}}
+        state = {"version": triage.STATE_VERSION,
+                 "seen": {"1": {"requester_updated_at": "A", "last_reported": old}}}
         kept, _ = triage.save_state(self.path, state, [ticket(1, updated_at="B")], 30)
         self.assertEqual(kept, 1)
 
@@ -335,8 +418,8 @@ class TestHeader(unittest.TestCase):
         self.assertIn("analyzed **1** of **47** tickets in the window", text)
 
     def test_names_the_window(self):
-        text = self.header([finding(1)], {"matched": 5, "scope": "created in the past 2 days"})
-        self.assertIn("(created in the past 2 days)", text)
+        text = self.header([finding(1)], {"matched": 5, "scope": "updated in the past 3 days"})
+        self.assertIn("(updated in the past 3 days)", text)
 
     def test_reports_skipped_unchanged_tickets(self):
         text = self.header([finding(1)], {"matched": 47, "skipped_unchanged": 45})
