@@ -10,7 +10,9 @@ This script writes to Zendesk, so the tests lean on the guards rather than the h
 path: that a dry run cannot PUT, that only positive app-store reviews are selected,
 and that an asynchronous job's failures are surfaced instead of swallowed.
 """
+import inspect
 import os
+import re
 import sys
 import unittest
 from datetime import datetime, timezone
@@ -358,6 +360,61 @@ class TestSharedDetectionIsNotReimplemented(unittest.TestCase):
         job solves exactly that set, so the two numbers cannot disagree."""
         self.assertEqual(resolve_reviews.MIN_STARS,
                          triage.DEFAULT_REVIEW_STAR_FLOOR + 1)
+
+
+class TestWorkflowWiring(unittest.TestCase):
+    """This job is only ever exercised on a schedule, so a flag the script no longer
+    defines surfaces as a failed run days later. The triage workflow has had this check
+    since it was written; this is the same check for the workflow that writes to Zendesk.
+    """
+
+    WORKFLOWS = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".github", "workflows"
+    )
+
+    @classmethod
+    def read(cls, filename):
+        with open(os.path.join(cls.WORKFLOWS, filename), encoding="utf-8") as fh:
+            # Comments explain the choices; only what the job runs should be matched.
+            return [l for l in fh.read().splitlines() if not l.lstrip().startswith("#")]
+
+    @classmethod
+    def setUpClass(cls):
+        lines = cls.read("zendesk_resolve_reviews.yml")
+        # Just the lines that build the script's command line: the invocation itself, plus
+        # the shell assignments the invocation interpolates. Scanning the whole file would
+        # sweep up the failure reporter's curl flags and demand resolve_reviews.py define
+        # --fail-with-body.
+        start = next(i for i, l in enumerate(lines) if "resolve_reviews.py" in l)
+        command = [lines[start]]
+        while command[-1].rstrip().endswith("\\"):
+            start += 1
+            command.append(lines[start])
+        cls.command = "\n".join(command + [l for l in lines if "flags=" in l])
+
+    def test_every_flag_the_workflow_passes_is_one_the_script_defines(self):
+        defined = set(re.findall(r'add_argument\("(--[a-z-]+)"',
+                                 inspect.getsource(resolve_reviews.main)))
+        found = set(re.findall(r"(--[a-z-]+)", self.command))
+        self.assertIn("--apply", found, "the workflow no longer passes --apply anywhere")
+        for flag in found:
+            self.assertIn(flag, defined, msg=f"{flag} is not a resolve_reviews.py flag")
+
+    def test_the_failure_report_goes_to_the_triage_channel(self):
+        """Not the shared DISCORD_WEBHOOK_URL the failure notifier uses: a run that died
+        before it could post its tally has to say so where the tally would have gone."""
+        yml = "\n".join(self.read("zendesk_resolve_reviews.yml"))
+        self.assertIn("if: failure()", yml)
+        self.assertIn("secrets.ZENDESK_DISCORD_WEBHOOK_URL", yml)
+
+    def test_notify_failure_watches_this_workflow_by_its_current_name(self):
+        """Matched on name, so a rename silently unsubscribes the standalone runs — the
+        chained ones report under the triage workflow's name instead."""
+        match = re.search(r"^name:\s*(.+?)\s*$",
+                          "\n".join(self.read("zendesk_resolve_reviews.yml")), re.MULTILINE)
+        self.assertIsNotNone(match, "zendesk_resolve_reviews.yml has no top-level name")
+        self.assertIn(f'"{match.group(1).strip(chr(34) + chr(39))}"',
+                      "\n".join(self.read("notify_failure.yml")))
 
 
 if __name__ == "__main__":

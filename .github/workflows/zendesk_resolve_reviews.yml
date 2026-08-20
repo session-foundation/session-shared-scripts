@@ -1,25 +1,26 @@
 name: Zendesk Resolve Positive Reviews
 
-# Weekly counterpart to the daily triage: solves the 4-5★ AppFollow reviews that
-# were never going to be actioned, so the unsolved backlog reflects real work.
-# 4,812 of them were sitting in `new` when this was written, and ~420 arrive a week.
+# Solves the 4-5★ AppFollow reviews that were never going to be actioned, so the unsolved
+# backlog reflects real work. No state file: a solved ticket drops out of the query, so
+# runs are idempotent.
 #
-# No state file is needed — a solved ticket drops out of the query, so runs are
-# idempotent and the first few drain the backlog before the schedule just keeps pace.
-#
-# Every applied run reports to the same Discord channel as the daily triage — its
-# tally and a link to review what changed — so a job that bulk-edits tickets is
-# visible where the tickets are discussed. A run that solved nothing says so, because
-# silence reads the same as a job that has quietly stopped working. Only a dry run
-# posts nothing.
-#
-# ⚠️  This workflow writes to Zendesk. A scheduled run always applies; a manual run
-#     is a dry run unless you tick `apply`. Solving a ticket can fire triggers and
-#     automations (satisfaction surveys among them), so read the warning in
-#     zendesk_triage/resolve_reviews.py before the first applied run.
+# ⚠️  This workflow writes to Zendesk. A chained run from zendesk_triage.yml always
+#     applies; a manual run is a dry run unless you tick `apply`. Solving a ticket can
+#     fire triggers and automations (satisfaction surveys among them), so read the warning
+#     in zendesk_triage/resolve_reviews.py before the first applied run.
 on:
-  schedule:
-    - cron: "0 5 * * 1"
+  # No cron of its own: it runs as zendesk_triage.yml's first job, because a solved review
+  # leaves the triage's `status<solved` query and so must go before the digest is built.
+  workflow_call:
+    inputs:
+      apply:
+        description: "Actually solve the tickets (false = dry run, changes nothing)"
+        type: boolean
+        default: false
+      max_tickets:
+        description: "Max tickets to solve this run (default 1000, Zendesk's search cap)"
+        type: string
+        required: false
   workflow_dispatch:
     inputs:
       apply:
@@ -30,14 +31,12 @@ on:
         description: "Max tickets to solve this run (default 1000, Zendesk's search cap)"
         required: false
 
-# A second run while one is mid-flight would re-fetch tickets the first has already
-# queued for update, and bulk jobs are asynchronous. Queue rather than cancel, so a
-# manual run never abandons a scheduled run's in-flight batches.
+# Bulk jobs are asynchronous, so a second run would re-fetch tickets the first has already
+# queued. Queue rather than cancel, so a manual run never abandons in-flight batches.
 concurrency:
   group: zendesk-resolve-reviews
   cancel-in-progress: false
 
-# Everything it writes goes to Zendesk over its own credentials.
 permissions:
   contents: read
 
@@ -45,6 +44,31 @@ jobs:
   resolve:
     runs-on: ubuntu-latest
     steps:
+      # First, ahead of the checkout: the failure reporter keys off its `apply` output, so
+      # anything running earlier would fail unreported. Inputs arrive via env and are
+      # stripped to digits, never interpolated into the command.
+      #
+      # `inputs`, not `github.event.inputs`: inside a called workflow the `github` context
+      # is the caller's, so that would read zendesk_triage.yml's dispatch form instead.
+      - name: Resolve options
+        id: cfg
+        env:
+          INPUT_MAX: ${{ inputs.max_tickets }}
+          APPLY: ${{ inputs.apply }}
+        run: |
+          max=$(printf '%s' "${INPUT_MAX:-1000}" | tr -cd '0-9')
+          : "${max:=1000}"
+          flags=""
+          if [ "$APPLY" = "true" ]; then flags="--apply"; fi
+          echo "max=$max" >> "$GITHUB_OUTPUT"
+          echo "flags=$flags" >> "$GITHUB_OUTPUT"
+          echo "apply=$APPLY" >> "$GITHUB_OUTPUT"
+          if [ "$APPLY" = "true" ]; then
+            echo "Applying: up to $max review(s) at 4★ or better will be solved."
+          else
+            echo "Dry run: reporting only, nothing will be changed."
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v7
 
@@ -56,38 +80,38 @@ jobs:
       - name: Install dependencies
         run: pip install -r zendesk_triage/requirements.txt
 
-      # Inputs arrive via env and are stripped to digits, never interpolated into the
-      # command. A scheduled run applies; a manual one only if it asked to, so the
-      # dispatch button cannot solve tickets by accident.
-      - name: Resolve options
-        id: cfg
-        env:
-          INPUT_MAX: ${{ github.event.inputs.max_tickets }}
-          APPLY: ${{ github.event_name == 'schedule' || github.event.inputs.apply == 'true' }}
-        run: |
-          max=$(printf '%s' "${INPUT_MAX:-1000}" | tr -cd '0-9')
-          : "${max:=1000}"
-          flags=""
-          if [ "$APPLY" = "true" ]; then flags="--apply"; fi
-          echo "max=$max" >> "$GITHUB_OUTPUT"
-          echo "flags=$flags" >> "$GITHUB_OUTPUT"
-          if [ "$APPLY" = "true" ]; then
-            echo "Applying: up to $max review(s) at 4★ or better will be solved."
-          else
-            echo "Dry run: reporting only, nothing will be changed."
-          fi
-
       - name: Resolve positive reviews
         env:
           ZENDESK_SUBDOMAIN: ${{ secrets.ZENDESK_SUBDOMAIN }}
           ZENDESK_EMAIL: ${{ secrets.ZENDESK_EMAIL }}
           ZENDESK_API_TOKEN: ${{ secrets.ZENDESK_API_TOKEN }}
-          # The triage channel's webhook, the same one the daily digest posts to, not
-          # the shared DISCORD_WEBHOOK_URL the failure notifier uses. Only read on an
-          # applied run, and required before the script solves anything, so a missing
-          # secret fails the run instead of losing the report.
+          # The triage channel's webhook, the one the digest posts to, not the shared
+          # DISCORD_WEBHOOK_URL the failure notifier uses.
           ZENDESK_DISCORD_WEBHOOK_URL: ${{ secrets.ZENDESK_DISCORD_WEBHOOK_URL }}
         run: |
           python zendesk_triage/resolve_reviews.py \
             ${{ steps.cfg.outputs.flags }} \
             --max-tickets "${{ steps.cfg.outputs.max }}"
+
+      # The script reports what it solved, or that there was nothing to solve. It cannot
+      # report the failures that kill it before a message exists, and silence in the
+      # channel reads the same as a quiet day. Says nothing about counts, because it also
+      # fires after the script has already posted a tally alongside per-ticket failures.
+      - name: Report a failed run
+        if: failure() && steps.cfg.outputs.apply == 'true'
+        env:
+          WEBHOOK: ${{ secrets.ZENDESK_DISCORD_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # A missing webhook is itself one of the things that fails the run, so name it
+          # rather than letting curl report an empty URL over the top of the real cause.
+          if [ -z "$WEBHOOK" ]; then
+            echo "ZENDESK_DISCORD_WEBHOOK_URL is not set; the failure went unreported."
+            exit 1
+          fi
+          message=$(jq -nc --arg url "$RUN_URL" '{content: (
+            "❌ Resolving positive reviews failed — [run log](" + $url + "). "
+            + "Any tickets already solved stayed solved; the next run picks up the rest."
+          )}')
+          curl -sS --fail-with-body -X POST -H "Content-Type: application/json" \
+            -d "$message" "$WEBHOOK"

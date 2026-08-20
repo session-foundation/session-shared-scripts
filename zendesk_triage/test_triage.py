@@ -1229,6 +1229,42 @@ class TestFailureNotificationWiring(unittest.TestCase):
         self.assertIn(f'"{name}"', self.read("notify_failure.yml"))
 
 
+class TestResolveChainWiring(unittest.TestCase):
+    """The digest is only correct if the positive-review resolver ran first: solved
+    reviews leave the triage's `status<solved` query, so running second would have the
+    digest re-count reviews the other job had just closed. The ordering lives entirely in
+    YAML, and a moved or renamed reusable workflow would otherwise surface as a failed
+    run at 10am on a weekday.
+    """
+
+    WORKFLOWS = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".github", "workflows"
+    )
+    RESOLVE = "./.github/workflows/zendesk_resolve_reviews.yml"
+
+    def read(self, filename):
+        with open(os.path.join(self.WORKFLOWS, filename), encoding="utf-8") as fh:
+            return "\n".join(l for l in fh.read().splitlines()
+                             if not l.lstrip().startswith("#"))
+
+    def test_the_triage_calls_the_resolver(self):
+        self.assertIn(f"uses: {self.RESOLVE}", self.read("zendesk_triage.yml"))
+
+    def test_the_resolver_is_callable(self):
+        """`uses:` against a workflow that only has `schedule`/`workflow_dispatch` is a
+        run-time error, not a parse error, so assert the trigger is actually there."""
+        self.assertIn("workflow_call:", self.read("zendesk_resolve_reviews.yml"))
+
+    def test_the_digest_waits_for_it(self):
+        """`uses:` alone runs the two jobs concurrently; `needs:` is what orders them."""
+        self.assertIn("needs: resolve", self.read("zendesk_triage.yml"))
+
+    def test_a_failed_resolve_does_not_cost_the_digest(self):
+        """Resolve is an optimisation for the digest, not a precondition — and the same
+        always() is what lets the digest run when a manual dispatch skips resolve."""
+        self.assertIn("if: always()", self.read("zendesk_triage.yml"))
+
+
 class TestNoDiscordWiring(unittest.TestCase):
     """The dispatch button offers a way to run without posting. It has to be
     --no-discord and never --dry-run: Actions logs on this public repo would

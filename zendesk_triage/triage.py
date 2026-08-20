@@ -50,8 +50,8 @@ Usage:
     # exercise the whole job without posting, and without printing tickets
     python triage.py --no-discord
 
-    # what the scheduled daily run does: 48h window, skipping unchanged repeats
-    python triage.py --window-hours 48 --state .triage-state/seen.json
+    # what the scheduled weekday run does: 72h window, skipping unchanged repeats
+    python triage.py --window-hours 72 --state .triage-state/seen.json
 
     # or an explicit query, which overrides --window-hours
     python triage.py --query "type:ticket status:open tags:bug" --max-tickets 50
@@ -439,7 +439,7 @@ def fetch_total_unsolved(session, subdomain, query=BACKLOG_QUERY):
 # ---- Dedup state -----------------------------------------------------------
 #
 # Maps ticket id -> {updated_at, last_reported}. A ticket is re-reported only if
-# Zendesk's updated_at has moved since we last showed it, so the daily 48h window
+# Zendesk's updated_at has moved since we last showed it, so the 72h window
 # does not repost yesterday's unchanged tickets. The state lives outside the repo
 # (CI restores it from the Actions cache), so every read degrades gracefully: a
 # missing or corrupt file just means everything looks new.
@@ -506,7 +506,7 @@ def save_state(path, state, reported, retention_days):
             "last_reported": stamp,
         }
 
-    # Bound the file: the window is 48h, so anything older than retention is moot.
+    # Bound the file: the window is 72h, so anything older than retention is moot.
     cutoff = now - timedelta(days=retention_days)
     kept = {}
     for ticket_id, record in seen.items():
@@ -1021,7 +1021,7 @@ def main():
                                         "Takes precedence over --window-hours.")
     parser.add_argument("--window-hours", type=int, metavar="N",
                         help="Only analyze unsolved tickets created in the last N hours. "
-                             "The scheduled daily run uses 48.")
+                             "The scheduled weekday run uses 72.")
     parser.add_argument("--model", help=f"Claude model id, or an alias (opus, sonnet, "
                                         f"haiku) mapped to an id "
                                         f"(else ZENDESK_TRIAGE_MODEL, else {DEFAULT_MODEL}).")
