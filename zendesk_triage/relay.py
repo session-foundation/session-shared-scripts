@@ -324,7 +324,7 @@ def run_reply(payload):
     ticket content — so it goes straight to the journal.
     """
     command = [sys.executable, REPLY_SCRIPT]
-    if env("RELAY_DRY_RUN") == "1":
+    if dry_run_requested():
         command.append("--dry-run")
     try:
         done = subprocess.run(
@@ -340,6 +340,19 @@ def run_reply(payload):
         # for the failures it could not report. The message it prints is the reason.
         print(f"reply.py exited {done.returncode} on #{payload.get('ticket_id')}: "
               f"{(done.stderr or '').strip()[:300]}", flush=True)
+
+
+def dry_run_requested():
+    """Whether to pass --dry-run to reply.py.
+
+    Anything set counts as on, bar an explicit 0/false/no/off. A switch whose job is
+    "write nothing" has to fail towards writing nothing: systemd keeps an inline `#`
+    as part of the value, so `RELAY_DRY_RUN=1  # …` is not the string "1", and an
+    equality check would silently have read that as *off* — the opposite of what
+    whoever wrote it meant.
+    """
+    value = (env("RELAY_DRY_RUN") or "").strip().lower()
+    return bool(value) and value.split()[0] not in ("0", "false", "no", "off")
 
 
 def interaction_payload(interaction, action, **extra):

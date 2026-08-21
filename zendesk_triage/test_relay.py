@@ -425,6 +425,16 @@ class TestRunReply(unittest.TestCase):
         self.assertNotIn("--dry-run", self.captured()[0])
         self.assertIn("--dry-run", self.captured(RELAY_DRY_RUN="1")[0])
 
+    def test_a_dry_run_switch_fails_towards_writing_nothing(self):
+        """systemd keeps an inline # as part of the value, so an equality check read
+        `1  # …` as off — the opposite of what whoever wrote it meant."""
+        for value in ("1", "1  # run the whole path, write nothing", " true ", "yes"):
+            with self.subTest(value):
+                self.assertIn("--dry-run", self.captured(RELAY_DRY_RUN=value)[0])
+        for value in ("", "0", "false", "off"):
+            with self.subTest(value):
+                self.assertNotIn("--dry-run", self.captured(RELAY_DRY_RUN=value)[0])
+
     def test_a_timeout_is_survived(self):
         def explode(command, **kwargs):
             raise relay.subprocess.TimeoutExpired(command, 1)

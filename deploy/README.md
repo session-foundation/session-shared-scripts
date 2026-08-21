@@ -30,28 +30,33 @@ write a public comment to any ticket, and of the Anthropic key.
 
 ## Install
 
+Run as root. Every command below assumes it; prefix with `sudo` if you are not.
+
 ```bash
 # 1. A user that owns nothing else
-sudo useradd --system --home /opt/zendesk --shell /usr/sbin/nologin zendesk
+useradd --system --home /opt/zendesk --shell /usr/sbin/nologin zendesk
 
 # 2. The code and its venv
-sudo git clone https://github.com/session-foundation/session-shared-scripts /opt/zendesk
-sudo python3 -m venv /opt/zendesk/venv
-sudo /opt/zendesk/venv/bin/pip install -r /opt/zendesk/zendesk_triage/requirements.txt
-sudo chown -R zendesk:zendesk /opt/zendesk
+git clone https://github.com/session-foundation/session-shared-scripts /opt/zendesk
+python3 -m venv /opt/zendesk/venv
+/opt/zendesk/venv/bin/pip install -r /opt/zendesk/zendesk_triage/requirements.txt
+chown -R zendesk:zendesk /opt/zendesk
 
 # 3. State
-sudo install -d -o zendesk -g zendesk -m 750 /var/lib/zendesk
+install -d -o zendesk -g zendesk -m 750 /var/lib/zendesk
 
-# 4. Secrets — see below
-sudo install -d -m 750 /etc/zendesk
-sudo -e /etc/zendesk/env
-sudo chown root:zendesk /etc/zendesk/env && sudo chmod 640 /etc/zendesk/env
+# 4. Secrets. Create the file with its final mode and owner *before* anything goes
+#    in it: editing it into place first would leave the Zendesk token briefly
+#    world-readable at the editor's default 0644. The guard makes this re-runnable
+#    — install from /dev/null would otherwise truncate an existing file.
+install -d -m 750 -o root -g zendesk /etc/zendesk
+[ -e /etc/zendesk/env ] || install -m 640 -o root -g zendesk /dev/null /etc/zendesk/env
+"${EDITOR:-nano}" /etc/zendesk/env                # contents under Secrets, below
 
 # 5. Units
-sudo cp /opt/zendesk/deploy/*.service /opt/zendesk/deploy/*.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now zendesk-relay.service zendesk-digest.timer
+cp /opt/zendesk/deploy/*.service /opt/zendesk/deploy/*.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now zendesk-relay.service zendesk-digest.timer
 
 # 6. TLS, through the nginx and certbot already on this host. Point DNS at the
 #    box first or certbot has nothing to validate against. The shipped config is
@@ -62,11 +67,11 @@ sudo systemctl enable --now zendesk-relay.service zendesk-digest.timer
 #    it answers the challenge, so reloading beforehand would only widen the moment
 #    the proxy is reachable over plain HTTP. --redirect is explicit so that once
 #    TLS is in place HTTP can only redirect, never proxy an unencrypted POST.
-sudo cp /opt/zendesk/deploy/nginx-webhooks.conf /etc/nginx/sites-available/webhooks.session.codes
-sudo ln -s /etc/nginx/sites-available/webhooks.session.codes /etc/nginx/sites-enabled/
-sudo nginx -t                                     # validate; do not reload yet
-sudo certbot --nginx --redirect -d webhooks.session.codes
-sudo nginx -t && sudo systemctl reload nginx      # validate what certbot wrote
+cp /opt/zendesk/deploy/nginx-webhooks.conf /etc/nginx/sites-available/webhooks.session.codes
+ln -s /etc/nginx/sites-available/webhooks.session.codes /etc/nginx/sites-enabled/
+nginx -t                                          # validate; do not reload yet
+certbot --nginx --redirect -d webhooks.session.codes
+nginx -t && systemctl reload nginx                # validate what certbot wrote
 ```
 
 ## Secrets
@@ -76,18 +81,41 @@ everyone. `EnvironmentFile=` needs no code change because every script already r
 its configuration from the environment.
 
 ```sh
+# systemd only treats a # as a comment when it is the FIRST character on a line.
+# An inline one becomes part of the value, so every comment here sits above its
+# variable — a trailing "# what this is" would be silently appended to your token
+# and Zendesk would answer 401.
+
 ZENDESK_SUBDOMAIN=
-ZENDESK_EMAIL=                    # authors every comment the reply flow posts
+# Authors every comment the reply flow posts.
+ZENDESK_EMAIL=
 ZENDESK_API_TOKEN=
 ANTHROPIC_API_KEY=
-DISCORD_BOT_TOKEN=                # the digest posts as the app, for its buttons
-ZENDESK_DISCORD_CHANNEL_ID=       # where the digest lands
-ZENDESK_DISCORD_WEBHOOK_URL=      # the review tally and the failure alerts
-DISCORD_PUBLIC_KEY=               # verifies Discord's request signatures
-DISCORD_GUILD_ID=                 # interactions from anywhere else are refused
-ALLOWED_USER_IDS=                 # comma-separated; either list grants,
-ALLOWED_ROLE_IDS=                 # and both empty refuses everybody
-# RELAY_DRY_RUN=1                 # run the whole path, write nothing to Zendesk
+
+# The digest posts as the app, because its Comment buttons need an application.
+DISCORD_BOT_TOKEN=
+# Where the digest lands. The real triage channel, not a test server.
+ZENDESK_DISCORD_CHANNEL_ID=
+# The review tally and the failure alerts. Same channel, addressed as a webhook.
+ZENDESK_DISCORD_WEBHOOK_URL=
+
+# Verifies Discord's request signatures.
+DISCORD_PUBLIC_KEY=
+# Interactions from any other server are refused — so this must name the same
+# server as the channel and webhook above.
+DISCORD_GUILD_ID=
+# Comma-separated. Either list grants; both empty refuses everybody.
+ALLOWED_USER_IDS=
+ALLOWED_ROLE_IDS=
+
+# Uncomment to run the whole path and write nothing to Zendesk.
+#RELAY_DRY_RUN=1
+```
+
+Check what systemd actually loaded, rather than what you think you wrote:
+
+```bash
+systemctl show zendesk-digest.service -p Environment | tr ' ' '\n' | grep -vi token
 ```
 
 Set `RELAY_DRY_RUN=1` for the first deployment. Everything works — dialog,
@@ -104,7 +132,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
 curl -sS 127.0.0.1:8080/healthz                            # expect {"ok":true}
 ```
 
-**2. The digest, by hand.** `sudo systemctl start zendesk-digest.service` and watch
+**2. The digest, by hand.** `systemctl start zendesk-digest.service` and watch
 `journalctl -fu zendesk-digest`. It prints ticket counts and outcomes, never content.
 
 **3. The timer fires when you expect.** `systemctl list-timers zendesk-digest` — and
@@ -120,15 +148,15 @@ on a digest card for a throwaway ticket whose requester is an address you own �
 card's button is the only way in, so this is also the check that the digest and the
 relay agree on the `comment:` prefix.
 
-**5. The failure path.** `sudo systemctl start zendesk-alert@test.service` should put
+**5. The failure path.** `systemctl start zendesk-alert@test.service` should put
 a line in the triage channel.
 
 ## Updating
 
 ```bash
 sudo -u zendesk git -C /opt/zendesk pull
-sudo /opt/zendesk/venv/bin/pip install -r /opt/zendesk/zendesk_triage/requirements.txt
-sudo systemctl restart zendesk-relay
+/opt/zendesk/venv/bin/pip install -r /opt/zendesk/zendesk_triage/requirements.txt
+systemctl restart zendesk-relay
 ```
 
 Manual on purpose. Automating this would mean giving CI an SSH key to the box, which
