@@ -1,0 +1,44 @@
+[Unit]
+Description=Zendesk reply relay (Discord interactions endpoint)
+Documentation=https://github.com/session-foundation/session-shared-scripts
+After=network-online.target
+Wants=network-online.target
+# Restart=always means this rarely reaches a failed state — only after crash-looping
+# past the start limit, which is exactly the case nobody would otherwise notice.
+OnFailure=zendesk-alert@%n.service
+
+[Service]
+Type=exec
+User=zendesk
+Group=zendesk
+WorkingDirectory=/opt/zendesk/zendesk_triage
+EnvironmentFile=/etc/zendesk/env
+# Bound to loopback: nginx terminates TLS and is the only thing that should be able
+# to reach this. Exposing it directly would put an unauthenticated port on the box —
+# the Ed25519 check is the only gate, and it should not be the only barrier too.
+ExecStart=/opt/zendesk/venv/bin/uvicorn relay:app --host 127.0.0.1 --port 8080 \
+    --no-access-log --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=always
+RestartSec=2
+
+# This process can read every ticket and write public comments to any of them, so it
+# gets no more of the machine than it needs.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# Nothing to write: the relay stores nothing, by design.
+ReadOnlyPaths=/opt/zendesk
+
+[Install]
+WantedBy=multi-user.target

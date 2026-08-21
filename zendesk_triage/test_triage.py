@@ -65,9 +65,42 @@ def build_messages(*args, **kwargs):
     return triage.build_messages(*args, **kwargs)[0]
 
 
+def text_displays(node):
+    """Every Text Display `content` under a Components V2 node, in order."""
+    if isinstance(node, list):
+        return [t for item in node for t in text_displays(item)]
+    if not isinstance(node, dict):
+        return []
+    found = [node["content"]] if node.get("type") == triage.TEXT_DISPLAY else []
+    for key in ("components", "accessory"):
+        found += text_displays(node.get(key))
+    return found
+
+
 def digest_text(messages):
-    """The digest as one string: every message's content, in order."""
-    return "\n".join(m["content"] for m in messages)
+    """The digest as one string: every rendered line, in order.
+
+    The digest is Components V2 now — a card per ticket so each can carry its own
+    Comment button — so the text lives in Text Display components rather than in a
+    message `content`. Flattening here keeps the assertions about what the digest
+    says independent of how it is packaged."""
+    return "\n".join(t for m in messages for t in text_displays(m["components"]))
+
+
+def buttons(message):
+    """Every button custom_id in a message, in order."""
+    found = []
+    def walk(node):
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+        elif isinstance(node, dict):
+            if node.get("type") == triage.BUTTON:
+                found.append(node["custom_id"])
+            walk(node.get("components"))
+            walk(node.get("accessory"))
+    walk(message["components"])
+    return found
 
 
 class FakeResponse:
@@ -533,7 +566,8 @@ class TestBuildMessages(unittest.TestCase):
 
     def test_the_header_leads_the_first_message(self):
         messages = build_messages([finding(1)], "acme", {"matched": 3})
-        self.assertTrue(messages[0]["content"].startswith("🗂️ **Zendesk triage**"))
+        first = text_displays(messages[0]["components"])[0]
+        self.assertTrue(first.startswith("🗂️ **Zendesk triage**"))
 
     def test_every_highlight_reaches_a_message(self):
         findings = [finding(i, priority_rank=i) for i in range(triage.MAX_HIGHLIGHTS)]
@@ -550,9 +584,28 @@ class TestBuildMessages(unittest.TestCase):
     def test_no_truncation_notice_when_nothing_was_dropped(self):
         self.assertNotIn("Showing the top", digest_text(build_messages([finding(1)], "acme")))
 
-    def test_messages_are_plain_content(self):
+    def test_messages_are_components_v2(self):
+        """content and embeds stop working once the flag is set, so a payload still
+        carrying either would be silently rendered empty."""
         for message in build_messages([finding(1)], "acme"):
-            self.assertEqual(set(message), {"content"})
+            self.assertEqual(message["flags"], triage.COMPONENTS_V2_FLAG)
+            self.assertNotIn("content", message)
+            self.assertNotIn("embeds", message)
+            self.assertEqual(message["components"][0]["type"], triage.CONTAINER)
+
+    def test_every_ticket_card_carries_its_own_comment_button(self):
+        """The button is a Section accessory rather than a loose row, so which
+        ticket it belongs to is unambiguous."""
+        findings = [finding(1), finding(2)]
+        message, = build_messages(findings, "acme")
+        self.assertEqual(buttons(message), ["comment:1", "comment:2"])
+
+    def test_a_quiet_day_still_posts_the_header(self):
+        """Nothing worth looking into is a result, not a reason to say nothing."""
+        messages = build_messages([finding(1, worth_looking_into=False)], "acme")
+        self.assertEqual(len(messages), 1)
+        self.assertIn("Zendesk triage", digest_text(messages))
+        self.assertEqual(buttons(messages[0]), [])
 
 
 # ---- Parsing helpers -------------------------------------------------------
@@ -757,8 +810,8 @@ class TestContentFreeTickets(unittest.TestCase):
 
 
 class TestMessageCharLimit(unittest.TestCase):
-    """Discord caps one message's content at 2,000 characters. Every line is
-    pre-clipped, and chunking has to account for the newlines that join them."""
+    """A Components V2 message is bounded twice: 40 components, of which a ticket
+    card costs three, and a character budget across all its text."""
 
     def fat(self, ticket_id):
         return finding(ticket_id, summary="s" * 400, likely_root_cause="r" * 400)
@@ -767,8 +820,41 @@ class TestMessageCharLimit(unittest.TestCase):
         findings = [self.fat(i) for i in range(triage.MAX_HIGHLIGHTS)]
         messages = build_messages(findings, "acme")
         for message in messages:
-            self.assertLessEqual(len(message["content"]), triage.MAX_MESSAGE_CHARS)
+            rendered = text_displays(message["components"])
+            self.assertLessEqual(sum(len(t) for t in rendered),
+                                 triage.MAX_COMPONENT_CHARS)
         self.assertGreater(len(messages), 1)  # fat lines must actually split
+
+    def test_the_header_comes_out_of_the_first_messages_budget(self):
+        """The header is prepended after chunking, so without reserving its length
+        message one carried a full budget of ticket lines *plus* the header. A busy
+        day's accounting lines were enough to put it over."""
+        stats = {"matched": 460, "scope": "updated in the past 3 days",
+                 "skipped_unchanged": 40, "skipped_reviews": 300,
+                 "total_unsolved": 5680, "total_unsolved_non_review": 428,
+                 "updated_count": 12}
+        findings = [finding(i, priority_rank=i,
+                            summary="s" * triage.SUMMARY_CHARS,
+                            likely_root_cause="r" * triage.ROOT_CAUSE_CHARS,
+                            cluster=f"cluster-{i % 3}")
+                    for i in range(triage.MAX_SECTIONS_PER_MESSAGE)]
+        messages = build_messages(findings, "acme", stats)
+        for message in messages:
+            rendered = text_displays(message["components"])
+            self.assertLessEqual(sum(len(t) for t in rendered),
+                                 triage.MAX_COMPONENT_CHARS)
+
+    def test_no_message_exceeds_discords_component_ceiling(self):
+        """40 per message, and a card is a Section plus its text plus its button."""
+        findings = [finding(i, priority_rank=i) for i in range(triage.MAX_HIGHLIGHTS)]
+        for message in build_messages(findings, "acme"):
+            def count(node):
+                if isinstance(node, list):
+                    return sum(count(i) for i in node)
+                if not isinstance(node, dict):
+                    return 0
+                return 1 + count(node.get("components")) + count(node.get("accessory"))
+            self.assertLessEqual(count(message["components"]), 40)
 
     def test_no_line_is_dropped_while_chunking(self):
         findings = [self.fat(i) for i in range(triage.MAX_HIGHLIGHTS)]
@@ -780,14 +866,25 @@ class TestMessageCharLimit(unittest.TestCase):
         findings = [finding(i, summary="s", likely_root_cause="") for i in range(5)]
         self.assertEqual(len(build_messages(findings, "acme")), 1)
 
-    def test_chunking_counts_the_joining_newlines(self):
-        """Two 1,000-char lines are 2,001 joined — over the cap only if the newline
-        counts, which is the off-by-one this guards."""
-        entries = [("x" * 1000, {1}), ("y" * 1000, {2})]
-        self.assertEqual(len(triage.chunk_entries(entries)), 2)
+    def test_the_card_count_splits_a_busy_day(self):
+        """Short lines never reach the character budget, so without the component
+        limit a 27-ticket day would build one illegal message."""
+        findings = [finding(i, priority_rank=i, summary="s", likely_root_cause="")
+                    for i in range(triage.MAX_HIGHLIGHTS)]
+        messages = build_messages(findings, "acme")
+        self.assertGreater(len(messages), 1)
+        for message in messages:
+            self.assertLessEqual(len(buttons(message)),
+                                 triage.MAX_SECTIONS_PER_MESSAGE)
+
+    def test_chunking_splits_on_whichever_limit_binds_first(self):
+        entries = [("x" * 2000, {1}), ("y" * 2000, {2})]
+        self.assertEqual(len(triage.chunk_entries(entries)), 2)   # characters
+        lean = [("x", {i}) for i in range(triage.MAX_SECTIONS_PER_MESSAGE + 1)]
+        self.assertEqual(len(triage.chunk_entries(lean)), 2)      # card count
 
     def test_an_oversized_entry_still_gets_a_message(self):
-        chunks = triage.chunk_entries([("x" * (triage.MAX_MESSAGE_CHARS + 50), {1})])
+        chunks = triage.chunk_entries([("x" * (triage.MAX_COMPONENT_CHARS + 50), {1})])
         self.assertEqual(len(chunks), 1)
 
 
@@ -1290,97 +1387,82 @@ class TestRetryAfterSeconds(unittest.TestCase):
 # ---- Workflow wiring -------------------------------------------------------
 
 
-class TestFailureNotificationWiring(unittest.TestCase):
-    """The failure notifier matches on workflow *name*, so a rename silently
-    unsubscribes the triage job. The README promises failures get reported; this
-    keeps that promise checkable without running Actions.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def unit_commands(unit="zendesk-digest.service"):
+    """The command lines a systemd unit actually runs, continuations joined.
+
+    Comments are stripped first: they explain the choices, and scanning them would
+    have the flag check below demanding triage.py define words from prose.
     """
-
-    WORKFLOWS = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".github", "workflows"
-    )
-
-    def read(self, filename):
-        with open(os.path.join(self.WORKFLOWS, filename), encoding="utf-8") as fh:
-            return fh.read()
-
-    def test_notify_failure_watches_the_triage_workflow_by_its_current_name(self):
-        triage_yml = self.read("zendesk_triage.yml")
-        match = re.search(r"^name:\s*(.+?)\s*$", triage_yml, re.MULTILINE)
-        self.assertIsNotNone(match, "zendesk_triage.yml has no top-level name")
-        name = match.group(1).strip("\"'")
-        self.assertIn(f'"{name}"', self.read("notify_failure.yml"))
+    with open(os.path.join(ROOT, "deploy", unit), encoding="utf-8") as fh:
+        text = "\n".join(line for line in fh.read().splitlines()
+                          if not line.lstrip().startswith("#"))
+    return re.findall(r"^ExecStart=(.*)$", text.replace("\\\n", " "), re.MULTILINE)
 
 
-class TestResolveChainWiring(unittest.TestCase):
+class TestDigestOrdering(unittest.TestCase):
     """The digest is only correct if the positive-review resolver ran first: solved
-    reviews leave the triage's `status<solved` query, so running second would have the
-    digest re-count reviews the other job had just closed. The ordering lives entirely in
-    YAML, and a moved or renamed reusable workflow would otherwise surface as a failed
-    run at 10am on a weekday.
+    reviews leave the triage's `status<solved` query, so running second would have
+    the digest re-count reviews the other script had just closed.
+
+    This used to be two chained GitHub jobs; it is now two ExecStart lines. The
+    invariant is the same and still lives entirely in configuration, which is why it
+    is asserted here rather than trusted.
     """
 
-    WORKFLOWS = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".github", "workflows"
-    )
-    RESOLVE = "./.github/workflows/zendesk_resolve_reviews.yml"
-
-    def read(self, filename):
-        with open(os.path.join(self.WORKFLOWS, filename), encoding="utf-8") as fh:
-            return "\n".join(l for l in fh.read().splitlines()
-                             if not l.lstrip().startswith("#"))
-
-    def test_the_triage_calls_the_resolver(self):
-        self.assertIn(f"uses: {self.RESOLVE}", self.read("zendesk_triage.yml"))
-
-    def test_the_resolver_is_callable(self):
-        """`uses:` against a workflow that only has `schedule`/`workflow_dispatch` is a
-        run-time error, not a parse error, so assert the trigger is actually there."""
-        self.assertIn("workflow_call:", self.read("zendesk_resolve_reviews.yml"))
-
-    def test_the_digest_waits_for_it(self):
-        """`uses:` alone runs the two jobs concurrently; `needs:` is what orders them."""
-        self.assertIn("needs: resolve", self.read("zendesk_triage.yml"))
+    def test_the_resolver_runs_before_the_digest(self):
+        commands = unit_commands()
+        self.assertEqual(len(commands), 2, "expected exactly resolve then triage")
+        self.assertIn("resolve_reviews.py", commands[0])
+        self.assertIn("triage.py", commands[1])
 
     def test_a_failed_resolve_does_not_cost_the_digest(self):
-        """Resolve is an optimisation for the digest, not a precondition — and the same
-        always() is what lets the digest run when a manual dispatch skips resolve."""
-        self.assertIn("if: always()", self.read("zendesk_triage.yml"))
+        """Type=oneshot stops at the first failing ExecStart, which would make
+        resolving a precondition for the digest — and it is an optimisation for it."""
+        self.assertIn("||", unit_commands()[0],
+                      "the resolver's failure must not stop the digest")
+
+    def test_a_failed_resolve_is_still_reported(self):
+        """A bare `-` prefix would also keep the failure from blocking the digest, and
+        would hide it completely: the unit would succeed, OnFailure would never fire,
+        and a resolver broken for weeks would look like one with nothing to do."""
+        resolver = unit_commands()[0]
+        self.assertFalse(resolver.startswith("-"),
+                         "a - prefix swallows the failure instead of reporting it")
+        self.assertIn("alert.py", resolver)
+
+    def test_the_digest_is_not_prevented_from_failing_loudly(self):
+        """The reverse for triage itself: a swallowed failure there is a silent day
+        with no digest and no alert."""
+        self.assertFalse(unit_commands()[1].startswith("-"))
 
 
-class TestNoDiscordWiring(unittest.TestCase):
-    """The dispatch button offers a way to run without posting. It has to be
-    --no-discord and never --dry-run: Actions logs on this public repo would
-    otherwise carry the whole digest, ticket content included.
-    """
+class TestDigestFlags(unittest.TestCase):
+    """These jobs only ever run on a timer, so a flag the script no longer defines
+    surfaces as a failed run at 10am rather than at review time."""
 
-    WORKFLOW = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        ".github", "workflows", "zendesk_triage.yml",
-    )
+    def flags(self, command):
+        return set(re.findall(r"(--[a-z-]+)", command))
 
-    @classmethod
-    def setUpClass(cls):
-        with open(cls.WORKFLOW, encoding="utf-8") as fh:
-            lines = fh.read().splitlines()
-        # Comments explain why --dry-run is not used here; only what the job runs
-        # should be matched against.
-        cls.yml = "\n".join(l for l in lines if not l.lstrip().startswith("#"))
+    def defined(self, source):
+        return set(re.findall(r'add_argument\("(--[a-z-]+)"', source))
 
-    def test_the_workflow_never_passes_dry_run(self):
-        self.assertNotIn("--dry-run", self.yml)
+    def test_every_flag_the_unit_passes_to_triage_is_real(self):
+        for flag in self.flags(unit_commands()[1]):
+            self.assertIn(flag, self.defined(inspect.getsource(triage.main)),
+                          msg=f"{flag} is not a triage.py flag")
 
-    def test_the_no_discord_input_reaches_the_script(self):
-        self.assertIn("no_discord:", self.yml)
-        self.assertIn("--no-discord", self.yml)
+    def test_the_unit_never_passes_dry_run(self):
+        """A dry run posts nothing and records nothing, so the digest would go
+        silently missing while every run looked green."""
+        for command in unit_commands():
+            self.assertNotIn("--dry-run", command)
 
-    def test_every_flag_the_workflow_passes_is_one_the_script_defines(self):
-        """The workflow builds the command as a string, so a flag that no longer
-        exists surfaces as a failed scheduled run rather than anything local."""
-        defined = set(re.findall(r'add_argument\("(--[a-z-]+)"',
-                                 inspect.getsource(triage.main)))
-        for flag in set(re.findall(r"(--[a-z-]+)", self.yml)):
-            self.assertIn(flag, defined, msg=f"{flag} is not a triage.py flag")
+    def test_the_digest_keeps_its_state_somewhere_persistent(self):
+        """Without --state every run re-reports the whole window."""
+        self.assertIn("--state", unit_commands()[1])
 
 
 if __name__ == "__main__":

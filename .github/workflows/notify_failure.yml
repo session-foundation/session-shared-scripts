@@ -6,8 +6,6 @@ on:
       - "Check for Crowdin Updates"
       - "Test Failure Notification"
       - "Crowdin Multiple Translations Report"
-      - "Zendesk Ticket Triage"
-      - "Zendesk Resolve Positive Reviews"
     types:
       - completed
 

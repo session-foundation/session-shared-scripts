@@ -30,11 +30,15 @@ Config (env vars, or flags for local runs):
     ZENDESK_EMAIL         agent email for API token auth
     ZENDESK_API_TOKEN     Zendesk API token
     ANTHROPIC_API_KEY     Claude API key (read by the SDK itself)
-    ZENDESK_DISCORD_WEBHOOK_URL
-                          Discord incoming webhook for the triage channel, which is
-                          its own webhook rather than the shared DISCORD_WEBHOOK_URL
-                          the failure notifier uses (not needed with --dry-run
-                          or --no-discord)
+    DISCORD_BOT_TOKEN     Bot token for the app that answers the digest's Comment
+                          buttons (see relay.py). Every ticket gets one, and an
+                          incoming webhook cannot send interactive components —
+                          only an application can — so this posts as the bot
+                          (not needed with --dry-run or --no-discord)
+    ZENDESK_DISCORD_CHANNEL_ID
+                          Channel the digest posts into. The bot needs Send Messages
+                          there. Replaces ZENDESK_DISCORD_WEBHOOK_URL, which
+                          resolve_reviews.py still uses for its tally.
     ZENDESK_QUERY         (optional) Zendesk search query; see DEFAULT_QUERY
     ZENDESK_TRIAGE_MODEL  (optional) Claude model id or alias; defaults to
                           claude-opus-5. Set it to override, e.g. `sonnet` for a
@@ -446,9 +450,11 @@ def fetch_total_unsolved(session, subdomain, query=BACKLOG_QUERY):
 #
 # Maps ticket id -> {requester_updated_at, last_reported}. A ticket is re-reported
 # only if the requester has touched it since we last showed it, so neither the
-# overlapping window nor our own replies repost yesterday's tickets. The state lives outside the repo
-# (CI restores it from the Actions cache), so every read degrades gracefully: a
-# missing or corrupt file just means everything looks new.
+# overlapping window nor our own replies repost yesterday's tickets. The state lives
+# outside the repo — /var/lib/zendesk on the host — and every read degrades
+# gracefully: a missing or corrupt file just means everything looks new. That
+# tolerance was written for a best-effort CI cache and is worth keeping now that the
+# file is a real one, because it is what makes losing it merely noisy.
 
 
 def empty_state():
@@ -862,6 +868,32 @@ SUMMARY_CHARS = 160
 ROOT_CAUSE_CHARS = 140
 MAX_HIGHLIGHTS = 27
 
+# ---- Components V2 ---------------------------------------------------------
+#
+# The digest is posted by the app rather than through an incoming webhook, because a
+# plain webhook cannot carry interactive components at all, and each ticket needs its
+# own Comment button. Embeds cannot do this either: components attach to the message,
+# not to an embed, so ten embeds would sit above ten anonymous buttons. A Section
+# owns its accessory, which is what makes "this button, that ticket" unambiguous.
+#
+# https://docs.discord.com/developers/components/reference
+COMPONENTS_V2_FLAG = 1 << 15
+CONTAINER = 17
+SECTION = 9
+TEXT_DISPLAY = 10
+SEPARATOR = 14
+BUTTON = 2
+BUTTON_SECONDARY = 2
+
+# Discord allows 40 components in one message. A ticket costs three — its Section,
+# the Text Display inside it, and the button hanging off it — and the header block
+# costs two more, so the ceiling is twelve. Ten leaves room for the accounting lines
+# the header grows on a busy day.
+MAX_SECTIONS_PER_MESSAGE = 10
+# Text across a whole Components V2 message. Ten sections of clipped ticket text come
+# to roughly 3,500, so this is a guard rather than a routine constraint.
+MAX_COMPONENT_CHARS = 3900
+
 
 def ticket_url(subdomain, ticket_id):
     return f"https://{subdomain}.zendesk.com/agent/tickets/{ticket_id}"
@@ -911,6 +943,26 @@ def build_ticket_line(finding, subdomain, is_update=False):
     if reported:
         parts.append(f"Reported: `{reported}`")
     return " | ".join(parts)
+
+
+def build_ticket_section(text, ticket_id):
+    """One ticket as a card carrying its own Comment button.
+
+    A Section owns its accessory, and that ownership is the whole point: components
+    attach to a message rather than to an embed, so ten embeds would sit above ten
+    buttons the reader has to match back to tickets by eye.
+    """
+    return {
+        "type": SECTION,
+        "components": [{"type": TEXT_DISPLAY, "content": text}],
+        "accessory": {
+            "type": BUTTON,
+            "style": BUTTON_SECONDARY,
+            "label": "Comment",
+            # Parsed by relay.py, which answers it with the compose dialog.
+            "custom_id": f"comment:{ticket_id}",
+        },
+    }
 
 
 def build_header(findings, highlights, stats=None):
@@ -981,22 +1033,32 @@ def build_header(findings, highlights, stats=None):
     return "\n".join(lines)
 
 
-def chunk_entries(entries):
-    """Group (line, ticket_ids) pairs into messages within MAX_MESSAGE_CHARS.
+def chunk_entries(entries, max_items=MAX_SECTIONS_PER_MESSAGE,
+                  max_chars=MAX_COMPONENT_CHARS, first_used=0):
+    """Group (line, ticket_ids) pairs into messages within Discord's budgets.
 
-    Lines are joined with a newline, so each one after the first costs a character
-    more than its own length. An entry longer than the cap still gets its own message
-    rather than being dropped; the pieces are pre-clipped so that shouldn't arise.
+    Two limits rather than one, and whichever binds first splits the message: a
+    Components V2 message allows 40 components, of which a ticket costs three, and a
+    character budget that clipped lines rarely approach. Sections are separate
+    components rather than joined text, so unlike the old plain-content digest
+    nothing is spent on the newlines between them.
+
+    `first_used` is what the caller has already spent on the first message before any
+    ticket goes in — the header. Without it the header rides on top of a full budget
+    of ticket lines, and a busy day's accounting lines are enough to put message one
+    over the limit.
+
+    An entry longer than the character budget still gets its own message rather than
+    being dropped; the pieces are pre-clipped so that shouldn't arise.
     """
-    chunks, current, current_chars = [], [], 0
+    chunks, current, current_chars = [], [], first_used
     for text, ids in entries:
-        projected = current_chars + len(text) + (1 if current else 0)
-        if current and projected > MAX_MESSAGE_CHARS:
+        if current and (len(current) >= max_items
+                        or current_chars + len(text) > max_chars):
             chunks.append(current)
             current, current_chars = [], 0
-            projected = len(text)
         current.append((text, ids))
-        current_chars = projected
+        current_chars += len(text)
     if current:
         chunks.append(current)
     return chunks
@@ -1033,34 +1095,79 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
     if omitted:
         header += (f"\nShowing the top **{len(shown)}** of "
                    f"**{len(shown) + len(omitted)}** worth looking into.")
-    entries = [(header, header_ids)]
-    entries += [
+    entries = [
         (build_ticket_line(f, subdomain, is_update=f.get("id") in updated_ids),
          {f.get("id")})
         for f in shown
     ]
 
     messages, coverage = [], []
-    for chunk in chunk_entries(entries):
-        messages.append({"content": "\n".join(text for text, _ in chunk)})
+    # A quiet day still owes the channel the header — chunk_entries has nothing to
+    # chunk when no ticket is worth looking into, so seed one empty chunk.
+    # The header only lands on message one, so only message one's budget pays for
+    # it. chunk_entries resets to zero for every chunk after the first.
+    chunks = chunk_entries(entries, first_used=len(header)) or [[]]
+    for index, chunk in enumerate(chunks):
+        blocks = []
         covered = set()
-        for _, ids in chunk:
+        if index == 0:
+            blocks.append({"type": TEXT_DISPLAY, "content": header})
+            if chunk:
+                blocks.append({"type": SEPARATOR})
+            # The header accounts for every classified ticket except the highlights
+            # that didn't fit; those are covered by no message and stay eligible.
+            covered |= header_ids
+        for text, ids in chunk:
+            blocks.append(build_ticket_section(text, next(iter(ids))))
             covered |= ids
+        messages.append({
+            "flags": COMPONENTS_V2_FLAG,
+            "components": [{"type": CONTAINER, "components": blocks}],
+        })
         coverage.append(covered)
     return messages, coverage
 
 
-def post_to_discord(session, webhook_url, messages):
+def discord_bot_session(token):
+    """A session authorized as the application, for posting the digest.
+
+    The digest carries a Comment button per ticket, and an incoming webhook cannot
+    send interactive components at all — only an application can. That is why the
+    digest posts to a channel as the bot rather than through the webhook the
+    positive-review tally still uses.
+    """
+    session = requests.Session()
+    session.headers["Authorization"] = f"Bot {token}"
+    return session
+
+
+def channel_messages_url(channel_id):
+    return f"https://discord.com/api/v10/channels/{channel_id}/messages"
+
+
+def post_to_discord(session, url, messages):
     """POST each message in order; return how many Discord accepted.
+
+    Transport-agnostic on purpose: the digest passes a bot session and a channel
+    URL, while resolve_reviews passes a bare session and an incoming webhook.
 
     Stops at the first failure and returns the accepted count instead of exiting, so
     the caller can record the tickets that did land before signalling the failure —
     otherwise a failure on message 3 of 3 reposts messages 1 and 2 on the next run.
     """
     for index, payload in enumerate(messages):
-        resp = request_with_retry(session, "POST", webhook_url, json=payload)
+        try:
+            resp = request_with_retry(session, "POST", url, json=payload)
+        except requests.RequestException as exc:
+            # request_with_retry re-raises once its budget is spent. Letting that
+            # propagate would skip save_state entirely, so the messages that already
+            # landed would be reposted on the next run — the exact thing returning a
+            # count exists to prevent.
+            print(f"Discord unreachable on message {index + 1}/{len(messages)} "
+                  f"({exc}).")
+            return index
         if resp.status_code >= 400:
-            print(f"Discord webhook failed on message {index + 1}/{len(messages)} "
+            print(f"Discord rejected message {index + 1}/{len(messages)} "
                   f"({resp.status_code}): {resp.text[:300]}")
             return index
     return len(messages)
@@ -1071,7 +1178,10 @@ def main():
     parser.add_argument("--subdomain", help="Zendesk subdomain (else ZENDESK_SUBDOMAIN).")
     parser.add_argument("--email", help="Zendesk agent email (else ZENDESK_EMAIL).")
     parser.add_argument("--api-token", help="Zendesk API token (else ZENDESK_API_TOKEN).")
-    parser.add_argument("--webhook", help="Discord webhook URL (else ZENDESK_DISCORD_WEBHOOK_URL).")
+    parser.add_argument("--bot-token",
+                        help="Discord bot token (else DISCORD_BOT_TOKEN). The digest's\n"
+                             "Comment buttons mean it must post as the app, not a webhook.")
+    parser.add_argument("--channel", help="Discord channel id (else ZENDESK_DISCORD_CHANNEL_ID).")
     parser.add_argument("--query", help="Zendesk search query (else ZENDESK_QUERY, else default). "
                                         "Takes precedence over --window-hours.")
     parser.add_argument("--window-hours", type=int, metavar="N",
@@ -1121,8 +1231,12 @@ def main():
     # Subdomain is always needed: it builds the ticket links in the Discord payload.
     subdomain = get_env("ZENDESK_SUBDOMAIN", args.subdomain)
     # A dump exits before rendering anything, so it never needs the webhook either.
-    needs_webhook = not (args.dry_run or args.no_discord or args.dump_batch)
-    webhook = get_env("ZENDESK_DISCORD_WEBHOOK_URL", args.webhook, required=needs_webhook)
+    # Resolved up front, before anything is fetched or classified: a missing
+    # credential should stop the run rather than have it spend tokens on a digest it
+    # cannot deliver. A dump exits before rendering, so it never needs them either.
+    needs_discord = not (args.dry_run or args.no_discord or args.dump_batch)
+    bot_token = get_env("DISCORD_BOT_TOKEN", args.bot_token, required=needs_discord)
+    channel_id = get_env("ZENDESK_DISCORD_CHANNEL_ID", args.channel, required=needs_discord)
     model = args.model or os.environ.get("ZENDESK_TRIAGE_MODEL") or DEFAULT_MODEL
 
     stats = {}
@@ -1259,7 +1373,8 @@ def main():
               f"next run.")
         return
 
-    posted = post_to_discord(requests.Session(), webhook, messages)
+    posted = post_to_discord(discord_bot_session(bot_token),
+                             channel_messages_url(channel_id), messages)
     print(f"Posted {posted} of {len(messages)} Discord message(s).")
 
     # Record only tickets covered by messages Discord actually accepted, so a partial

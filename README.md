@@ -117,7 +117,9 @@ Likely duplicates: **push-notifications-not-delivered** ×5 (#27637, #27610, #27
 
 The header accounts for the batch in full, so nothing is dropped silently. The backlog line deliberately **excludes app-store reviews**: 92% of unsolved tickets are AppFollow reviews, so the unqualified number reads as roughly 13× the queue that actually needs a human (5,680 against 428). Both counts come from Zendesk's count-only search endpoint, one request each and both best-effort — if the review-excluded count fails, the line falls back to the plain total rather than disappearing. An abuse report also carries the reported Session ID on its line, since that is the actionable part and it saves opening the ticket.
 
-**Plain message content, no embeds.** The lines carry their own structure, so an embed added a border and nothing else. The cost is the character budget: Discord caps message content at 2,000 against an embed description's 4,096, and a masked link on the id spends 54 characters that the reader never sees. A real 9-highlight day comes to ~2,400 characters, so it arrives as two messages. Lines are clipped (`SUMMARY_CHARS`, `ROOT_CAUSE_CHARS`) and chunked against 2,000, counting the newlines that join them; each message records which ticket ids it accounts for, which is what makes a partial post failure recoverable.
+**One card per ticket, each with its own Comment button.** The lines still carry their own structure — the digest is read by skimming — but each now sits in a Components V2 Section whose accessory is a button, because that is the only Discord primitive where a button belongs to one item. Embeds cannot do it: components attach to the message, so ten embeds would sit above ten anonymous buttons. Two limits bound a message and whichever binds first splits it — 40 components, of which a card costs three (`MAX_SECTIONS_PER_MESSAGE` = 10), and `MAX_COMPONENT_CHARS` across all its text. Lines are still clipped (`SUMMARY_CHARS`, `ROOT_CAUSE_CHARS`), and each message records which ticket ids it accounts for, which is what makes a partial post failure recoverable.
+
+**This is why the digest posts as the app rather than through a webhook.** A plain incoming webhook silently drops interactive components, so the digest needs `DISCORD_BOT_TOKEN` and `ZENDESK_DISCORD_CHANNEL_ID` where it used to need `ZENDESK_DISCORD_WEBHOOK_URL`. That webhook still exists — the positive-review tally and the failure alerts use it, and neither needs a button.
 
 ### Deduplication
 
@@ -146,11 +148,12 @@ Two caveats worth knowing:
 | `ZENDESK_EMAIL`       | Agent email used for Zendesk API-token auth             |
 | `ZENDESK_API_TOKEN`   | Zendesk API token                                       |
 | `ANTHROPIC_API_KEY`   | Claude API key — see [Claude authentication](#claude-authentication) |
-| `ZENDESK_DISCORD_WEBHOOK_URL` | Discord webhook for the triage channel. Deliberately its own secret, not the `DISCORD_WEBHOOK_URL` the failure notifier and Crowdin report share — a Discord webhook is bound to the channel it was created in, so pointing triage elsewhere means a separate webhook. Note that triage *failures* still go to `DISCORD_WEBHOOK_URL` via the failure-notification workflow |
+| `DISCORD_BOT_TOKEN` | Bot token for the app that owns the digest's Comment buttons. An incoming webhook cannot send interactive components, so the digest posts as the app |
+| `ZENDESK_DISCORD_CHANNEL_ID` | Channel the digest posts into. The bot needs Send Messages there |
 
 ### Claude Authentication
 
-Classification goes through the Anthropic API with an `ANTHROPIC_API_KEY`, in CI and locally alike — an organization-owned credential that doesn't draw on any individual's subscription quota.
+Classification goes through the Anthropic API with an `ANTHROPIC_API_KEY`, on the host and locally alike — an organization-owned credential that doesn't draw on any individual's subscription quota.
 
 If you go looking for that key and can't find one: an API key only exists inside a **Claude Console organization** (`platform.claude.com`), which is a separate organization from a claude.ai Pro/Max/Team/Enterprise subscription, with its own membership and billing. A claude.ai admin console has no API keys in it at all, so the usual answer is that no Console organization exists yet rather than that you're missing a permission.
 
@@ -158,18 +161,18 @@ If you go looking for that key and can't find one: an API key only exists inside
 
 | Setting                | Where            | Default                                                 | Description |
 | ---------------------- | ---------------- | ------------------------------------------------------- | ----------- |
-| `--window-hours`       | workflow input / flag | `72`                                               | Analyze unsolved tickets updated in the last N hours |
-| `--state`              | flag             | *(unset)*                                               | Dedup state file. The workflow points this at the cached `.triage-state/seen.json` |
+| `--window-hours`       | flag             | *(unset)*                                               | Analyze unsolved tickets updated in the last N hours. There is no parser default: absent, the run uses `DEFAULT_QUERY` and no window at all. The `72` the digest runs with is passed by [`zendesk-digest.service`](deploy/zendesk-digest.service) |
+| `--state`              | flag             | *(unset)*                                               | Dedup state file. The unit points this at `/var/lib/zendesk/seen.json` |
 | `--state-retention-days` | flag           | `30`                                                    | Forget state entries older than N days |
 | `ZENDESK_QUERY`        | env / `--query`  | *(unset)*                                               | Explicit Zendesk search query. Overrides `--window-hours` entirely |
-| `ZENDESK_TRIAGE_MODEL` | repo variable / `--model` | `claude-opus-5`                                         | Overrides the model. Takes a full id, or a shorthand (`opus`, `sonnet`, `haiku`) mapped to an id via `API_MODEL_ALIASES`. **Leave it unset for normal operation** — the default lives in the script so there's one place to change it |
+| `ZENDESK_TRIAGE_MODEL` | env / `--model`  | `claude-opus-5`                                         | Overrides the model. Takes a full id, or a shorthand (`opus`, `sonnet`, `haiku`) mapped to an id via `API_MODEL_ALIASES`. **Leave it unset for normal operation** — the default lives in the script so there's one place to change it |
 | `--findings`           | flag             | *(unset)*                                               | Render a findings JSON classified elsewhere, skipping Zendesk and Claude entirely. Pairs with `--dump-batch` |
-| `--max-tickets`        | workflow input / flag | `1000` (workflow) / `100` (flag)                   | Runaway guard on tickets analyzed per run, **not** a batch size. The workflow passes `1000`; a bare `python triage.py` uses the script's own `DEFAULT_MAX_TICKETS` of `100`. Zendesk's search API caps a query at 1000 results, so higher values don't fetch more |
+| `--max-tickets`        | flag             | `100`                                                   | Runaway guard on tickets analyzed per run, **not** a batch size. Zendesk's search API caps a query at 1000 results, so higher values don't fetch more |
 | `--batch-size`         | flag             | `400`                                                   | Split batches larger than this across multiple requests |
 | `--review-star-floor`  | flag             | `3`                                                     | Classify app-store reviews at or below N stars; count the rest |
 | `--include-positive-reviews` | flag       | off                                                     | Classify every review, including 4-5★ ones |
 | `--no-hydrate`         | flag             | off                                                     | Skip fetching comments for content-free tickets |
-| `--no-discord`         | workflow input / flag | off                                                | Analyze but post nothing, printing counts only. Records no state, so the next run still reports those tickets. Unlike `--dry-run` it prints no ticket content, which is why the workflow exposes this one and not `--dry-run` |
+| `--no-discord`         | flag             | off                                                     | Analyze but post nothing, printing counts only. Records no state, so the next run still reports those tickets. Unlike `--dry-run` it prints no ticket content |
 | `--effort`             | flag             | `medium`                                                | Claude reasoning effort (`low`–`max`) |
 
 #### Why this model, and why pinned
@@ -187,7 +190,7 @@ Two cases for overriding it:
 
 These do different jobs, and conflating them is how you get a silently truncated digest:
 
-- **`--max-tickets`** bounds how much of the Zendesk result set is fetched. At the workflow's 1000 it never binds on a 72h window (~70 tickets); it exists so a spam flood or a wide `reset_state` backfill can't run away. 1000 is also [Zendesk's own search result limit](https://developer.zendesk.com/api-reference/ticketing/ticket-management/search/#results-limit) — the API returns `422` for any page past it, so the fetch stops at 1000 regardless of what you pass, and reports the matched-vs-analyzed gap rather than failing.
+- **`--max-tickets`** bounds how much of the Zendesk result set is fetched. It never binds on a 72h window (~70 tickets); it exists so a spam flood or a wide backfill can't run away. 1000 is also [Zendesk's own search result limit](https://developer.zendesk.com/api-reference/ticketing/ticket-management/search/#results-limit) — the API returns `422` for any page past it, so the fetch stops at 1000 regardless of what you pass, and reports the matched-vs-analyzed gap rather than failing.
 - **`--batch-size`** bounds how many tickets go into a *single* model request. Anything larger is split across requests and the findings are concatenated.
 
 The split is necessary because output tokens, not context, are the binding constraint. Measured on real tickets: **~118 input tokens and ~102 output tokens per ticket**, with adaptive thinking drawing from the same output budget.
@@ -204,37 +207,21 @@ If a single request ever does hit the ceiling, the JSON never closes and no `str
 
 ### Schedule
 
-Runs **Monday to Friday at 00:00 UTC** over a 72h window (~70 tickets) — 10:00 AEST, 11:00 AEDT under daylight saving, so the digest opens the Australian workday. Cron is UTC-only, so `0 0 * * 1-5` is pinned to UTC+10 rather than UTC+11 (`0 23 * * 0-4`), which keeps the cron's day-of-week aligned with the local one.
+Runs **Monday to Friday at 10:00 Brisbane** over a 72h window (~70 tickets), which systemd normalizes to 00:00 UTC — the same instant the cron it replaces fired at. Brisbane rather than Sydney because it is UTC+10 all year, matching that cron's deliberate choice to pin UTC+10 and keep the day-of-week aligned rather than track daylight saving. The timezone belongs inside `OnCalendar=`; there is no `Timezone=` key in a `[Timer]` and systemd ignores one silently, so check any change with `systemd-analyze calendar`. Unlike the cron, a host that was asleep at 10:00 still gets its digest once on the next boot (`Persistent=yes`).
 
 The window is on `updated>`, not `created>`, so a ticket the requester adds detail to days after opening it is fetched again — a created-window would never see it. 72h rather than the 24h between runs so a failed run doesn't drop a day and Monday still reaches back past the weekend. Neither the overlap nor the wider net duplicates posts, because of the dedup state above.
 
-[Zendesk Resolve Positive Reviews](#zendesk-resolve-positive-reviews) runs first, as this workflow's opening job, wired as a [reusable workflow](https://docs.github.com/actions/using-workflows/reusing-workflows) (`uses:` + `secrets: inherit`). Order matters: the triage query is `status<solved`, so a review the resolver solves leaves the window — running second would re-count reviews just closed. The digest `needs:` it but runs `if: always()`, since the resolver is an optimisation for it, not a precondition.
+[Zendesk Resolve Positive Reviews](#zendesk-resolve-positive-reviews) runs first, as the unit's first `ExecStart`. Order matters: the triage query is `status<solved`, so a review the resolver solves leaves the window — running second would re-count reviews just closed. Its failure does not stop the digest, because the resolver is an optimisation for it rather than a precondition; the failure is still reported, so a resolver broken for weeks cannot pass for one with nothing to do.
 
-Triggerable manually via **workflow_dispatch** (optional `query` / `window_hours` / `max_tickets` inputs, plus `reset_state` to re-report the whole window and `no_discord` to exercise the job without posting — that run records nothing, so the next one still reports the tickets it saw). A manual dispatch skips the resolver job: this button triages, it must not bulk-edit Zendesk. Failures are reported through the Discord failure-notification workflow, which watches this workflow by name — so renaming `Zendesk Ticket Triage` means updating the `workflows:` list in [`notify_failure.yml`](.github/workflows/notify_failure.yml) too.
+Run it by hand with `sudo systemctl start zendesk-digest.service`, which does exactly what the timer does. For anything narrower, invoke the scripts directly — `--window-hours`, `--max-tickets`, `--query`, and `--no-discord` to exercise the job without posting (that run records nothing, so the next one still reports the tickets it saw). Failures are reported by `OnFailure=zendesk-alert@%n.service` on the unit itself, which cannot be silently unsubscribed by a rename the way matching on a workflow's name could.
 
 #### How state survives between runs
 
-State is kept in the **GitHub Actions cache**, not committed — this repo is public, and ticket IDs plus timestamps would leak ticket volume and activity rates. The workflow writes a unique cache key per run attempt and restores the most recent one by prefix:
+State is kept in a plain file under `/var/lib/zendesk`. Losing it re-reports the window once — noisy, never wrong — so it needs persisting, not backing up. It is not committed: this repo is public, and ticket ids plus timestamps would leak ticket volume and activity rates.
 
-```yaml
-key: zendesk-triage-state-${{ github.run_id }}-${{ github.run_attempt }}
-restore-keys: |
-  zendesk-triage-state-
-```
+The file is written atomically (`os.replace`) so a crash mid-write cannot corrupt it, and it is pruned to `--state-retention-days`. A missing, corrupt, or wrong-shaped file degrades to "treat every ticket as new" rather than failing — noisy for one run, never wrong.
 
-`run_attempt` is in the key because cache entries are **immutable**: a re-run reuses `run_id`, so keying on that alone would make the second attempt's save collide with the first's and write nothing. With it, attempt 2 saves its own entry and restores attempt 1's through the prefix — so tickets the first attempt already delivered aren't reposted.
-
-The cache is **best-effort**, and the script is written to tolerate that — a missing, corrupt, or wrong-shaped state file degrades to "treat every ticket as new", which is noisy for one run but never wrong. Things that can lose state:
-
-- **7 days without a cache hit** evicts the entry. The daily run keeps it warm, so this only bites if the workflow is disabled for a week.
-- **Repo cache eviction** under the 10GB limit (LRU). The state file is a few KB, so this is unlikely.
-- **Branch scoping:** caches written on the default branch are readable everywhere; a run on a feature branch won't see them and vice versa.
-
-The save step is `actions/cache/save` with `if: always()`, deliberately split from the restore rather than using the combined `actions/cache`. The combined action skips its save when a job fails, which would discard the partial-delivery record described above — so a Discord failure on message 3 of 3 would repost messages 1 and 2 on the next run.
-
-A `concurrency` group serialises runs, because two overlapping runs would race on the same state file and the loser's recorded tickets would be forgotten.
-
-If you outgrow the cache's guarantees, the next step up is a private store (a private gist, S3, or a private companion repo) — **not** committing state to this public repo.
+`Type=oneshot` on the unit and a single timer mean two runs cannot overlap, so nothing races on the file.
 
 ### Tests
 
@@ -242,24 +229,24 @@ If you outgrow the cache's guarantees, the next step up is a private store (a pr
 python -m unittest discover -s zendesk_triage -v
 ```
 
-Offline tests covering the window arithmetic, dedup partitioning, state round-trip and pruning, corrupt-state degradation, Discord line rendering and message chunking, defensive JSON parsing, and the retry/pagination behaviour with a stub session. No secrets or network access needed. They run in CI on any push or PR touching `zendesk_triage/`.
+Offline tests covering the window arithmetic, dedup partitioning, state round-trip and pruning, corrupt-state degradation, Discord card rendering and message chunking, defensive JSON parsing, and the retry/pagination behaviour with a stub session. No secrets or network access needed.
 
 ### Local Testing
 
-Local runs use the same Anthropic API path as CI, so they need an `ANTHROPIC_API_KEY` alongside the Zendesk credentials. `--dry-run` prints the Discord payload instead of posting, so no webhook is needed. Keep it to local runs: it prints ticket content, and this repo's Actions logs are public — `--no-discord` is the one to dispatch from CI, and it prints counts only:
+Local runs need an `ANTHROPIC_API_KEY` alongside the Zendesk credentials. `--dry-run` prints the Discord payload instead of posting, so no bot token is needed. Keep it to local runs: it prints ticket content. `--no-discord` prints counts only:
 
 ```
 pip install -r zendesk_triage/requirements.txt
 export ZENDESK_SUBDOMAIN=... ZENDESK_EMAIL=... ZENDESK_API_TOKEN=... ANTHROPIC_API_KEY=...
 
-# what CI runs, minus the Discord post and the state file
-python zendesk_triage/triage.py --window-hours 48 --dry-run
+# what the unit runs, minus the Discord post and the state file
+python zendesk_triage/triage.py --window-hours 72 --dry-run
 
 # keep it cheap while iterating on the rendering
 python zendesk_triage/triage.py --window-hours 12 --max-tickets 5 --dry-run
 
 # same run without the payload dump: fetches, classifies, posts nothing
-python zendesk_triage/triage.py --window-hours 48 --no-discord
+python zendesk_triage/triage.py --window-hours 72 --no-discord
 
 # or take the model out of the loop: dump the batch, classify it by hand,
 # and feed the findings back in to render
@@ -271,7 +258,7 @@ python zendesk_triage/triage.py --findings /tmp/findings.json --dry-run
 
 The triage's opening act: it solves the 4-5★ AppFollow reviews that were never going to be actioned, so the unsolved backlog reflects work that actually exists. When this was written **5,253** reviews were unsolved — **4,812** of them still `new` — against **428** non-review unsolved tickets. Solving reviews was already being done by hand: **4,959** were already solved or closed.
 
-> ⚠️ **This workflow writes to Zendesk.** A chained run from the triage always applies. A manual run is a **dry run** unless you tick `apply`, so the dispatch button cannot solve tickets by accident. Read the warning at the top of [resolve_reviews.py](zendesk_triage/resolve_reviews.py) before the first applied run.
+> ⚠️ **This writes to Zendesk.** The scheduled run always applies. Run by hand it is a **dry run** unless you pass `--apply`, so nothing can bulk-edit tickets by accident. Read the warning at the top of [resolve_reviews.py](zendesk_triage/resolve_reviews.py) before the first applied run.
 
 ### What it will and will not touch
 
@@ -317,25 +304,127 @@ The rating split is the point — a bare total wouldn't say which reviews went. 
 
 Silence would be indistinguishable from a job that has quietly stopped working — a broken query, a rotated token, a schedule that no longer fires — and this job exists to keep a number moving that nobody watches directly, so "looked, found nothing" is the half worth hearing. The count of what it examined is what separates the two. Eligible reviews that all *failed* get their own wording (`None of the 3 eligible app-store reviews were solved`), because reporting that as a quiet day would dress a broken run up as a clean one.
 
-**A run that died reports too**, from an `if: failure()` step in the workflow rather than the script — a Zendesk `4xx`, a bulk job that never completes, a dead runner all exit before a message exists:
+**A run that died reports too**, from the unit rather than the script — a Zendesk `4xx`, a bulk job that never completes, a host that rebooted all exit before a message exists:
 
 > ❌ Resolving positive reviews failed — [run log](#). Any tickets already solved stayed solved; the next run picks up the rest.
 
-It says nothing about counts, because it also fires after the script has already posted a tally alongside per-ticket failures. Applied runs only.
+It says nothing about counts, because it also fires after the script has already posted a tally alongside per-ticket failures.
 
 A dry run prints the message it would have posted instead of posting it, and `--no-discord` solves without reporting. The message is a tally rather than a per-ticket list, so unlike the triage digest it can't spill into a second message.
 
 ### Required Secrets
 
-`ZENDESK_SUBDOMAIN`, `ZENDESK_EMAIL`, `ZENDESK_API_TOKEN` — the same three the triage uses — plus `ZENDESK_DISCORD_WEBHOOK_URL`, the triage channel's own webhook, so the tally lands next to the digests it accounts for. Not the shared `DISCORD_WEBHOOK_URL`: a webhook is bound to the channel it was created in, and this job's *failures* still go there via the failure-notification workflow. No Claude credentials: it classifies nothing.
+`ZENDESK_SUBDOMAIN`, `ZENDESK_EMAIL`, `ZENDESK_API_TOKEN` — the same three the triage uses — plus `ZENDESK_DISCORD_WEBHOOK_URL`, the triage channel's own webhook, so the tally lands next to the digests it accounts for. Not the shared `DISCORD_WEBHOOK_URL`: a webhook is bound to the channel it was created in. No Claude credentials: it classifies nothing.
 
 The webhook is resolved before the run fetches anything, so a missing secret stops it rather than letting it bulk-edit tickets it then can't report; a dry run doesn't need one.
 
 ### Schedule
 
-No cron of its own (`on: workflow_call`): it runs as the first job of [Zendesk Ticket Triage](#zendesk-ticket-triage), Monday to Friday at 00:00 UTC, and applies. See that workflow's Schedule section for why it must go first. Still dispatchable on its own, which is the safe way to rehearse: unticked `apply` gives a dry run, `max_tickets` bounds a first real one.
+No timer of its own: it is the first `ExecStart` of [`zendesk-digest.service`](deploy/zendesk-digest.service), so it runs immediately before the digest, Monday to Friday, and applies. See the digest's Schedule section for why it must go first. Its `ExecStart` carries a `-` prefix, so a failure here is logged and the digest still goes out — resolving is an optimisation for the digest, not a precondition. Rehearse it by hand without `--apply` for a dry run, and bound a first real one with `--max-tickets`.
 
-Failures are reported through the Discord failure-notification workflow, which watches this workflow by name — renaming `Zendesk Resolve Positive Reviews` means updating the `workflows:` list in [`notify_failure.yml`](.github/workflows/notify_failure.yml) too. A *called* workflow raises no `workflow_run` event, so that only covers standalone dispatches; a chained failure surfaces under `Zendesk Ticket Triage`, on the same list.
+Failures are reported by the digest unit, which runs the resolver behind a `||` that posts to the triage channel and then lets the digest proceed.
+
+## Zendesk Reply from Discord
+
+Every ticket in the digest carries a **Comment** button. Pressing it opens a dialog
+showing the ticket's own words and its attachments, you write the reply in English,
+Claude translates it into the language the requester writes in, and it lands on the
+ticket as a public comment.
+
+> ⚠️ **This writes public comments, which email the requester.** Nothing it does is
+> reversible. Read the warning at the top of [reply.py](zendesk_triage/reply.py), and
+> note that both allowlists empty refuses everybody — deliberately.
+
+Nothing in the channel triggers it. Discord only sends the app interactions somebody
+deliberately pressed, so a conversation about a ticket — even one quoting a digest
+line verbatim — cannot start a reply. The dialog and the preview are both ephemeral,
+so drafting stays private to whoever pressed the button.
+
+### Where it runs
+
+On one machine, not in CI. [relay.py](zendesk_triage/relay.py) is the HTTPS endpoint
+Discord posts interactions to, and it hands anything that writes to Zendesk off to
+[reply.py](zendesk_triage/reply.py). See [deploy/README.md](deploy/README.md) for the
+systemd units, the nginx server block and the install order.
+
+`reply.py` is a subprocess rather than an import, and that is deliberate: it is a CLI
+with twenty `sys.exit()` calls, and `SystemExit` derives from `BaseException`, so
+importing it would mean one bad Zendesk response could take the endpoint down. A
+subprocess turns each of those into an exit code and keeps its own test suite testing
+exactly what production runs.
+
+### What the dialog shows
+
+One Zendesk call, against a three-second budget a modal cannot defer past:
+
+- a link to open the ticket in Zendesk
+- what the requester actually wrote, clipped to `BODY_CHARS`
+- attachments as links — filename and size
+
+Attachments are **linked, never copied**. Zendesk's `content_url` is a capability URL
+that resolves without authentication, so there is nothing to download, nothing stored
+on the host, and nothing uploaded to Discord's CDN — which copying files there would
+have done, and which would have been worse egress than the local storage it was meant
+to avoid. It is a bearer URL, which is why it only ever appears in an ephemeral
+dialog and never in a channel message or a log.
+
+If that call is slow or fails, the dialog still opens carrying the digest card's own
+summary line, which the interaction hands over for free. Degrading is never failing
+to open.
+
+### What lands on the ticket
+
+- a **public comment** carrying the reply, and `status` → `pending`
+- a **private note** naming the Discord author, plus the English original when it
+  differs from what the customer received
+
+Both are authored by `ZENDESK_EMAIL` — an API token authenticates as exactly one
+agent, so who sent the reply is recorded in the note rather than in the byline. On an
+English ticket the original *is* the public comment, so the note there is the
+attribution line alone rather than the same text twice. What goes out on that path is
+the agent's own words and never the model's echo of them.
+
+### The confirmation step
+
+An English reply has no translation to review, so it goes straight out. Anything else
+gets a preview:
+
+> Reply to [#27603](#) in **German**. Check the back-translation before sending — this
+> emails the requester and cannot be taken back.
+>
+> **Will be sent, in German** — Wir haben das in Version 1.2.3 behoben.
+> **…which says, back in English** — We have fixed that in version 1.2.3.
+> **You wrote** — We fixed this in 1.2.3.
+>
+> `[ Send ]` `[ Cancel ]`
+
+The middle block is the point: it is how somebody who does not speak the language can
+tell whether the translation drifted. It is asked for as a literal rendering rather
+than a polished one — an error the translation introduced has to survive into the
+back-translation or the check is worthless.
+
+Send answers with the buttons already removed, in the same response that acknowledges
+the click, so a second click has nothing left to press. A replay of the same
+interaction is caught separately, by a `[discord:<interaction id>]` marker in the
+private note.
+
+Replies are bounded at 1,200 characters: the reply, its translation and the
+back-translation all have to fit Discord's 6,000-character budget across one
+message's embeds, and a draft that would overshoot is refused rather than clipped — a
+truncated embed would mean sending a customer less than what was reviewed.
+
+### Tests
+
+```bash
+python -m unittest discover -s zendesk_triage -v
+```
+
+Offline, like the others: Zendesk runs against a stub session, and Claude, Discord
+and `reply.py` are all patched out. The guards are what is covered — an unsigned or
+tampered request refused, an unlisted person refused, a dialog that still opens when
+Zendesk is unreachable, a draft that survives the round trip byte for byte, an
+English reply that reaches the customer as typed, a re-run that cannot write twice,
+and an attachment URL that never reaches a channel-visible message.
 
 ## Workflow Failure Notificaiton
 
