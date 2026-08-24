@@ -27,7 +27,13 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectSystem=strict
-ProtectHome=yes
+# tmpfs rather than yes: the Claude Code CLI the translation shells out to reads its
+# login from $HOME, and `yes` makes /home inaccessible. tmpfs masks /home with an
+# empty one and BindPaths mounts just this account's back in, so every other home on
+# the box stays hidden. The bind is the real on-disk directory — the tmpfs is a mask
+# for this service's mount namespace, not storage, so nothing here is lost on reboot.
+ProtectHome=tmpfs
+BindPaths=/home/zendesk
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
@@ -37,7 +43,10 @@ LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
-# Nothing to write: the relay stores nothing, by design.
+# The relay itself still stores nothing. The writable path is for the Claude Code
+# CLI, which keeps its credentials and cache under $HOME; without it the translation
+# fails with a bare non-zero exit from `claude`.
+ReadWritePaths=/home/zendesk
 ReadOnlyPaths=/opt/zendesk
 
 [Install]

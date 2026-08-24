@@ -36,14 +36,18 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectSystem=strict
-ProtectHome=yes
+# See zendesk-relay.service: the classification shells out to the Claude Code CLI,
+# which reads its login from $HOME, and ProtectHome=yes would hide it.
+ProtectHome=tmpfs
+BindPaths=/home/zendesk
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=yes
 LockPersonality=yes
-# The dedup state is the one thing on disk. Losing it re-reports the window once:
-# noisy, never wrong — so it does not need backing up, only persisting.
-ReadWritePaths=/var/lib/zendesk
+# /var/lib/zendesk holds the dedup state — losing it re-reports the window once:
+# noisy, never wrong, so it needs persisting rather than backing up. /home/zendesk is
+# where the Claude Code CLI keeps its credentials and cache.
+ReadWritePaths=/var/lib/zendesk /home/zendesk
 StateDirectory=zendesk

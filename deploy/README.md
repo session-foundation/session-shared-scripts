@@ -18,9 +18,10 @@ unit to the triage channel.
 - Linux with systemd 252 or newer (the timer needs a timezone in `OnCalendar=`), and Python 3.12+
 - **The Claude Code CLI installed and logged in as the service user.** Both Claude
   calls go through it — the digest's classification and the reply flow's
-  translation — so its login is the only Claude credential this box holds. Check
-  with `sudo -u zendesk claude --version`, and see the note under Install about
-  giving it somewhere writable.
+  translation — so its login is the only Claude credential this box holds. It keeps
+  that login under `$HOME`, which is `/home/zendesk` and deliberately not the code
+  directory; see step 1 under Install. Check with
+  `sudo -H -u zendesk claude --version`.
 - **Always on.** A workstation is not a candidate: user timers stop at logout unless
   lingering is enabled, and a sleeping laptop silently skips the digest.
 - A public DNS name resolving here, with **80 and 443 reachable** — 80 for certbot's
@@ -38,8 +39,16 @@ write a public comment to any ticket, and of a logged-in Claude Code session.
 Run as root. Every command below assumes it; prefix with `sudo` if you are not.
 
 ```bash
-# 1. A user that owns nothing else
-useradd --system --home /opt/zendesk --shell /usr/sbin/nologin zendesk
+# 1. A user that owns nothing else. Its home is NOT the code directory: the Claude
+#    Code CLI writes its login and cache into $HOME, and /opt/zendesk is mounted
+#    read-only for the relay. Both units mask /home and bind only this one back in,
+#    so the account needs a home that exists before either unit starts.
+useradd --system --home /home/zendesk --shell /usr/sbin/nologin zendesk
+install -d -o zendesk -g zendesk -m 700 /home/zendesk
+
+#    Log the CLI in as that user. -H so sudo hands it the right $HOME; without it
+#    the login lands in root's home and the services will not find it.
+sudo -H -u zendesk claude
 
 # 2. The code and its venv
 git clone https://github.com/session-foundation/session-shared-scripts /opt/zendesk
@@ -91,6 +100,8 @@ its configuration from the environment.
 # variable — a trailing "# what this is" would be silently appended to your token
 # and Zendesk would answer 401.
 
+# HOME is deliberately absent: systemd sets it from the account database for units
+# with User=, so it follows `useradd --home` and cannot drift out of sync with it.
 ZENDESK_SUBDOMAIN=
 # Authors every comment the reply flow posts.
 ZENDESK_EMAIL=
@@ -136,6 +147,15 @@ curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
 curl -sS 127.0.0.1:8080/healthz                            # expect {"ok":true}
 ```
 
+**1b. The Claude CLI, as the service user.** Both Claude calls shell out to it, and
+this is the step most likely to be wrong after a fresh install — a login that landed
+in the wrong `$HOME` fails only when the digest next runs.
+
+```bash
+sudo -H -u zendesk claude --version
+systemctl show zendesk-relay -p Environment | tr ' ' '\n' | grep HOME   # /home/zendesk
+```
+
 **2. The digest, by hand.** `systemctl start zendesk-digest.service` and watch
 `journalctl -fu zendesk-digest`. It prints ticket counts and outcomes, never content.
 
@@ -160,6 +180,17 @@ a line in the triage channel.
 ```bash
 sudo -u zendesk git -C /opt/zendesk pull
 /opt/zendesk/venv/bin/pip install -r /opt/zendesk/zendesk_triage/requirements.txt
+systemctl restart zendesk-relay
+```
+
+The units live in `/etc/systemd/system`, so a pull that changes anything under
+`deploy/` needs them copied again — systemd reads the installed copy, not the
+checkout, and a stale unit fails in whatever way the old one did:
+
+```bash
+git -C /opt/zendesk diff --stat HEAD@{1} HEAD -- deploy/    # did any unit change?
+cp /opt/zendesk/deploy/*.service /opt/zendesk/deploy/*.timer /etc/systemd/system/
+systemctl daemon-reload
 systemctl restart zendesk-relay
 ```
 
