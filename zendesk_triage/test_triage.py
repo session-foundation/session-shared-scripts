@@ -526,10 +526,11 @@ class TestTicketLine(unittest.TestCase):
         line = triage.build_ticket_line(finding(1, likely_root_cause=""), "acme")
         self.assertNotIn("Likely cause", line)
 
-    def test_carries_the_reported_account_for_abuse_reports(self):
-        """The one field worth the characters: it is what an abuse report is for."""
+    def test_carries_a_reported_account_when_the_classification_names_one(self):
+        """Abuse reports themselves reach build_collapsed_line, not here, but any
+        other ticket naming an account keeps it on its line."""
         line = triage.build_ticket_line(
-            finding(1, category="abuse_report", reported_session_id="05" + "a" * 64), "acme"
+            finding(1, category="security_report", reported_session_id="05" + "a" * 64), "acme"
         )
         self.assertIn("Reported: `05" + "a" * 64 + "`", line)
 
@@ -608,6 +609,98 @@ class TestBuildMessages(unittest.TestCase):
         self.assertEqual(buttons(messages[0]), [])
 
 
+class TestCollapsedAbuseReports(unittest.TestCase):
+    """Session is metadata-free, so a reported Session ID is not actionable by
+    anyone. These are ~11% of non-review tickets: still worth seeing, never worth a
+    line each, and never worth a highlight slot."""
+
+    def abuse(self, ticket_id, **extra):
+        return finding(ticket_id, category="abuse_report",
+                       severity="not_applicable", **extra)
+
+    def test_one_line_replaces_every_abuse_report(self):
+        findings = [self.abuse(i) for i in range(10, 18)]
+        text = digest_text(build_messages(findings, "acme"))
+        collapsed = [l for l in text.splitlines() if "abuse report" in l]
+        self.assertEqual(len(collapsed), 1)
+        self.assertIn("**8** abuse reports", collapsed[0])
+
+    def test_the_line_links_every_ticket_it_counts(self):
+        findings = [self.abuse(i) for i in range(10, 18)]
+        text = digest_text(build_messages(findings, "acme"))
+        for i in range(10, 18):
+            self.assertIn(f"[#{i}](https://acme.zendesk.com/agent/tickets/{i})", text)
+
+    def test_it_carries_the_muted_marker_not_the_urgent_one(self):
+        line = triage.build_collapsed_line([self.abuse(1)], "acme")
+        self.assertTrue(line.startswith(triage.CATEGORY_EMOJI["abuse_report"]))
+        self.assertNotIn(triage.URGENT_MARKER, line)
+
+    def test_a_single_report_reads_singular(self):
+        self.assertIn("**1** abuse report —", triage.build_collapsed_line([self.abuse(1)], "acme"))
+
+    def test_it_sorts_below_the_individual_tickets(self):
+        """Lowest position for the lowest priority."""
+        findings = [self.abuse(10), finding(1, priority_rank=9)]
+        lines = [l for l in digest_text(build_messages(findings, "acme")).splitlines()
+                 if "[#" in l]
+        self.assertIn("[#1]", lines[0])
+        self.assertIn("abuse report", lines[-1])
+
+    def test_it_is_emitted_even_when_the_model_flagged_them(self):
+        """The whole point is that these are low-value whatever the model said."""
+        findings = [self.abuse(10, worth_looking_into=True, priority_rank=1)]
+        self.assertIn("**1** abuse report", digest_text(build_messages(findings, "acme")))
+
+    def test_they_never_get_a_ticket_line_of_their_own(self):
+        findings = [self.abuse(10, worth_looking_into=True)]
+        text = digest_text(build_messages(findings, "acme"))
+        self.assertNotIn("| [#10]", text)
+
+    def test_they_do_not_count_as_worth_looking_into(self):
+        findings = [self.abuse(10, worth_looking_into=True), finding(1)]
+        text = digest_text(build_messages(findings, "acme"))
+        self.assertIn("**1** worth looking into", text)
+
+    def test_they_never_take_a_highlight_slot(self):
+        findings = ([self.abuse(1000 + i, worth_looking_into=True, priority_rank=1)
+                     for i in range(10)]
+                    + [finding(i, priority_rank=i + 2) for i in range(triage.MAX_HIGHLIGHTS)])
+        text = digest_text(build_messages(findings, "acme"))
+        self.assertNotIn("Showing the top", text)
+        for i in range(triage.MAX_HIGHLIGHTS):
+            self.assertIn(f"[#{i}]", text)
+
+    def test_the_tally_still_counts_them(self):
+        findings = [self.abuse(10), self.abuse(11), finding(1)]
+        text = digest_text(build_messages(findings, "acme"))
+        self.assertIn("analyzed **3**", text)
+        self.assertIn(f"{triage.CATEGORY_EMOJI['abuse_report']} **2**", text)
+
+    def test_no_line_at_all_when_there_are_none(self):
+        self.assertNotIn("abuse report", digest_text(build_messages([finding(1)], "acme")))
+
+    def test_the_other_urgent_categories_keep_their_own_lines(self):
+        """These two are genuinely actionable, so they stay urgent and per-ticket."""
+        findings = [finding(1, category="security_report", severity="not_applicable"),
+                    finding(2, category="legal_or_data_request", severity="not_applicable")]
+        text = digest_text(build_messages(findings, "acme"))
+        self.assertEqual(text.count(triage.URGENT_MARKER), 2)
+        self.assertIn("| [#1]", text)
+        self.assertIn("| [#2]", text)
+
+    def test_a_long_run_of_links_is_clipped_rather_than_overflowing(self):
+        findings = [self.abuse(27000 + i) for i in range(200)]
+        line = triage.build_collapsed_line(findings, "acme")
+        self.assertLess(len(line), triage.MAX_MESSAGE_CHARS)
+        self.assertIn("**200** abuse reports", line)
+        self.assertRegex(line, r"\+\d+ more\)$")
+
+    def test_nothing_is_clipped_when_it_fits(self):
+        line = triage.build_collapsed_line([self.abuse(i) for i in range(10, 15)], "acme")
+        self.assertNotIn("more", line)
+
+
 # ---- Parsing helpers -------------------------------------------------------
 
 
@@ -639,6 +732,26 @@ class TestTaxonomyIsDerived(unittest.TestCase):
     def test_urgent_categories_are_real_categories(self):
         self.assertTrue(triage.URGENT_CATEGORIES.issubset(set(triage.CATEGORIES)))
 
+    def test_the_collapsed_category_is_a_real_category(self):
+        self.assertIn(triage.COLLAPSED_CATEGORY, triage.CATEGORIES)
+
+    def test_the_collapsed_category_is_not_urgent(self):
+        """Collapsing an urgent category would hide it behind a count."""
+        self.assertNotIn(triage.COLLAPSED_CATEGORY, triage.URGENT_CATEGORIES)
+
+    def test_no_two_markers_share_an_emoji(self):
+        """The marker columns only work if each emoji means one thing: a category
+        emoji that doubles as a severity or platform icon reads as the wrong column."""
+        groups = [set(triage.CATEGORY_EMOJI.values()),
+                  set(triage.SEVERITY_EMOJI.values()),
+                  set(triage.PLATFORM_EMOJI.values()),
+                  {triage.URGENT_MARKER, "🔄", "🗂️"}]
+        self.assertEqual(len(set(triage.CATEGORY_EMOJI.values())),
+                         len(triage.CATEGORY_EMOJI))
+        for i, group in enumerate(groups):
+            for other in groups[i + 1:]:
+                self.assertEqual(group & other, set())
+
     def test_platform_enum_is_wired_into_the_schema(self):
         item = triage.SCHEMA["properties"]["tickets"]["items"]
         self.assertEqual(item["properties"]["platform"]["enum"], triage.PLATFORMS)
@@ -646,12 +759,19 @@ class TestTaxonomyIsDerived(unittest.TestCase):
 
 class TestUrgency(unittest.TestCase):
     def test_urgent_category_beats_a_benign_severity(self):
-        """An abuse report is not a bug, so the model rates it not_applicable — the
+        """A legal request is not a bug, so the model rates it not_applicable — the
         calmest marker on the most serious ticket in the digest is backwards."""
-        abuse = finding(1, category="abuse_report", severity="not_applicable")
-        self.assertEqual(triage.severity_marker(abuse), triage.URGENT_MARKER)
-        self.assertNotEqual(triage.severity_marker(abuse),
+        legal = finding(1, category="legal_or_data_request", severity="not_applicable")
+        self.assertEqual(triage.severity_marker(legal), triage.URGENT_MARKER)
+        self.assertNotEqual(triage.severity_marker(legal),
                             triage.SEVERITY_EMOJI["not_applicable"])
+
+    def test_an_abuse_report_is_not_urgent(self):
+        """Session is metadata-free: a reported Session ID is not something anyone
+        can act on, so 🚨 was telling the reader to do something impossible."""
+        abuse = finding(1, category="abuse_report", severity="not_applicable")
+        self.assertFalse(triage.is_urgent(abuse))
+        self.assertNotEqual(triage.severity_marker(abuse), triage.URGENT_MARKER)
 
     def test_non_urgent_category_still_uses_severity(self):
         self.assertEqual(
@@ -716,6 +836,90 @@ class TestReviewFiltering(unittest.TestCase):
         keep, skipped = triage.partition_reviews([self.review(1, 4)], star_floor=4)
         self.assertEqual(len(keep), 1)
         self.assertEqual(skipped, [])
+
+
+class TestReviewPlatform(unittest.TestCase):
+    """The two integration shapes seen on real review tickets, verbatim."""
+
+    def review(self, ticket_id, service_info=None, stars=1):
+        source = {"from": {"service_info": service_info} if service_info else {},
+                  "to": {}, "rel": None}
+        return ticket(ticket_id, subject="★" * stars + "☆" * (5 - stars) + " \n\tno good",
+                      via={"channel": "any_channel", "source": source})
+
+    def google_play(self, ticket_id):
+        return self.review(ticket_id, {
+            "supports_channelback": True,
+            "supports_clickthrough": True,
+            "registered_integration_service_name": "Google Play",
+            "registered_integration_service_external_id": "2900483",
+            "integration_service_instance_name": "Session",
+        })
+
+    def app_store(self, ticket_id):
+        return self.review(ticket_id, {
+            "supports_channelback": True,
+            "supports_clickthrough": True,
+            "registered_integration_service_name": "AppFollow: Review Monitor",
+            "registered_integration_service_external_id": "xxxxx",
+            "integration_service_instance_name":
+                "AppFollow (Session - Private Messenger, App Store)",
+        })
+
+    def test_google_play_is_android(self):
+        self.assertEqual(triage.review_platform(self.google_play(1)), "android")
+
+    def test_the_app_store_is_ios(self):
+        """Its registered name is the generic 'AppFollow: Review Monitor'; only the
+        instance name says which store, so both names have to be searched."""
+        self.assertEqual(triage.review_platform(self.app_store(1)), "ios")
+
+    def test_a_review_naming_no_store_stays_unresolved(self):
+        self.assertIsNone(triage.review_platform(self.review(1)))
+        self.assertIsNone(triage.review_platform(
+            self.review(2, {"registered_integration_service_name": "Some Other Importer"})))
+
+    def test_non_review_tickets_are_not_a_source_of_platform(self):
+        email = ticket(1, via={"channel": "email",
+                               "source": {"from": {"address": "a@b.c", "name": "A"}}})
+        self.assertIsNone(triage.review_platform(email))
+        self.assertIsNone(triage.review_platform(ticket(2, via={"channel": "web"})))
+
+    def test_the_ticket_overrides_the_models_guess(self):
+        findings = [finding(1, platform="ios"), finding(2, platform="unknown")]
+        corrected = triage.apply_review_platform(
+            findings, [self.google_play(1), self.app_store(2)])
+        self.assertEqual([f["platform"] for f in findings], ["android", "ios"])
+        self.assertEqual(corrected, 2)
+
+    def test_an_unresolved_source_leaves_the_guess_alone(self):
+        findings = [finding(1, platform="desktop_linux"), finding(2, platform="ios")]
+        corrected = triage.apply_review_platform(
+            findings, [self.review(1), ticket(2, via={"channel": "web"})])
+        self.assertEqual([f["platform"] for f in findings], ["desktop_linux", "ios"])
+        self.assertEqual(corrected, 0)
+
+    def test_an_agreeing_guess_is_not_counted_as_a_correction(self):
+        findings = [finding(1, platform="android")]
+        self.assertEqual(triage.apply_review_platform(findings, [self.google_play(1)]), 0)
+        self.assertEqual(findings[0]["platform"], "android")
+
+    def test_findings_without_a_fetched_ticket_are_untouched(self):
+        """The --findings path has no tickets to read a source from."""
+        findings = [finding(1, platform="unknown")]
+        self.assertEqual(triage.apply_review_platform(findings, []), 0)
+        self.assertEqual(findings[0]["platform"], "unknown")
+
+    def test_the_digest_line_shows_the_store_the_review_came_from(self):
+        findings = [finding(1, category="low_star_review", platform="unknown")]
+        triage.apply_review_platform(findings, [self.google_play(1)])
+        line = triage.build_ticket_line(findings[0], "acme")
+        self.assertIn(triage.PLATFORM_EMOJI["android"], line)
+        self.assertNotIn(triage.PLATFORM_EMOJI["unknown"], line)
+
+    def test_every_resolvable_source_maps_to_a_known_platform(self):
+        for _, platform in triage.REVIEW_SOURCE_PLATFORMS:
+            self.assertIn(platform, triage.PLATFORMS)
 
 
 class TestContentFreeTickets(unittest.TestCase):
@@ -887,6 +1091,16 @@ class TestMessageCharLimit(unittest.TestCase):
         chunks = triage.chunk_entries([("x" * (triage.MAX_COMPONENT_CHARS + 50), {1})])
         self.assertEqual(len(chunks), 1)
 
+    def test_a_full_digest_of_fat_lines_and_abuse_reports_stays_within_the_limit(self):
+        """Worst case: the cap's worth of maximal ticket lines plus a day of nothing
+        but abuse reports, whose links are the one unbounded list on the digest."""
+        findings = [self.fat(i) for i in range(triage.MAX_HIGHLIGHTS)]
+        findings += [finding(27000 + i, category="abuse_report") for i in range(300)]
+        for message in build_messages(findings, "a" * 60):
+            self.assertLessEqual(
+                sum(len(text) for text in text_displays(message["components"])),
+                triage.MAX_COMPONENT_CHARS)
+
 
 class TestCoverage(unittest.TestCase):
     """coverage[i] is what message i accounts for, so a partial post failure records
@@ -917,9 +1131,48 @@ class TestCoverage(unittest.TestCase):
 
     def test_no_ticket_is_covered_twice(self):
         findings = [finding(i, priority_rank=i) for i in range(20)]
+        findings += [finding(100 + i, category="abuse_report") for i in range(5)]
         _, coverage = triage.build_messages(findings, "acme")
         flat = [tid for ids in coverage for tid in ids]
         self.assertEqual(len(flat), len(set(flat)))
+
+    def test_the_collapsed_line_carries_no_comment_button(self):
+        """It stands for every abuse report at once, so there is no single ticket a
+        reply could go to — and the merge that brought the collapsed line onto the
+        Components V2 digest wrapped it in a Section like any ticket, giving it a
+        button whose custom_id was an arbitrary member of the set."""
+        findings = [finding(i, category="abuse_report") for i in range(10, 18)]
+        messages, _ = triage.build_messages(findings, "acme")
+        collapsed = [m for m in messages
+                     if any("abuse report" in text
+                            for text in text_displays(m["components"]))]
+        self.assertTrue(collapsed)
+        for message in collapsed:
+            for custom_id in buttons(message):
+                self.assertNotIn(custom_id.removeprefix("comment:"),
+                                 {str(i) for i in range(10, 18)})
+
+    def test_the_collapsed_line_covers_the_abuse_reports_it_accounts_for(self):
+        """Covered by the message carrying that line — not by the header, which no
+        longer counts them, and not by nothing, which would re-report them forever."""
+        findings = [finding(i, category="abuse_report") for i in range(10, 18)]
+        messages, coverage = triage.build_messages(findings, "acme")
+        for message, covered in zip(messages, coverage):
+            if any("abuse report" in text
+                   for text in text_displays(message["components"])):
+                self.assertEqual(covered, set(range(10, 18)))
+                break
+        else:
+            self.fail("no message carried the collapsed line")
+
+    def test_abuse_reports_dropped_from_the_link_list_are_still_covered(self):
+        """The count covers them even when the character budget drops their link, so
+        marking them reported is honest — the digest did account for them."""
+        findings = [finding(27000 + i, category="abuse_report") for i in range(200)]
+        messages, coverage = triage.build_messages(findings, "acme")
+        covered = set().union(*coverage)
+        self.assertEqual(covered, {f["id"] for f in findings})
+        self.assertIn("more", digest_text(messages))
 
 
 class TestPostToDiscord(unittest.TestCase):

@@ -71,7 +71,6 @@ Claude reviews recently-created unsolved Zendesk tickets fetched from the Zendes
 
 | Category | Notes |
 | --- | --- |
-| `abuse_report` | One user reporting another for illegal content. ~11% of non-review tickets |
 | `security_report` | Vulnerability or exploit disclosure |
 | `legal_or_data_request` | GDPR, subpoena, law enforcement |
 | `bug_report` | Something is broken |
@@ -80,8 +79,11 @@ Claude reviews recently-created unsolved Zendesk tickets fetched from the Zendes
 | `low_star_review` | ≤3★ app-store review — these often hide a real bug |
 | `positive_review` | 4-5★ review, no actionable content |
 | `feature_request`, `question`, `spam_or_solicitation`, `other` | |
+| `abuse_report` | One user reporting another for illegal content. ~11% of non-review tickets, and nothing anyone can act on |
 
-The first three are **urgent categories**: they are not bugs, so the model rates their severity `not_applicable`. Marking by severity alone gave them the calmest marker and sorted them last, so category urgency wins — they lead their line with 🚨, sort ahead of everything else, and cannot be pushed out of the digest by the display cap.
+The first two are **urgent categories**: they are not bugs, so the model rates their severity `not_applicable`. Marking by severity alone gave them the calmest marker and sorted them last, so category urgency wins — they lead their line with 🚨, sort ahead of everything else, and cannot be pushed out of the digest by the display cap.
+
+`abuse_report` sits at the other end. **Session is metadata-free by design: there is no action available on a reported Session ID**, not for Session and not for the support team. At ~11% of non-review tickets they were crowding out the tickets that can actually be acted on, so they are the one category the digest collapses — a single 🔇 line at the very bottom carrying the count and the ticket links, emitted whatever the model flagged, never spending a highlight slot. The volume stays visible; the false alarm goes away.
 
 ### App-store review filtering
 
@@ -101,12 +103,13 @@ Each line leads with a severity marker, a category emoji and a platform icon, li
 🗂️ **Zendesk triage** — analyzed **16** of **46** tickets in the window (updated in the past 3 days). Skipped **30** positive app-store review(s).
 Backlog: **428** unsolved excluding app-store reviews (**5,252** more are reviews, not triaged).
 **9** worth looking into.
-⭐ **6** · 🐛 **3** · ❓ **2** · 🔑 **1** · ⚖️ **1** · 🔒 **1**
+⭐ **6** · 🐛 **3** · ❓ **2** · 🔇 **2** · 🔑 **1** · ⚖️ **1** · 🔒 **1**
 Likely duplicates: **push-notifications-not-delivered** ×5 (#27637, #27610, #27606, #27605)
 🚨 | ⚖️ | ❔ | #27632 · Police summons demanding user details for a Session ID
 🚨 | 🔒 | 🤖 | #27603 · Exported component lets another app obtain internal SharedPreferences | Likely cause: Improperly exported provider allowing external apps to trigger file sharing
 🟠 | ⭐ | 🍎 | #27610 · Messages not delivered for days; nothing shows even after opening | Likely cause: Push notification delivery / message retrieval failure
 🟠 | 🐛 | 🤖 | 🔄 #27605 · Message and call notifications only appear when the app is opened | Likely cause: Push notification service failure on Android
+🔇 **2** abuse reports — reported Session IDs, nothing actionable (#27640, #27641)
 ```
 
 | Column | Values |
@@ -115,7 +118,7 @@ Likely duplicates: **push-notifications-not-delivered** ×5 (#27637, #27610, #27
 | Category | The emoji from `CATEGORY_SPECS`, so it matches the tally line |
 | Platform | 🤖 Android · 🍎 iOS · 🖥️ desktop (all three) · 🌐 multiple · ❔ unknown |
 
-The header accounts for the batch in full, so nothing is dropped silently. The backlog line deliberately **excludes app-store reviews**: 92% of unsolved tickets are AppFollow reviews, so the unqualified number reads as roughly 13× the queue that actually needs a human (5,680 against 428). Both counts come from Zendesk's count-only search endpoint, one request each and both best-effort — if the review-excluded count fails, the line falls back to the plain total rather than disappearing. An abuse report also carries the reported Session ID on its line, since that is the actionable part and it saves opening the ticket.
+The header accounts for the batch in full, so nothing is dropped silently. The backlog line deliberately **excludes app-store reviews**: 92% of unsolved tickets are AppFollow reviews, so the unqualified number reads as roughly 13× the queue that actually needs a human (5,680 against 428). Both counts come from Zendesk's count-only search endpoint, one request each and both best-effort — if the review-excluded count fails, the line falls back to the plain total rather than disappearing. The category tally counts abuse reports like anything else, so the numbers still sum to what was analyzed; the collapsed line at the bottom is where they are listed, and its links stop at a character budget (the remainder counted as `+N more`) so a heavy day cannot push a message past 2,000.
 
 **One card per ticket, each with its own Comment button.** The lines still carry their own structure — the digest is read by skimming — but each now sits in a Components V2 Section whose accessory is a button, because that is the only Discord primitive where a button belongs to one item. Embeds cannot do it: components attach to the message, so ten embeds would sit above ten anonymous buttons. Two limits bound a message and whichever binds first splits it — 40 components, of which a card costs three (`MAX_SECTIONS_PER_MESSAGE` = 10), and `MAX_COMPONENT_CHARS` across all its text. Lines are still clipped (`SUMMARY_CHARS`, `ROOT_CAUSE_CHARS`), and each message records which ticket ids it accounts for, which is what makes a partial post failure recoverable.
 
@@ -176,7 +179,7 @@ The trade is process startup, a few seconds per call, against holding an API cre
 
 #### Why this model, and why pinned
 
-**Opus**, because the hard part of this job isn't per-ticket classification — enum-constrained categories with prompt guidance is squarely mid-tier work. It's the two batch-wide fields: `cluster` has to spot that a German app-store review and an English bug report describe one root cause, and `priority_rank` has to stay consistent across the whole batch. Those need the model to hold ~45 heterogeneous tickets in mind at once. The exact-transcription requirement (a 66-character Session ID copied verbatim) points the same way. And the entire job costs **single-digit dollars a month** on any current model — roughly $10 on Opus 5 against $6 on Sonnet 5 and $2 on Haiku 4.5 — so trading classification quality for a few dollars would be optimising the wrong thing when the cost of a miss is an unseen abuse report.
+**Opus**, because the hard part of this job isn't per-ticket classification — enum-constrained categories with prompt guidance is squarely mid-tier work. It's the two batch-wide fields: `cluster` has to spot that a German app-store review and an English bug report describe one root cause, and `priority_rank` has to stay consistent across the whole batch. Those need the model to hold ~45 heterogeneous tickets in mind at once. The exact-transcription requirement (a 66-character Session ID copied verbatim) points the same way. And the entire job costs **single-digit dollars a month** on any current model — roughly $10 on Opus 5 against $6 on Sonnet 5 and $2 on Haiku 4.5 — so trading classification quality for a few dollars would be optimising the wrong thing when the cost of a miss is an unseen security report or a crash cluster nobody grouped.
 
 **Pinned to an id rather than the `opus` alias**, because this is an unattended digest. An alias resolves to the newest Opus the credential allows, so severity calibration and cluster labels would shift on someone else's release schedule, with no run in between to notice it. Bumping the pin is a deliberate one-line change in [triage.py](zendesk_triage/triage.py) (`DEFAULT_MODEL`).
 
@@ -255,7 +258,7 @@ python zendesk_triage/triage.py --findings /tmp/findings.json --dry-run
 
 ## Zendesk Resolve Positive Reviews
 
-The triage's opening act: it solves the 4-5★ AppFollow reviews that were never going to be actioned, so the unsolved backlog reflects work that actually exists. When this was written **5,253** reviews were unsolved — **4,812** of them still `new` — against **428** non-review unsolved tickets. Solving reviews was already being done by hand: **4,959** were already solved or closed.
+The triage's opening act: it solves the 4-5★ AppFollow reviews that were never going to be actioned, so the unsolved backlog reflects work that actually exists. When this was written **5,253** reviews were unsolved — **4,812** of them still `new` — against **428** non-review unsolved tickets. Solving reviews was already being done by hand: **4,959** were already solved or closed. The job has since solved **3,882**, and the reviews it now finds are `open` rather than `new` — see the status bullet below.
 
 > ⚠️ **This writes to Zendesk.** The scheduled run always applies. Run by hand it is a **dry run** unless you pass `--apply`, so nothing can bulk-edit tickets by accident. Read the warning at the top of [resolve_reviews.py](zendesk_triage/resolve_reviews.py) before the first applied run.
 
@@ -265,7 +268,7 @@ Deliberately narrow, because a mis-aimed bulk status change is not recoverable b
 
 - **App-store reviews only**, by the same detection the triage uses — `triage.is_store_review`, so the two can't drift apart. Every fetched ticket is re-checked locally, since the query can't express the rating.
 - **Rated 4★ or better.** A fixed floor (`MIN_STARS`), not a flag — 3★ and below are what the triage reads as bug reports in disguise, so a lower floor would have this job close the reviews most worth looking at. A review whose stars can't be parsed from the subject is skipped, never solved.
-- **`new` only** — untouched reviews. The other 441 unsolved reviews are `open`, and every one of a 100-ticket sample had an assignee, a group, and an `updated_at` past its `created_at`: something already acted on them, so a bulk status change has no business there. There is deliberately no flag to widen this.
+- **`new` or `open`** (`status<pending`). The "Auto Assign to Support" automation fires an hour after a review arrives and gives it a group, which moves it to `open` — so neither the status nor the assignee marks a review a human has handled, and all 628 open 4-5★ reviews share one assignee and one group. `pending` and `hold` are empty on this channel, which makes them where an agent replying to a review puts it, and the bound that keeps this job off it. There is deliberately no flag to widen this further.
 - **`solved`, never `closed`.** Solved is reversible; closed is not.
 - **Tagged** `auto-resolved-review`, so they stay identifiable and a trigger can exclude them, and annotated with a **private** note — a public comment would email the person who wrote the review.
 

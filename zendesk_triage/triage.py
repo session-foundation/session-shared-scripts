@@ -163,10 +163,6 @@ CLAUDE_TIMEOUT_SECONDS = 1800
 # Percentages come from a 3,662-ticket sample of the 13 months to 2026-08.
 # Columns: (name, Discord label, urgent, guidance for the model)
 CATEGORY_SPECS = (
-    ("abuse_report", "🚨 Abuse report", True,
-     "One user reporting another account for illegal or abusive content (CSAM, "
-     "harassment, drugs, impersonation). Usually quotes the offending Session ID. "
-     "~11% of non-review tickets. Always set worth_looking_into."),
     ("security_report", "🔒 Security report", True,
      "A vulnerability, exploit, or account-compromise disclosure. Not the same as a "
      "policy question. Always set worth_looking_into."),
@@ -192,6 +188,12 @@ CATEGORY_SPECS = (
      "A how-do-I or usage question that is not a bug."),
     ("spam_or_solicitation", "🗑️ Spam / solicitation", False,
      "Marketing, token or OTC investment offers, partnership pitches, listing spam."),
+    ("abuse_report", "🔇 Abuse report", False,
+     "One user reporting another account for illegal or abusive content (CSAM, "
+     "harassment, drugs, impersonation). Usually quotes the offending Session ID. "
+     "~11% of non-review tickets. Session is metadata-free: nobody — Session "
+     "included — can act on a reported Session ID, so leave worth_looking_into "
+     "false. The digest counts these; it does not queue them for anyone."),
     ("other", "• Other", False,
      "Genuinely none of the above. Prefer a specific category wherever one fits."),
 )
@@ -245,7 +247,7 @@ TICKET_PROPERTIES = {
     },
     "worth_looking_into": {
         "type": "boolean",
-        "description": "True if a human should review this soon. Always true for abuse_report, security_report, and legal_or_data_request.",
+        "description": "True if a human should review this soon. Always true for security_report and legal_or_data_request; never for abuse_report, which nobody can act on.",
     },
     "cluster": {
         "type": "string",
@@ -302,8 +304,8 @@ _SYSTEM_PROMPT_TEMPLATE = textwrap.dedent(
     - `summary` is one plain line: what is actually broken, or what the user
       actually wants. Do not restate the ticket subject.
     - Mark `worth_looking_into` true for anything a human should see soon:
-      crashes, data loss, major bugs, and every abuse_report, security_report,
-      and legal_or_data_request. Be selective otherwise — not everything is major.
+      crashes, data loss, major bugs, and every security_report and
+      legal_or_data_request. Be selective otherwise — not everything is major.
     - For abuse_report, copy the reported account's Session ID into
       `reported_session_id` exactly as written. Do not invent or reformat it.
     - Rank by `priority_rank` (1 = first) across the whole batch.
@@ -631,6 +633,57 @@ def is_store_review(ticket):
             or STAR_SUBJECT.match(ticket.get("subject") or "") is not None)
 
 
+# Zendesk names the integration that imported a review under `via.source.from`, and
+# that name is the store it came from. Both names are searched because the two
+# integrations put the store in different ones: Google Play is the registered
+# service name itself, while the App Store's registered name is the generic
+# "AppFollow: Review Monitor" and only the instance name — "AppFollow (Session -
+# Private Messenger, App Store)" — says which store. Across 5,113 sampled reviews
+# spanning 2022-2026 these were the only two integrations, and both named the store
+# on every ticket.
+REVIEW_SOURCE_PLATFORMS = (("google play", "android"), ("app store", "ios"))
+REVIEW_SOURCE_NAME_FIELDS = ("registered_integration_service_name",
+                             "integration_service_instance_name")
+
+
+def review_platform(ticket):
+    """Store an app-store review was imported from, as a PLATFORMS value.
+
+    None when the ticket is not a review or its source names no store we know, which
+    leaves the model's guess in place rather than replacing it with 'unknown'.
+    """
+    if not is_store_review(ticket):
+        return None
+    source = ((ticket.get("via") or {}).get("source") or {}).get("from") or {}
+    service = source.get("service_info") or {}
+    names = " ".join(str(service.get(field) or "")
+                     for field in REVIEW_SOURCE_NAME_FIELDS).lower()
+    for needle, platform in REVIEW_SOURCE_PLATFORMS:
+        if needle in names:
+            return platform
+    return None
+
+
+def apply_review_platform(findings, tickets):
+    """Replace the model's guessed platform wherever the ticket states the store.
+
+    An imported review is the one case where the platform is not an inference: the
+    ticket says which store it came from, so guessing from the review text — which is
+    often a few words in another language — only invents a disagreement. Returns how
+    many findings this corrected.
+    """
+    platforms = {ticket.get("id"): review_platform(ticket) for ticket in tickets}
+    corrected = 0
+    for finding in findings:
+        platform = platforms.get(finding.get("id"))
+        if platform is None:
+            continue
+        if finding.get("platform") != platform:
+            corrected += 1
+        finding["platform"] = platform
+    return corrected
+
+
 def partition_reviews(tickets, star_floor):
     """Split off app-store reviews rated above `star_floor`.
 
@@ -928,6 +981,15 @@ MAX_MESSAGE_CHARS = 2000
 SUMMARY_CHARS = 160
 ROOT_CAUSE_CHARS = 140
 MAX_HIGHLIGHTS = 27
+# Abuse reports get one collapsed line for the whole batch instead of a line each.
+# Session is metadata-free, so a reported Session ID is not something anyone can act
+# on — not us, not the support team — yet they are ~11% of non-review tickets and
+# were crowding out the ones that can be acted on. Counted and linked, never queued.
+# Deliberately one named category rather than a general collapsing mechanism.
+COLLAPSED_CATEGORY = "abuse_report"
+# Character budget for the links on that line, so a day of nothing but abuse reports
+# can't push it past MAX_MESSAGE_CHARS. Past it the rest are counted, not linked.
+COLLAPSED_LINKS_CHARS = 900
 
 # ---- Components V2 ---------------------------------------------------------
 #
@@ -969,6 +1031,10 @@ def is_urgent(finding):
     return finding.get("category") in URGENT_CATEGORIES
 
 
+def is_collapsed(finding):
+    return finding.get("category") == COLLAPSED_CATEGORY
+
+
 def severity_marker(finding):
     """The leading emoji: category urgency first, then severity."""
     if is_urgent(finding):
@@ -998,8 +1064,9 @@ def build_ticket_line(finding, subdomain, is_update=False):
     root = clip(finding.get("likely_root_cause"), ROOT_CAUSE_CHARS)
     if root:
         parts.append(f"Likely cause: {root}")
-    # The reported account is the actionable part of an abuse report — carrying it on
-    # the line saves opening the ticket to copy it.
+    # Abuse reports no longer reach here (build_collapsed_line takes them), but the
+    # classification still records the account and any other ticket that names one
+    # carries it, so the segment costs nothing when the field is empty.
     reported = clip(finding.get("reported_session_id"), 70)
     if reported:
         parts.append(f"Reported: `{reported}`")
@@ -1024,6 +1091,29 @@ def build_ticket_section(text, ticket_id):
             "custom_id": f"comment:{ticket_id}",
         },
     }
+
+def build_collapsed_line(collapsed, subdomain):
+    """The whole batch of abuse reports as one line: a count, then the ticket links.
+
+        🔇 **8** abuse reports — reported Session IDs, nothing actionable (#27632, …)
+
+    Links stop at COLLAPSED_LINKS_CHARS and the remainder is counted instead, the
+    way build_header clips its cluster line: the count always covers every one of
+    them, which is what the line is for.
+    """
+    links, used = [], 0
+    for f in collapsed:
+        link = f"[#{f.get('id')}]({ticket_url(subdomain, f.get('id'))})"
+        used += len(link) + 2  # ", "
+        if used > COLLAPSED_LINKS_CHARS:
+            break
+        links.append(link)
+    unlisted = len(collapsed) - len(links)
+    if unlisted:
+        links.append(f"+{unlisted} more")
+    return (f"{CATEGORY_EMOJI[COLLAPSED_CATEGORY]} **{len(collapsed)}** abuse report"
+            f"{'' if len(collapsed) == 1 else 's'} — reported Session IDs, nothing "
+            f"actionable ({', '.join(links)})")
 
 
 def build_header(findings, highlights, stats=None):
@@ -1129,11 +1219,15 @@ def select_highlights(findings):
     """Ordered highlights split into (shown, omitted) by the display cap.
 
     Urgent categories are included even if the model failed to flag them, and sort
-    ahead of everything else — an abuse or legal report must not be pushed out of the
-    digest by a queue of ordinary bugs. Shared with state recording so the display
+    ahead of everything else — a security or legal report must not be pushed out of
+    the digest by a queue of ordinary bugs. Shared with state recording so the display
     and what gets marked reported can't drift apart.
+
+    COLLAPSED_CATEGORY is excluded whatever the model flagged: those tickets get the
+    collapsed line, and a slot here would be a slot taken from an actionable ticket.
     """
-    highlights = [f for f in findings if f.get("worth_looking_into") or is_urgent(f)]
+    highlights = [f for f in findings
+                  if (f.get("worth_looking_into") or is_urgent(f)) and not is_collapsed(f)]
     highlights.sort(key=lambda f: (not is_urgent(f), f.get("priority_rank", 9999)))
     return highlights[:MAX_HIGHLIGHTS], highlights[MAX_HIGHLIGHTS:]
 
@@ -1148,10 +1242,15 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
     shown, omitted = select_highlights(findings)
     shown_ids = {f.get("id") for f in shown}
     omitted_ids = {f.get("id") for f in omitted}
+    collapsed = [f for f in findings if is_collapsed(f)]
+    collapsed_ids = {f.get("id") for f in collapsed}
 
     # The header accounts for every classified ticket except the highlights that
-    # didn't fit; those are covered by no message and stay eligible next run.
-    header_ids = {f.get("id") for f in findings} - shown_ids - omitted_ids
+    # didn't fit; those are covered by no message and stay eligible next run. The
+    # collapsed line accounts for the abuse reports, links or not — its count covers
+    # every one of them, so re-reporting them next run would be noise.
+    header_ids = ({f.get("id") for f in findings}
+                  - shown_ids - omitted_ids - collapsed_ids)
     header = build_header(findings, shown + omitted, stats)
     if omitted:
         header += (f"\nShowing the top **{len(shown)}** of "
@@ -1161,6 +1260,9 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
          {f.get("id")})
         for f in shown
     ]
+    # Last, under the individual tickets: lowest position for the lowest priority.
+    if collapsed:
+        entries.append((build_collapsed_line(collapsed, subdomain), collapsed_ids))
 
     messages, coverage = [], []
     # A quiet day still owes the channel the header — chunk_entries has nothing to
@@ -1179,7 +1281,13 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
             # that didn't fit; those are covered by no message and stay eligible.
             covered |= header_ids
         for text, ids in chunk:
-            blocks.append(build_ticket_section(text, next(iter(ids))))
+            # The collapsed line stands for every abuse report at once, so there is no
+            # single ticket to comment on — and a group nobody can act on is the last
+            # thing that should offer a reply button. Plain text, no accessory.
+            if collapsed and ids == collapsed_ids:
+                blocks.append({"type": TEXT_DISPLAY, "content": text})
+            else:
+                blocks.append(build_ticket_section(text, next(iter(ids))))
             covered |= ids
         messages.append({
             "flags": COMPONENTS_V2_FLAG,
@@ -1405,6 +1513,12 @@ def main():
         if len(classified) < len(analyzed):
             print(f"Note: {len(analyzed) - len(classified)} ticket(s) came back without a "
                   f"classification; they stay eligible for the next run.")
+
+    # `classified` is empty under --findings, where no ticket was ever fetched, so
+    # those findings keep the platform they arrived with.
+    corrected = apply_review_platform(findings, classified)
+    if corrected:
+        print(f"Set the platform on {corrected} store review(s) from the ticket's source.")
 
     # Same selection the digest uses, so the console count can't disagree with the
     # digest — worth_looking_into alone would miss urgent categories the model
