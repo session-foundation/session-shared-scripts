@@ -209,7 +209,7 @@ If a single request ever does hit the ceiling, the JSON never closes and no `str
 
 ### Schedule
 
-Runs **Monday to Friday at 10:00 Brisbane** over a 72h window (~70 tickets), which systemd normalizes to 00:00 UTC — the same instant the cron it replaces fired at. Brisbane rather than Sydney because it is UTC+10 all year, matching that cron's deliberate choice to pin UTC+10 and keep the day-of-week aligned rather than track daylight saving. The timezone belongs inside `OnCalendar=`; there is no `Timezone=` key in a `[Timer]` and systemd ignores one silently, so check any change with `systemd-analyze calendar`. Unlike the cron, a host that was asleep at 10:00 still gets its digest once on the next boot (`Persistent=yes`).
+Runs **Monday to Friday at 10:00 Melbourne** over a 72h window (~70 tickets) — 00:00 UTC in winter, 23:00 UTC the previous day under AEDT. The cron this replaces had to pin UTC+10 year-round and drift an hour against local time, because GitHub cron is UTC-only; `OnCalendar=` takes a named zone, which tracks daylight saving and keeps the day-of-week local as well. The timezone belongs inside the expression; there is no `Timezone=` key in a `[Timer]` and systemd ignores one silently, so check any change with `systemd-analyze calendar`. Unlike the cron, a host that was asleep at 10:00 still gets its digest once on the next boot (`Persistent=yes`).
 
 The window is on `updated>`, not `created>`, so a ticket the requester adds detail to days after opening it is fetched again — a created-window would never see it. 72h rather than the 24h between runs so a failed run doesn't drop a day and Monday still reaches back past the weekend. Neither the overlap nor the wider net duplicates posts, because of the dedup state above.
 
@@ -308,9 +308,10 @@ Silence would be indistinguishable from a job that has quietly stopped working �
 
 **A run that died reports too**, from the unit rather than the script — a Zendesk `4xx`, a bulk job that never completes, a host that rebooted all exit before a message exists:
 
-> ❌ Resolving positive reviews failed — [run log](#). Any tickets already solved stayed solved; the next run picks up the rest.
+> ❌ **resolve_reviews.py** failed on `angus`, as part of zendesk-digest.service.
+> `journalctl -u zendesk-digest.service -n 50 --no-pager`
 
-It says nothing about counts, because it also fires after the script has already posted a tally alongside per-ticket failures.
+It says nothing about counts, because it also fires after the script has already posted a tally alongside per-ticket failures, and nothing about the cause, because the run may have died before it had one — it points at the journal instead of guessing.
 
 A dry run prints the message it would have posted instead of posting it, and `--no-discord` solves without reporting. The message is a tally rather than a per-ticket list, so unlike the triage digest it can't spill into a second message.
 
@@ -322,9 +323,9 @@ The webhook is resolved before the run fetches anything, so a missing secret sto
 
 ### Schedule
 
-No timer of its own: it is the first `ExecStart` of [`zendesk-digest.service`](deploy/zendesk-digest.service), so it runs immediately before the digest, Monday to Friday, and applies. See the digest's Schedule section for why it must go first. Its `ExecStart` carries a `-` prefix, so a failure here is logged and the digest still goes out — resolving is an optimisation for the digest, not a precondition. Rehearse it by hand without `--apply` for a dry run, and bound a first real one with `--max-tickets`.
+No timer of its own: it is the first `ExecStart` of [`zendesk-digest.service`](deploy/zendesk-digest.service), so it runs immediately before the digest, Monday to Friday, and applies. See the digest's Schedule section for why it must go first. Rehearse it by hand without `--apply` for a dry run, and bound a first real one with `--max-tickets`.
 
-Failures are reported by the digest unit, which runs the resolver behind a `||` that posts to the triage channel and then lets the digest proceed.
+Its `ExecStart` is wrapped in a `||` that reports the failure to the triage channel and then lets the digest proceed — resolving is an optimisation for the digest, not a precondition. A bare `-` prefix would also unblock the digest, but it would mark the unit successful, so `OnFailure=` would never fire and a resolver broken for weeks would look like one with nothing to do.
 
 ## Zendesk Reply from Discord
 

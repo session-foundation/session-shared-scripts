@@ -18,10 +18,11 @@ unit to the triage channel.
 - Linux with systemd 252 or newer (the timer needs a timezone in `OnCalendar=`), and Python 3.12+
 - **The Claude Code CLI installed and logged in as the service user.** Both Claude
   calls go through it — the digest's classification and the reply flow's
-  translation — so its login is the only Claude credential this box holds. It keeps
-  that login under `$HOME`, which is `/home/zendesk` and deliberately not the code
-  directory; see step 1 under Install. Check with
-  `sudo -H -u zendesk claude --version`.
+  translation — so its login is the only Claude credential this box holds. It must be
+  installed *by* that account: the CLI keeps its binary, its login and its cache under
+  `$HOME`, which is `/home/zendesk` and deliberately not the code directory. A root
+  install lands in `/root/.local`, which is `0700` and unreadable to the service; see
+  step 1 under Install.
 - **Always on.** A workstation is not a candidate: user timers stop at logout unless
   lingering is enabled, and a sleeping laptop silently skips the digest.
 - A public DNS name resolving here, with **80 and 443 reachable** — 80 for certbot's
@@ -40,15 +41,21 @@ Run as root. Every command below assumes it; prefix with `sudo` if you are not.
 
 ```bash
 # 1. A user that owns nothing else. Its home is NOT the code directory: the Claude
-#    Code CLI writes its login and cache into $HOME, and /opt/zendesk is mounted
-#    read-only for the relay. Both units mask /home and bind only this one back in,
-#    so the account needs a home that exists before either unit starts.
+#    Code CLI writes its binary, login and cache into $HOME, and /opt/zendesk is
+#    mounted read-only for the relay. Both units mask /home and bind only this one
+#    back in, so the account needs a home that exists before either unit starts.
+#
+#    nologin costs nothing here: `runuser -u` execs the command directly rather than
+#    through the account's shell, so every step below still works.
 useradd --system --home /home/zendesk --shell /usr/sbin/nologin zendesk
 install -d -o zendesk -g zendesk -m 700 /home/zendesk
 
-#    Log the CLI in as that user. -H so sudo hands it the right $HOME; without it
-#    the login lands in root's home and the services will not find it.
-sudo -H -u zendesk claude
+#    Install and log the CLI in AS that user. `runuser -u` resets neither HOME nor
+#    PATH, so both are spelled out: without the explicit HOME the login lands in
+#    root's home, and a bare `claude` resolves against root's PATH, which reports
+#    `Permission denied` for a binary that is installed perfectly well.
+runuser -u zendesk -- env HOME=/home/zendesk sh -c 'curl -fsSL https://claude.ai/install.sh | bash'
+runuser -u zendesk -- env HOME=/home/zendesk /home/zendesk/.local/bin/claude
 
 # 2. The code and its venv
 git clone https://github.com/session-foundation/session-shared-scripts /opt/zendesk
@@ -102,6 +109,11 @@ its configuration from the environment.
 
 # HOME is deliberately absent: systemd sets it from the account database for units
 # with User=, so it follows `useradd --home` and cannot drift out of sync with it.
+# PATH is not absent: systemd's default does not cover a per-user install, so without
+# this the units cannot find `claude` at all. Setting it replaces that default rather
+# than extending it, which is why the standard directories are repeated.
+PATH=/home/zendesk/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
 ZENDESK_SUBDOMAIN=
 # Authors every comment the reply flow posts.
 ZENDESK_EMAIL=
@@ -149,11 +161,29 @@ curl -sS 127.0.0.1:8080/healthz                            # expect {"ok":true}
 
 **1b. The Claude CLI, as the service user.** Both Claude calls shell out to it, and
 this is the step most likely to be wrong after a fresh install — a login that landed
-in the wrong `$HOME` fails only when the digest next runs.
+in the wrong `$HOME`, or a binary the units cannot reach, fails only when the digest
+next runs.
 
 ```bash
-sudo -H -u zendesk claude --version
-systemctl show zendesk-relay -p Environment | tr ' ' '\n' | grep HOME   # /home/zendesk
+runuser -u zendesk -- env HOME=/home/zendesk /home/zendesk/.local/bin/claude --version
+systemctl show zendesk-relay -p Environment | tr ' ' '\n' | grep -E 'HOME|PATH'
+```
+
+Both the explicit `HOME` and the absolute path are load-bearing: `runuser -u` resets
+neither, so a bare `claude` there is resolved against root's `PATH` and reports
+`Permission denied` for an install that is fine.
+
+That covers the install. The sandbox is the other half, and no amount of reading the
+unit file settles it — `ProtectHome=tmpfs`, `MemoryDenyWriteExecute=` and
+`SystemCallFilter=` each have a plausible way to break a JIT-compiled CLI. Rehearse
+the relay's exact confinement, with a real inference rather than `--version`:
+
+```bash
+systemd-run --pty --uid=zendesk --setenv=HOME=/home/zendesk \
+  -p ProtectSystem=strict -p ProtectHome=tmpfs -p BindPaths=/home/zendesk \
+  -p ReadWritePaths=/home/zendesk -p MemoryDenyWriteExecute=yes \
+  -p SystemCallFilter=@system-service \
+  /home/zendesk/.local/bin/claude --print --model claude-sonnet-5 'reply with OK'
 ```
 
 **2. The digest, by hand.** `systemctl start zendesk-digest.service` and watch
@@ -161,7 +191,7 @@ systemctl show zendesk-relay -p Environment | tr ' ' '\n' | grep HOME   # /home/
 
 **3. The timer fires when you expect.** `systemctl list-timers zendesk-digest` — and
 if you change `OnCalendar=`, check it with
-`systemd-analyze calendar "Mon..Fri 10:00 Australia/Brisbane"`. There is no
+`systemd-analyze calendar "Mon..Fri 10:00 Australia/Melbourne"`. There is no
 `Timezone=` key and systemd ignores one silently.
 
 **4. Through Discord.** Point the app's **Interactions Endpoint URL** at
@@ -178,7 +208,7 @@ a line in the triage channel.
 ## Updating
 
 ```bash
-sudo -u zendesk git -C /opt/zendesk pull
+runuser -u zendesk -- git -C /opt/zendesk pull
 /opt/zendesk/venv/bin/pip install -r /opt/zendesk/zendesk_triage/requirements.txt
 systemctl restart zendesk-relay
 ```
@@ -196,6 +226,58 @@ systemctl restart zendesk-relay
 
 Manual on purpose. Automating this would mean giving CI an SSH key to the box, which
 is the coupling self-hosting was meant to remove.
+
+## Pointing it at another Discord server
+
+The Zendesk half does not move. What does is everything that identifies a Discord
+application, server and channel — and the application is the awkward one: it owns the
+interactions endpoint *and* the bot, so a server you do not administer needs an
+application owned by someone who does. `DISCORD_PUBLIC_KEY` and `DISCORD_BOT_TOKEN`
+change with it. DNS, nginx and the endpoint URL itself stay exactly as they are.
+
+What the server's admins have to do:
+
+1. **Create an application** (Developer Portal → New Application) and add a bot to it.
+   You need its **Application ID**, **Public Key**, and **bot token** — the token sent
+   privately, since it can post as the app.
+2. **Set the Interactions Endpoint URL** to
+   `https://webhooks.session.codes/discord/interactions`. Do this *after* the new
+   public key is in `/etc/zendesk/env` and the relay has been restarted: Discord signs
+   its own `PING` and refuses the URL unless the relay verifies it, so saving it is
+   both the last step and the smoke test.
+3. **Invite the bot**:
+   `https://discord.com/oauth2/authorize?client_id=<APP_ID>&scope=bot&permissions=19456`
+   — View Channel, Send Messages, Embed Links, and nothing else. No slash commands, no
+   message-content intent, no reading the channel. A private target channel also needs
+   View Channel and Send Messages granted to the bot's role on the channel itself.
+4. **Create a webhook in that channel** (Channel Settings → Integrations → Webhooks)
+   and send the URL privately. A webhook is bound to the channel it was created in, so
+   the old one cannot reach the new one.
+5. **Name the role** allowed to send replies, unless you allowlist individual users.
+
+Server and channel ids need no admin: enable Developer Mode (User Settings →
+Advanced), then right-click → Copy Server ID / Copy Channel ID. A role id comes from
+typing `\@RoleName` into a message box and not sending it.
+
+Then, on the host:
+
+```bash
+"${EDITOR:-nano}" /etc/zendesk/env   # DISCORD_PUBLIC_KEY, DISCORD_BOT_TOKEN,
+                                     # DISCORD_GUILD_ID, ZENDESK_DISCORD_CHANNEL_ID,
+                                     # ZENDESK_DISCORD_WEBHOOK_URL, ALLOWED_ROLE_IDS,
+                                     # and RELAY_DRY_RUN=1 for the first press
+mv /var/lib/zendesk/seen.json /var/lib/zendesk/seen.json.old
+systemctl restart zendesk-relay
+systemctl start zendesk-digest.service
+```
+
+`ALLOWED_USER_IDS` survives the move untouched: Discord user ids are global, role ids
+are per-server.
+
+Move `seen.json` aside or the first digest in the new channel says almost nothing —
+dedup state is per ticket, not per channel, so everything already reported to the old
+one stays suppressed. Moving it re-reports the window once, which is the noisy-but-
+correct outcome the state file is built around.
 
 ## If this host goes down
 

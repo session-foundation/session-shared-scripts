@@ -12,7 +12,7 @@ is one line of text needing no components, and a failure notifier should depend 
 little as possible of whatever just broke.
 
 Usage:
-    alert.py <unit-name>
+    alert.py <name> [journal-unit]
 """
 import os
 import socket
@@ -24,21 +24,27 @@ import requests  # noqa: E402
 import triage  # noqa: E402
 
 
-def build_message(unit, host):
+def build_message(unit, host, journal_unit=None):
     """What the channel gets: what broke, where, and the one command that explains it.
 
     No counts and no detail — the unit may have failed before it had anything to
     report, and guessing at why would be worse than pointing at the journal.
+
+    `journal_unit` is for a step that is not a unit of its own. The digest runs the
+    resolver as its own first ExecStart, so naming that step in the journalctl line
+    would send whoever reads it to a unit systemd has never heard of.
     """
-    return (f"❌ **{unit}** failed on `{host}`.\n"
-            f"`journalctl -u {unit} -n 50 --no-pager`")
+    origin = f", as part of {journal_unit}" if journal_unit else ""
+    return (f"❌ **{unit}** failed on `{host}`{origin}.\n"
+            f"`journalctl -u {journal_unit or unit} -n 50 --no-pager`")
 
 
 def main():
-    if len(sys.argv) != 2 or not sys.argv[1].strip():
-        sys.exit("usage: alert.py <unit-name>")
+    args = [arg.strip() for arg in sys.argv[1:]]
+    if not args or len(args) > 2 or not args[0]:
+        sys.exit("usage: alert.py <name> [journal-unit]")
     webhook = triage.get_env("ZENDESK_DISCORD_WEBHOOK_URL")
-    message = build_message(sys.argv[1].strip(), socket.gethostname())
+    message = build_message(args[0], socket.gethostname(), *args[1:])
     # A fresh session, never a Zendesk one — that carries the API-token auth header,
     # and Discord has no business receiving it.
     if not triage.post_to_discord(requests.Session(), webhook, [{"content": message}]):

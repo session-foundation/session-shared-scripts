@@ -22,7 +22,7 @@ EnvironmentFile=/etc/zendesk/env
 # looks exactly like one with nothing to do. The `||` reports it and still lets the
 # digest run. If the alert itself also fails, the shell exits non-zero and the unit's
 # own OnFailure catches that.
-ExecStart=/bin/sh -c '/opt/zendesk/venv/bin/python resolve_reviews.py --apply || /opt/zendesk/venv/bin/python /opt/zendesk/deploy/alert.py zendesk-resolve-reviews'
+ExecStart=/bin/sh -c '/opt/zendesk/venv/bin/python resolve_reviews.py --apply || /opt/zendesk/venv/bin/python /opt/zendesk/deploy/alert.py resolve_reviews.py zendesk-digest.service'
 ExecStart=/opt/zendesk/venv/bin/python triage.py --window-hours 72 \
     --state /var/lib/zendesk/seen.json
 
