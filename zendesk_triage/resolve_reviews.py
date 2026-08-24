@@ -2,8 +2,8 @@
 """
 Solve the app-store reviews that were never going to be actioned.
 
-59% of all tickets are 4-5★ AppFollow reviews with nothing to act on, and 4,812 of
-them sit unsolved in `new`. The triage already counts them without spending
+59% of all tickets are 4-5★ AppFollow reviews with nothing to act on, and 628 of
+them sit unsolved. The triage already counts them without spending
 tokens (see partition_reviews in triage.py); this closes them out so the unsolved
 backlog reflects work that actually exists.
 
@@ -23,10 +23,11 @@ What it will and will not touch, deliberately narrow:
   * with a parsed rating of MIN_STARS (4) or better — a fixed floor, not an option,
     because 3★ and below are what the triage wants to see. A review whose stars
     cannot be parsed is skipped, never solved
-  * in `new` only. The other 441 unsolved reviews are `open`, and every one of a
-    100-ticket sample had an assignee, a group, and an updated_at past its
-    created_at — something already acted on them, which is exactly what a bulk
-    status change should keep its hands off
+  * in `new` or `open` only. An automation moves every review to `open` about an
+    hour after it arrives and assigns it, so neither the status nor the assignee
+    distinguishes a handled review any more. `pending` and `hold` are empty on this
+    channel, so they are where an agent working a review would put it — which is
+    what a bulk status change should keep its hands off
   * `solved`, never `closed` — solved is reversible, closed is not
 
 No state file: solved tickets drop out of the query, so runs are idempotent and the
@@ -100,12 +101,19 @@ def build_query():
     of the filter — the star rating lives in the subject, which Zendesk's search
     index will not match, so the rating is applied locally in select_resolvable.
 
-    `status:new` rather than `status<solved`: the difference is the 441 `open`
-    reviews, and every one of a 100-ticket sample carried an assignee, a group and
-    an updated_at later than its created_at. Something has already handled those,
-    so they are not this job's to close.
+    `status<pending` — `new` and `open` — because a review only stays `new` for about
+    an hour: the "Auto Assign to Support" automation fires on `NEW is 1` and sets a
+    group, which moves it to `open`. The account has had nothing in `new` since
+    2026-08-01, so the `status:new` this replaces matched only the 1-3★ residue that
+    predates the automation and that the star floor then dropped.
+
+    Not `status<solved`, and an assignee is no longer the signal it was: the
+    automation gives all 628 open 4-5★ reviews the same assignee and the same group.
+    `pending` and `hold` are empty on this channel, which makes them where an agent
+    replying to a review puts it — so `<pending` is what keeps this job off the
+    reviews a human is actually working.
     """
-    return "type:ticket status:new via:any_channel order_by:created_at sort:desc"
+    return "type:ticket status<pending via:any_channel order_by:created_at sort:desc"
 
 
 def select_resolvable(tickets, min_stars):

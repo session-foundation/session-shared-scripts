@@ -269,7 +269,7 @@ python zendesk_triage/triage.py --findings /tmp/findings.json --dry-run
 
 ## Zendesk Resolve Positive Reviews
 
-The triage's opening act: it solves the 4-5★ AppFollow reviews that were never going to be actioned, so the unsolved backlog reflects work that actually exists. When this was written **5,253** reviews were unsolved — **4,812** of them still `new` — against **428** non-review unsolved tickets. Solving reviews was already being done by hand: **4,959** were already solved or closed.
+The triage's opening act: it solves the 4-5★ AppFollow reviews that were never going to be actioned, so the unsolved backlog reflects work that actually exists. When this was written **5,253** reviews were unsolved — **4,812** of them still `new` — against **428** non-review unsolved tickets. Solving reviews was already being done by hand: **4,959** were already solved or closed. The job has since solved **3,882**, and the reviews it now finds are `open` rather than `new` — see the status bullet below.
 
 > ⚠️ **This workflow writes to Zendesk.** A chained run from the triage always applies. A manual run is a **dry run** unless you tick `apply`, so the dispatch button cannot solve tickets by accident. Read the warning at the top of [resolve_reviews.py](zendesk_triage/resolve_reviews.py) before the first applied run.
 
@@ -279,7 +279,7 @@ Deliberately narrow, because a mis-aimed bulk status change is not recoverable b
 
 - **App-store reviews only**, by the same detection the triage uses — `triage.is_store_review`, so the two can't drift apart. Every fetched ticket is re-checked locally, since the query can't express the rating.
 - **Rated 4★ or better.** A fixed floor (`MIN_STARS`), not a flag — 3★ and below are what the triage reads as bug reports in disguise, so a lower floor would have this job close the reviews most worth looking at. A review whose stars can't be parsed from the subject is skipped, never solved.
-- **`new` only** — untouched reviews. The other 441 unsolved reviews are `open`, and every one of a 100-ticket sample had an assignee, a group, and an `updated_at` past its `created_at`: something already acted on them, so a bulk status change has no business there. There is deliberately no flag to widen this.
+- **`new` or `open`** (`status<pending`). The "Auto Assign to Support" automation fires an hour after a review arrives and gives it a group, which moves it to `open` — so neither the status nor the assignee marks a review a human has handled, and all 628 open 4-5★ reviews share one assignee and one group. `pending` and `hold` are empty on this channel, which makes them where an agent replying to a review puts it, and the bound that keeps this job off it. There is deliberately no flag to widen this further.
 - **`solved`, never `closed`.** Solved is reversible; closed is not.
 - **Tagged** `auto-resolved-review`, so they stay identifiable and a trigger can exclude them, and annotated with a **private** note — a public comment would email the person who wrote the review.
 

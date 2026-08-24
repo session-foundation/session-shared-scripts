@@ -52,12 +52,17 @@ def human_ticket(ticket_id):
 
 
 class TestQuery(unittest.TestCase):
-    def test_only_untouched_reviews_are_eligible(self):
-        """`new`, not `status<solved`: every open review sampled had an assignee, a
-        group and an updated_at past its created_at, so something already handled it."""
+    def test_open_reviews_are_eligible(self):
+        """The automation moves a review to `open` about an hour after it arrives, so
+        a daily `status:new` run found nothing but the 1-3★ residue it cannot solve."""
         query = resolve_reviews.build_query()
-        self.assertIn("status:new", query)
-        self.assertNotIn("status<solved", query)
+        self.assertIn("status<pending", query)
+        self.assertNotIn("status:new", query)
+
+    def test_a_review_an_agent_is_working_stays_out_of_reach(self):
+        """`<pending`, not `<solved`: pending and hold are where an agent replying to
+        a review puts it, and they are the only remaining signal that one is handled."""
+        self.assertNotIn("status<solved", resolve_reviews.build_query())
 
     def test_filters_to_the_appfollow_channel(self):
         self.assertIn("via:any_channel", resolve_reviews.build_query())
@@ -99,6 +104,15 @@ class TestSelection(unittest.TestCase):
         """triage.is_store_review accepts either signal; the rating still decides."""
         resolvable, _ = self.select([review(1, stars=5, channel="email")])
         self.assertEqual([t["id"] for t in resolvable], [1])
+
+    def test_an_automation_assigned_review_is_still_resolvable(self):
+        """What the widened query now returns: the automation sets status, group and
+        assignee on every review, and none of the three is a reason to skip it."""
+        assigned = review(1, stars=5)
+        assigned.update(status="open", assignee_id=901790886886, group_id=900005158963)
+        resolvable, skipped = self.select([assigned])
+        self.assertEqual([t["id"] for t in resolvable], [1])
+        self.assertEqual(skipped, [])
 
 
 class TestBatching(unittest.TestCase):
