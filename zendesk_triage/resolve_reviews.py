@@ -14,7 +14,11 @@ backlog reflects work that actually exists.
         surveys, and an AppFollow requester may carry a real email address. Check
         Admin Center → Objects and rules → Business rules before the first --apply,
         and do that run with a small --max-tickets so the effects are observable.
-        Every ticket is tagged (--tag) so a trigger can exclude them.
+        Every ticket is tagged (--tag) so a rule can exclude them — as of this
+        writing no active rule references the tag, so adding the exclusion to the
+        satisfaction automation is still to do. It fires on every ticket this job
+        solves and sends nothing only because AppFollow requesters carry no email
+        address, which is an accident of the integration rather than a guarantee.
 
 What it will and will not touch, deliberately narrow:
 
@@ -28,7 +32,10 @@ What it will and will not touch, deliberately narrow:
     distinguishes a handled review any more. `pending` and `hold` are empty on this
     channel, so they are where an agent working a review would put it — which is
     what a bulk status change should keep its hands off
-  * `solved`, never `closed` — solved is reversible, closed is not
+  * `solved`, never `closed` — but only buys about four days. The account's
+    "Close ticket 4 days after status is set to solved" automation closes them
+    from there, and closed is irreversible, so a batch is reviewable for that
+    window and not after it
 
 No state file: solved tickets drop out of the query, so runs are idempotent and the
 schedule drains the backlog and then keeps pace with new reviews.
