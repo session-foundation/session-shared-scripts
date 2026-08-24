@@ -615,6 +615,57 @@ def is_store_review(ticket):
             or STAR_SUBJECT.match(ticket.get("subject") or "") is not None)
 
 
+# Zendesk names the integration that imported a review under `via.source.from`, and
+# that name is the store it came from. Both names are searched because the two
+# integrations put the store in different ones: Google Play is the registered
+# service name itself, while the App Store's registered name is the generic
+# "AppFollow: Review Monitor" and only the instance name — "AppFollow (Session -
+# Private Messenger, App Store)" — says which store. Across 5,113 sampled reviews
+# spanning 2022-2026 these were the only two integrations, and both named the store
+# on every ticket.
+REVIEW_SOURCE_PLATFORMS = (("google play", "android"), ("app store", "ios"))
+REVIEW_SOURCE_NAME_FIELDS = ("registered_integration_service_name",
+                             "integration_service_instance_name")
+
+
+def review_platform(ticket):
+    """Store an app-store review was imported from, as a PLATFORMS value.
+
+    None when the ticket is not a review or its source names no store we know, which
+    leaves the model's guess in place rather than replacing it with 'unknown'.
+    """
+    if not is_store_review(ticket):
+        return None
+    source = ((ticket.get("via") or {}).get("source") or {}).get("from") or {}
+    service = source.get("service_info") or {}
+    names = " ".join(str(service.get(field) or "")
+                     for field in REVIEW_SOURCE_NAME_FIELDS).lower()
+    for needle, platform in REVIEW_SOURCE_PLATFORMS:
+        if needle in names:
+            return platform
+    return None
+
+
+def apply_review_platform(findings, tickets):
+    """Replace the model's guessed platform wherever the ticket states the store.
+
+    An imported review is the one case where the platform is not an inference: the
+    ticket says which store it came from, so guessing from the review text — which is
+    often a few words in another language — only invents a disagreement. Returns how
+    many findings this corrected.
+    """
+    platforms = {ticket.get("id"): review_platform(ticket) for ticket in tickets}
+    corrected = 0
+    for finding in findings:
+        platform = platforms.get(finding.get("id"))
+        if platform is None:
+            continue
+        if finding.get("platform") != platform:
+            corrected += 1
+        finding["platform"] = platform
+    return corrected
+
+
 def partition_reviews(tickets, star_floor):
     """Split off app-store reviews rated above `star_floor`.
 
@@ -1231,6 +1282,12 @@ def main():
         if len(classified) < len(analyzed):
             print(f"Note: {len(analyzed) - len(classified)} ticket(s) came back without a "
                   f"classification; they stay eligible for the next run.")
+
+    # `classified` is empty under --findings, where no ticket was ever fetched, so
+    # those findings keep the platform they arrived with.
+    corrected = apply_review_platform(findings, classified)
+    if corrected:
+        print(f"Set the platform on {corrected} store review(s) from the ticket's source.")
 
     # Same selection the digest uses, so the console count can't disagree with the
     # digest — worth_looking_into alone would miss urgent categories the model
