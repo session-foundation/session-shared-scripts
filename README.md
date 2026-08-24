@@ -71,7 +71,6 @@ Claude reviews recently-created unsolved Zendesk tickets fetched from the Zendes
 
 | Category | Notes |
 | --- | --- |
-| `abuse_report` | One user reporting another for illegal content. ~11% of non-review tickets |
 | `security_report` | Vulnerability or exploit disclosure |
 | `legal_or_data_request` | GDPR, subpoena, law enforcement |
 | `bug_report` | Something is broken |
@@ -80,8 +79,11 @@ Claude reviews recently-created unsolved Zendesk tickets fetched from the Zendes
 | `low_star_review` | ≤3★ app-store review — these often hide a real bug |
 | `positive_review` | 4-5★ review, no actionable content |
 | `feature_request`, `question`, `spam_or_solicitation`, `other` | |
+| `abuse_report` | One user reporting another for illegal content. ~11% of non-review tickets, and nothing anyone can act on |
 
-The first three are **urgent categories**: they are not bugs, so the model rates their severity `not_applicable`. Marking by severity alone gave them the calmest marker and sorted them last, so category urgency wins — they lead their line with 🚨, sort ahead of everything else, and cannot be pushed out of the digest by the display cap.
+The first two are **urgent categories**: they are not bugs, so the model rates their severity `not_applicable`. Marking by severity alone gave them the calmest marker and sorted them last, so category urgency wins — they lead their line with 🚨, sort ahead of everything else, and cannot be pushed out of the digest by the display cap.
+
+`abuse_report` sits at the other end. **Session is metadata-free by design: there is no action available on a reported Session ID**, not for Session and not for the support team. At ~11% of non-review tickets they were crowding out the tickets that can actually be acted on, so they are the one category the digest collapses — a single 🔇 line at the very bottom carrying the count and the ticket links, emitted whatever the model flagged, never spending a highlight slot. The volume stays visible; the false alarm goes away.
 
 ### App-store review filtering
 
@@ -101,12 +103,13 @@ Each line leads with a severity marker, a category emoji and a platform icon, li
 🗂️ **Zendesk triage** — analyzed **16** of **46** tickets in the window (updated in the past 3 days). Skipped **30** positive app-store review(s).
 Backlog: **428** unsolved excluding app-store reviews (**5,252** more are reviews, not triaged).
 **9** worth looking into.
-⭐ **6** · 🐛 **3** · ❓ **2** · 🔑 **1** · ⚖️ **1** · 🔒 **1**
+⭐ **6** · 🐛 **3** · ❓ **2** · 🔇 **2** · 🔑 **1** · ⚖️ **1** · 🔒 **1**
 Likely duplicates: **push-notifications-not-delivered** ×5 (#27637, #27610, #27606, #27605)
 🚨 | ⚖️ | ❔ | #27632 · Police summons demanding user details for a Session ID
 🚨 | 🔒 | 🤖 | #27603 · Exported component lets another app obtain internal SharedPreferences | Likely cause: Improperly exported provider allowing external apps to trigger file sharing
 🟠 | ⭐ | 🍎 | #27610 · Messages not delivered for days; nothing shows even after opening | Likely cause: Push notification delivery / message retrieval failure
 🟠 | 🐛 | 🤖 | 🔄 #27605 · Message and call notifications only appear when the app is opened | Likely cause: Push notification service failure on Android
+🔇 **2** abuse reports — reported Session IDs, nothing actionable (#27640, #27641)
 ```
 
 | Column | Values |
@@ -115,7 +118,7 @@ Likely duplicates: **push-notifications-not-delivered** ×5 (#27637, #27610, #27
 | Category | The emoji from `CATEGORY_SPECS`, so it matches the tally line |
 | Platform | 🤖 Android · 🍎 iOS · 🖥️ desktop (all three) · 🌐 multiple · ❔ unknown |
 
-The header accounts for the batch in full, so nothing is dropped silently. The backlog line deliberately **excludes app-store reviews**: 92% of unsolved tickets are AppFollow reviews, so the unqualified number reads as roughly 13× the queue that actually needs a human (5,680 against 428). Both counts come from Zendesk's count-only search endpoint, one request each and both best-effort — if the review-excluded count fails, the line falls back to the plain total rather than disappearing. An abuse report also carries the reported Session ID on its line, since that is the actionable part and it saves opening the ticket.
+The header accounts for the batch in full, so nothing is dropped silently. The backlog line deliberately **excludes app-store reviews**: 92% of unsolved tickets are AppFollow reviews, so the unqualified number reads as roughly 13× the queue that actually needs a human (5,680 against 428). Both counts come from Zendesk's count-only search endpoint, one request each and both best-effort — if the review-excluded count fails, the line falls back to the plain total rather than disappearing. The category tally counts abuse reports like anything else, so the numbers still sum to what was analyzed; the collapsed line at the bottom is where they are listed, and its links stop at a character budget (the remainder counted as `+N more`) so a heavy day cannot push a message past 2,000.
 
 **Plain message content, no embeds.** The lines carry their own structure, so an embed added a border and nothing else. The cost is the character budget: Discord caps message content at 2,000 against an embed description's 4,096, and a masked link on the id spends 54 characters that the reader never sees. A real 9-highlight day comes to ~2,400 characters, so it arrives as two messages. Lines are clipped (`SUMMARY_CHARS`, `ROOT_CAUSE_CHARS`) and chunked against 2,000, counting the newlines that join them; each message records which ticket ids it accounts for, which is what makes a partial post failure recoverable.
 
@@ -174,7 +177,7 @@ If you go looking for that key and can't find one: an API key only exists inside
 
 #### Why this model, and why pinned
 
-**Opus**, because the hard part of this job isn't per-ticket classification — enum-constrained categories with prompt guidance is squarely mid-tier work. It's the two batch-wide fields: `cluster` has to spot that a German app-store review and an English bug report describe one root cause, and `priority_rank` has to stay consistent across the whole batch. Those need the model to hold ~45 heterogeneous tickets in mind at once. The exact-transcription requirement (a 66-character Session ID copied verbatim) points the same way. And the entire job costs **single-digit dollars a month** on any current model — roughly $10 on Opus 5 against $6 on Sonnet 5 and $2 on Haiku 4.5 — so trading classification quality for a few dollars would be optimising the wrong thing when the cost of a miss is an unseen abuse report.
+**Opus**, because the hard part of this job isn't per-ticket classification — enum-constrained categories with prompt guidance is squarely mid-tier work. It's the two batch-wide fields: `cluster` has to spot that a German app-store review and an English bug report describe one root cause, and `priority_rank` has to stay consistent across the whole batch. Those need the model to hold ~45 heterogeneous tickets in mind at once. The exact-transcription requirement (a 66-character Session ID copied verbatim) points the same way. And the entire job costs **single-digit dollars a month** on any current model — roughly $10 on Opus 5 against $6 on Sonnet 5 and $2 on Haiku 4.5 — so trading classification quality for a few dollars would be optimising the wrong thing when the cost of a miss is an unseen security report or a crash cluster nobody grouped.
 
 **Pinned to an id rather than the `opus` alias**, because this is an unattended digest. An alias resolves to the newest Opus the credential allows, so severity calibration and cluster labels would shift on someone else's release schedule, with no run in between to notice it. Bumping the pin is a deliberate one-line change in [triage.py](zendesk_triage/triage.py) (`DEFAULT_MODEL`).
 
