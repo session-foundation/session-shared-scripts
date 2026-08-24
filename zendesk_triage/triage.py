@@ -22,14 +22,17 @@ Categories Claude sorts each ticket into:
     bug_report | low_star_review | legal_request | security_or_legislation
     | question | feature_request | other
 
-Classification goes through the Anthropic API, with structured outputs enforcing
-SCHEMA. --findings skips it entirely and renders findings produced elsewhere.
+Classification is driven by the local Claude Code CLI (`claude --print`), with
+--json-schema enforcing SCHEMA exactly as the API's structured outputs did.
+--findings skips it entirely and renders findings produced elsewhere.
 
 Config (env vars, or flags for local runs):
     ZENDESK_SUBDOMAIN     e.g. "mycompany"  -> https://mycompany.zendesk.com
     ZENDESK_EMAIL         agent email for API token auth
     ZENDESK_API_TOKEN     Zendesk API token
-    ANTHROPIC_API_KEY     Claude API key (read by the SDK itself)
+                          Classification runs through the locally installed
+                          Claude Code CLI, which supplies its own credentials,
+                          so no Claude key lives in this deployment at all.
     DISCORD_BOT_TOKEN     Bot token for the app that answers the digest's Comment
                           buttons (see relay.py). Every ticket gets one, and an
                           incoming webhook cannot send interactive components —
@@ -70,13 +73,13 @@ import json
 import math
 import os
 import re
+import subprocess
 import sys
 import textwrap
 import time
 from datetime import datetime, timedelta, timezone
 from functools import partial
 
-import anthropic
 import requests
 
 # Open, pending, new, and on-hold tickets, newest first. Broad on purpose: we
@@ -142,6 +145,13 @@ DESCRIPTION_CHARS = 1500  # per-ticket description sent to Claude (triage only)
 # ceiling; batches larger than this are split rather than truncated.
 DEFAULT_BATCH_SIZE = 400
 MAX_OUTPUT_TOKENS = 128000
+# The classifier is the local Claude Code CLI rather than the Anthropic SDK, so
+# authentication is whatever `claude` is already logged in as and no key lives here.
+CLAUDE_CLI = "claude"
+# A 400-ticket chunk at medium effort is minutes of work. Generous, because being
+# killed mid-batch costs the whole chunk — and bounded, because a wedged CLI would
+# otherwise hold the digest until the unit's own TimeoutStartSec fires.
+CLAUDE_TIMEOUT_SECONDS = 1800
 
 # ---- Taxonomy --------------------------------------------------------------
 #
@@ -703,7 +713,7 @@ def compact_ticket(ticket):
 
 
 def resolve_api_model(model):
-    """Map a shorthand model name onto the id the Anthropic API expects.
+    """Map a shorthand model name onto the id `claude --model` expects.
 
     Anything that isn't a known shorthand passes through untouched, so a pinned id
     (`claude-opus-4-8`) or a model newer than this table still works.
@@ -799,35 +809,86 @@ def analyze_in_chunks(analyzer, compact_tickets, batch_size):
     return findings
 
 
-def analyze(client, model, effort, compact_tickets):
-    prompt = build_analysis_prompt(compact_tickets)
-    with client.messages.stream(
-        model=model,
-        max_tokens=MAX_OUTPUT_TOKENS,
-        thinking={"type": "adaptive"},
-        output_config={
-            "format": {"type": "json_schema", "schema": SCHEMA},
-            "effort": effort,
-        },
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
-    ) as stream:
-        message = stream.get_final_message()
+def claude_cli_json(model, effort, system_prompt, schema, prompt, timeout, label):
+    """Run one schema-enforced Claude Code request. Returns the parsed payload.
 
-    if message.stop_reason == "refusal":
-        sys.exit("Claude refused to process the batch.")
-    if message.stop_reason == "max_tokens":
-        # Structured output truncated mid-JSON: json.loads below would fail with a
-        # baffling parse error, so say what actually went wrong.
-        sys.exit(
-            f"Claude hit the {MAX_OUTPUT_TOKENS} output-token limit on a batch of "
-            f"{len(compact_tickets)} tickets, so the JSON is incomplete. "
-            f"Lower --batch-size (currently splitting at {DEFAULT_BATCH_SIZE})."
-        )
-    text = next((b.text for b in message.content if b.type == "text"), None)
-    if not text:
-        sys.exit("Claude returned no structured output.")
-    return tickets_from_payload(json.loads(text), "Claude")
+    Shared by the digest's classification and reply.py's translation: same flags,
+    same error semantics, one place to keep them right.
+
+    `--json-schema` enforces the schema the way the API's structured outputs did.
+    Authentication is whatever `claude` is already logged in as, so neither caller
+    holds a Claude key.
+
+    The prompt goes over **stdin**, not argv. Linux caps one argument at 128KB
+    (MAX_ARG_STRLEN) and a full --batch-size 400 chunk is around 685KB, so passing it
+    as an argument would work on a normal day and die with "Argument list too long"
+    on a backfill. It is also the more private channel: argv is world-readable
+    through /proc, and these prompts carry ticket text.
+    """
+    command = [
+        CLAUDE_CLI, "--print",
+        "--model", model,
+        "--effort", effort,
+        "--system-prompt", system_prompt,
+        "--json-schema", json.dumps(schema),
+        "--output-format", "json",
+        "--no-session-persistence",
+        # No tool should run for either of these, and the CLI otherwise reads a
+        # project's CLAUDE.md, skills and settings.
+        "--tools", "",
+    ]
+    try:
+        done = subprocess.run(command, input=prompt, capture_output=True, text=True,
+                              check=False, timeout=timeout)
+    except FileNotFoundError:
+        sys.exit(f"{CLAUDE_CLI} is not on PATH. {label} runs through the Claude Code "
+                 f"CLI, so it has to be installed and logged in.")
+    except subprocess.TimeoutExpired:
+        sys.exit(f"{CLAUDE_CLI} did not finish {label} within {timeout}s.")
+
+    if done.returncode != 0:
+        # stderr, not stdout: a non-zero exit means there is no JSON to read. Clipped,
+        # because the CLI could echo input back and this log must not carry it.
+        sys.exit(f"{CLAUDE_CLI} exited {done.returncode} on {label}: "
+                 f"{(done.stderr or '').strip()[:300]}")
+    try:
+        response = json.loads(done.stdout)
+    except ValueError as exc:
+        sys.exit(f"{CLAUDE_CLI} returned output that is not JSON on {label} ({exc}).")
+    if not isinstance(response, dict):
+        sys.exit(f"{CLAUDE_CLI} returned {type(response).__name__} on {label}, "
+                 f"expected an object.")
+    # is_error and subtype are the CLI's signals; stop_reason deliberately is not —
+    # a successful structured-output run reports "tool_use", because that is how the
+    # schema is enforced underneath.
+    if response.get("is_error") or response.get("subtype") != "success":
+        sys.exit(f"{CLAUDE_CLI} reported failure on {label} "
+                 f"(subtype={response.get('subtype')!r}, "
+                 f"api_error_status={response.get('api_error_status')!r}).")
+
+    # structured_output is the object --json-schema produced, so it beats re-parsing
+    # the `result` string: one less decode, and immune to prose alongside the JSON.
+    payload = response.get("structured_output")
+    if payload is not None:
+        return payload
+    raw = response.get("result")
+    if not raw:
+        sys.exit(f"{CLAUDE_CLI} returned neither structured_output nor a result "
+                 f"on {label}.")
+    try:
+        return json.loads(raw)
+    except ValueError as exc:
+        sys.exit(f"{CLAUDE_CLI} result on {label} is not the JSON the schema asked "
+                 f"for ({exc}).")
+
+
+def analyze(model, effort, compact_tickets):
+    """Classify a batch through the Claude Code CLI. Returns findings."""
+    payload = claude_cli_json(
+        model, effort, SYSTEM_PROMPT, SCHEMA,
+        build_analysis_prompt(compact_tickets), CLAUDE_TIMEOUT_SECONDS,
+        f"a batch of {len(compact_tickets)} tickets")
+    return tickets_from_payload(payload, "Claude")
 
 
 # ---- Discord rendering -----------------------------------------------------
@@ -1330,8 +1391,7 @@ def main():
             print("Classify it, then: --findings <path> --dry-run")
             return
 
-        client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
-        analyzer = partial(analyze, client, resolve_api_model(model), args.effort)
+        analyzer = partial(analyze, resolve_api_model(model), args.effort)
         findings = analyze_in_chunks(analyzer, compact, args.batch_size)
 
         # Keep only findings whose id maps to a fetched ticket, in case of drift.

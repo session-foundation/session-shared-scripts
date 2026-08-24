@@ -16,6 +16,11 @@ unit to the triage channel.
 ## Host requirements
 
 - Linux with systemd 252 or newer (the timer needs a timezone in `OnCalendar=`), and Python 3.12+
+- **The Claude Code CLI installed and logged in as the service user.** Both Claude
+  calls go through it — the digest's classification and the reply flow's
+  translation — so its login is the only Claude credential this box holds. Check
+  with `sudo -u zendesk claude --version`, and see the note under Install about
+  giving it somewhere writable.
 - **Always on.** A workstation is not a candidate: user timers stop at logout unless
   lingering is enabled, and a sleeping laptop silently skips the digest.
 - A public DNS name resolving here, with **80 and 443 reachable** — 80 for certbot's
@@ -26,7 +31,7 @@ unit to the triage channel.
 - Persistent `/var/lib/zendesk` — it holds the dedup state, the only thing on disk.
 
 Note who else holds root. This box becomes custodian of a Zendesk API token that can
-write a public comment to any ticket, and of the Anthropic key.
+write a public comment to any ticket, and of a logged-in Claude Code session.
 
 ## Install
 
@@ -90,7 +95,6 @@ ZENDESK_SUBDOMAIN=
 # Authors every comment the reply flow posts.
 ZENDESK_EMAIL=
 ZENDESK_API_TOKEN=
-ANTHROPIC_API_KEY=
 
 # The digest posts as the app, because its Comment buttons need an application.
 DISCORD_BOT_TOKEN=

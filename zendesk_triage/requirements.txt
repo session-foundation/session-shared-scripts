@@ -1,8 +1,6 @@
-anthropic==0.116.0
 requests==2.32.3
 
-# relay.py only: the Discord interactions endpoint. The scheduled jobs need none of
-# these, but one requirements file keeps the deployment to a single venv.
+# relay.py only: the Discord interactions endpoint.
 fastapi==0.141.1
 uvicorn==0.52.4
 # Ed25519, for verifying Discord's request signatures.

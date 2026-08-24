@@ -76,7 +76,15 @@ class Patched:
 
     def __enter__(self):
         for name, value in self.attrs.items():
-            self.saved[name] = getattr(self.module, name)
+            try:
+                self.saved[name] = getattr(self.module, name)
+            except AttributeError:
+                # Roll back what is already swapped. Without this, a typo'd or
+                # since-removed attribute leaves earlier patches applied and
+                # __exit__ never runs — every later test in the file then fails
+                # against a module the failing test quietly rewrote.
+                self.__exit__()
+                raise
             setattr(self.module, name, value)
         return self
 
@@ -101,12 +109,6 @@ class Recorder:
 
     def text(self):
         return " ".join(message.get("content", "") for message in self.messages)
-
-
-def fake_anthropic():
-    """reply.run_draft constructs a client before translate() is reached; a real one
-    would go looking for an API key."""
-    return type("FakeModule", (), {"Anthropic": staticmethod(lambda: None)})
 
 
 def embed_chars(payload):
@@ -319,7 +321,7 @@ class TestEnglishPath(unittest.TestCase):
             FakeResponse({"ticket": {}}),
         ])
         respond = Recorder()
-        with Patched(reply, respond=respond, anthropic=fake_anthropic(),
+        with Patched(reply, respond=respond,
                      translate=lambda *args: ENGLISH):
             reply.run_draft(session, "acme", "model", payload(), dry_run=False)
         note, public = writes(session)
@@ -337,7 +339,7 @@ class TestEnglishPath(unittest.TestCase):
             FakeResponse({"ticket": {}}),
         ])
         rewritten = dict(ENGLISH, translated="We have resolved your issue. Thanks!")
-        with Patched(reply, respond=Recorder(), anthropic=fake_anthropic(),
+        with Patched(reply, respond=Recorder(),
                      translate=lambda *args: rewritten):
             reply.run_draft(session, "acme", "model", payload(), dry_run=False)
         _, public = writes(session)
@@ -351,7 +353,7 @@ class TestTranslatedPath(unittest.TestCase):
             FakeResponse({"comments": [comment("Es geht nicht mehr.")]}),
         ])
         respond = Recorder()
-        with Patched(reply, respond=respond, anthropic=fake_anthropic(),
+        with Patched(reply, respond=respond,
                      translate=lambda *args: GERMAN):
             reply.run_draft(session, "acme", "model", payload(), dry_run=False)
         self.assertEqual(writes(session), [])
@@ -400,7 +402,7 @@ class TestGuards(unittest.TestCase):
     def test_a_closed_ticket_is_refused_before_any_write(self):
         session = FakeSession([FakeResponse({"ticket": ticket(status="closed")})])
         respond = Recorder()
-        with Patched(reply, respond=respond, anthropic=fake_anthropic(),
+        with Patched(reply, respond=respond,
                      translate=lambda *args: GERMAN):
             reply.run_draft(session, "acme", "model", payload(), dry_run=False)
         self.assertEqual(writes(session), [])
@@ -438,7 +440,7 @@ class TestGuards(unittest.TestCase):
             FakeResponse({"comments": []}),
         ])
         respond = Recorder()
-        with Patched(reply, respond=respond, anthropic=fake_anthropic(),
+        with Patched(reply, respond=respond,
                      translate=lambda *args: ENGLISH):
             reply.run_draft(session, "acme", "model", payload(), dry_run=True)
         self.assertEqual(writes(session), [])

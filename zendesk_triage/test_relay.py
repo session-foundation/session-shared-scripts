@@ -73,7 +73,15 @@ class Patched:
 
     def __enter__(self):
         for name, value in self.attrs.items():
-            self.saved[name] = getattr(self.module, name)
+            try:
+                self.saved[name] = getattr(self.module, name)
+            except AttributeError:
+                # Roll back what is already swapped. Without this, a typo'd or
+                # since-removed attribute leaves earlier patches applied and
+                # __exit__ never runs — every later test in the file then fails
+                # against a module the failing test quietly rewrote.
+                self.__exit__()
+                raise
             setattr(self.module, name, value)
         return self
 

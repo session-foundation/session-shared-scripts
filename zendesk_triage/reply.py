@@ -38,7 +38,9 @@ Config (env vars, or flags for local runs):
     ZENDESK_SUBDOMAIN     e.g. "mycompany"  -> https://mycompany.zendesk.com
     ZENDESK_EMAIL         agent email for API token auth; authors every comment
     ZENDESK_API_TOKEN     Zendesk API token
-    ANTHROPIC_API_KEY     Claude API key (read by the SDK itself)
+                          Translation runs through the locally installed Claude
+                          Code CLI, which supplies its own credentials, so this
+                          script holds no Claude key.
     DISCORD_PAYLOAD       the relayed interaction, as JSON (see load_payload)
     ZENDESK_REPLY_MODEL   (optional) Claude model id or alias; defaults to
                           claude-sonnet-5. Translating a paragraph is easy and an
@@ -62,7 +64,6 @@ import os
 import sys
 import textwrap
 
-import anthropic
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -73,10 +74,10 @@ import triage  # noqa: E402  (needs the path insert above)
 # tickets by root cause. Overridable by ZENDESK_REPLY_MODEL through the same alias
 # table the triage uses.
 DEFAULT_MODEL = "claude-sonnet-5"
-# A translated support reply plus its back-translation. Nowhere near the digest's
-# budget, and a low cap turns a runaway generation into a clear error rather than a
-# slow one.
-MAX_OUTPUT_TOKENS = 8000
+# Generous for one short reply, and the only bound on the call now that it goes
+# through the CLI. An agent is watching a spinner, but Discord holds the dialog
+# open, so waiting beats failing.
+TRANSLATION_TIMEOUT_SECONDS = 180
 # Status after a public reply: the ball is with the customer. This bumps updated_at,
 # so the ticket reappears in the next digest carrying the 🔄 "changed since last
 # reported" marker — which is the truth about it, not noise.
@@ -487,32 +488,18 @@ def validate_translation(result):
     return result
 
 
-def translate(client, model, sample, reply_en):
+def translate(model, sample, reply_en):
     """Detect the customer's language and render the reply into it.
 
-    Unstreamed, unlike the digest's classification call: the output is one short
-    reply and its back-translation, so the streaming machinery that exists there to
-    survive a 128k-token response is one moving part this does not need.
+    Through the same Claude Code CLI the digest classifies with, so the deployment
+    carries one set of Claude credentials rather than a key here and a login there.
+    It costs a few seconds of process startup per call, which the SDK did not — but
+    Discord holds the interaction open, so the agent sees a spinner, not a failure.
     """
-    message = client.messages.create(
-        model=model,
-        max_tokens=MAX_OUTPUT_TOKENS,
-        output_config={
-            "format": {"type": "json_schema", "schema": TRANSLATION_SCHEMA},
-        },
-        system=TRANSLATION_SYSTEM_PROMPT,
-        messages=[{"role": "user",
-                   "content": build_translation_prompt(sample, reply_en)}],
-    )
-    if message.stop_reason == "refusal":
-        sys.exit("Claude refused to translate the reply.")
-    if message.stop_reason == "max_tokens":
-        sys.exit(f"Claude hit the {MAX_OUTPUT_TOKENS}-token limit, so the JSON is "
-                 f"incomplete. The reply is too long to translate in one go.")
-    text = next((block.text for block in message.content if block.type == "text"), None)
-    if not text:
-        sys.exit("Claude returned no structured output.")
-    return validate_translation(json.loads(text))
+    return validate_translation(triage.claude_cli_json(
+        model, "medium", TRANSLATION_SYSTEM_PROMPT, TRANSLATION_SCHEMA,
+        build_translation_prompt(sample, reply_en), TRANSLATION_TIMEOUT_SECONDS,
+        "the reply translation"))
 
 
 # ---- Actions ----------------------------------------------------------------
@@ -570,8 +557,7 @@ def run_draft(session, subdomain, model, payload, dry_run):
         return
     comments = fetch_comments(session, subdomain, ticket_id)
 
-    result = translate(anthropic.Anthropic(), model,
-                       customer_text(ticket, comments), reply_en)
+    result = translate(model, customer_text(ticket, comments), reply_en)
     print(f"#{ticket_id}: requester writes {result['language']!r} "
           f"({result['language_code']}).")
 

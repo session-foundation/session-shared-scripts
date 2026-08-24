@@ -5,7 +5,7 @@ Stdlib unittest so the repo needs no test dependency. Run from anywhere:
 
     python -m unittest discover -s zendesk_triage -v
 
-Everything here is offline — no Zendesk, Anthropic, or Discord calls. The fetch
+Everything here is offline — no Zendesk, Claude, or Discord calls. The fetch
 tests drive fetch_tickets with a stub session instead.
 """
 import inspect

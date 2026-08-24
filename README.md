@@ -93,7 +93,7 @@ Detection uses the Zendesk `via.channel`, which identified reviews with no false
 
 Twitter DM tickets arrive with `description` identical to `subject` — both just `"Conversation with <handle>"` — which is 15% of non-review tickets and unclassifiable as fetched. For those only, `hydrate_descriptions` fetches a page of up to 10 comments and joins every body that differs from the subject into the description; later replies often carry the actual detail. Hydration is an enrichment, so an HTTP error or an unreachable endpoint leaves the ticket as-is rather than failing the run (`--no-hydrate` to skip it entirely).
 
-The script (`zendesk_triage/triage.py`) fetches the tickets in a rolling time window, classifies the whole batch in one schema-enforced request to the Anthropic API, and posts a Discord digest: a short header, then one line per ticket worth looking into.
+The script (`zendesk_triage/triage.py`) fetches the tickets in a rolling time window, classifies the whole batch in one schema-enforced request through the Claude Code CLI, and posts a Discord digest: a short header, then one line per ticket worth looking into.
 
 Each line leads with a severity marker, a category emoji and a platform icon, links the ticket id, and carries the model's one-line summary plus its root-cause guess:
 
@@ -147,15 +147,14 @@ Two caveats worth knowing:
 | `ZENDESK_SUBDOMAIN`   | Zendesk subdomain (`mycompany` → `mycompany.zendesk.com`) |
 | `ZENDESK_EMAIL`       | Agent email used for Zendesk API-token auth             |
 | `ZENDESK_API_TOKEN`   | Zendesk API token                                       |
-| `ANTHROPIC_API_KEY`   | Claude API key — see [Claude authentication](#claude-authentication) |
 | `DISCORD_BOT_TOKEN` | Bot token for the app that owns the digest's Comment buttons. An incoming webhook cannot send interactive components, so the digest posts as the app |
 | `ZENDESK_DISCORD_CHANNEL_ID` | Channel the digest posts into. The bot needs Send Messages there |
 
 ### Claude Authentication
 
-Classification goes through the Anthropic API with an `ANTHROPIC_API_KEY`, on the host and locally alike — an organization-owned credential that doesn't draw on any individual's subscription quota.
+There is no Claude key. Both Claude calls — the digest's classification and the reply flow's translation — shell out to the locally installed Claude Code CLI (`claude --print`), which authenticates as whoever it is logged in as. On the host that is the service user; see [deploy/README.md](deploy/README.md).
 
-If you go looking for that key and can't find one: an API key only exists inside a **Claude Console organization** (`platform.claude.com`), which is a separate organization from a claude.ai Pro/Max/Team/Enterprise subscription, with its own membership and billing. A claude.ai admin console has no API keys in it at all, so the usual answer is that no Console organization exists yet rather than that you're missing a permission.
+The trade is process startup, a few seconds per call, against holding an API credential on the box. That is invisible on a nightly digest, and on the reply dialog Discord keeps the interaction open while it runs.
 
 ### Optional Configuration
 
@@ -233,11 +232,11 @@ Offline tests covering the window arithmetic, dedup partitioning, state round-tr
 
 ### Local Testing
 
-Local runs need an `ANTHROPIC_API_KEY` alongside the Zendesk credentials. `--dry-run` prints the Discord payload instead of posting, so no bot token is needed. Keep it to local runs: it prints ticket content. `--no-discord` prints counts only:
+Local runs need the `claude` CLI on `PATH` and logged in (`claude --version`), alongside the Zendesk credentials. `--dry-run` prints the Discord payload instead of posting, so no bot token is needed. Keep it to local runs: it prints ticket content. `--no-discord` prints counts only:
 
 ```
 pip install -r zendesk_triage/requirements.txt
-export ZENDESK_SUBDOMAIN=... ZENDESK_EMAIL=... ZENDESK_API_TOKEN=... ANTHROPIC_API_KEY=...
+export ZENDESK_SUBDOMAIN=... ZENDESK_EMAIL=... ZENDESK_API_TOKEN=...
 
 # what the unit runs, minus the Discord post and the state file
 python zendesk_triage/triage.py --window-hours 72 --dry-run

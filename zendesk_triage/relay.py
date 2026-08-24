@@ -36,7 +36,6 @@ Config (env vars):
     ZENDESK_SUBDOMAIN     e.g. "mycompany"
     ZENDESK_EMAIL         agent email for API token auth
     ZENDESK_API_TOKEN     Zendesk API token
-    ANTHROPIC_API_KEY     read by reply.py, not used here
     RELAY_DRY_RUN         (optional) "1" passes --dry-run to reply.py, so the whole
                           path runs and nothing is written to Zendesk
 
