@@ -665,6 +665,90 @@ class TestReviewFiltering(unittest.TestCase):
         self.assertEqual(skipped, [])
 
 
+class TestReviewPlatform(unittest.TestCase):
+    """The two integration shapes seen on real review tickets, verbatim."""
+
+    def review(self, ticket_id, service_info=None, stars=1):
+        source = {"from": {"service_info": service_info} if service_info else {},
+                  "to": {}, "rel": None}
+        return ticket(ticket_id, subject="★" * stars + "☆" * (5 - stars) + " \n\tno good",
+                      via={"channel": "any_channel", "source": source})
+
+    def google_play(self, ticket_id):
+        return self.review(ticket_id, {
+            "supports_channelback": True,
+            "supports_clickthrough": True,
+            "registered_integration_service_name": "Google Play",
+            "registered_integration_service_external_id": "2900483",
+            "integration_service_instance_name": "Session",
+        })
+
+    def app_store(self, ticket_id):
+        return self.review(ticket_id, {
+            "supports_channelback": True,
+            "supports_clickthrough": True,
+            "registered_integration_service_name": "AppFollow: Review Monitor",
+            "registered_integration_service_external_id": "xxxxx",
+            "integration_service_instance_name":
+                "AppFollow (Session - Private Messenger, App Store)",
+        })
+
+    def test_google_play_is_android(self):
+        self.assertEqual(triage.review_platform(self.google_play(1)), "android")
+
+    def test_the_app_store_is_ios(self):
+        """Its registered name is the generic 'AppFollow: Review Monitor'; only the
+        instance name says which store, so both names have to be searched."""
+        self.assertEqual(triage.review_platform(self.app_store(1)), "ios")
+
+    def test_a_review_naming_no_store_stays_unresolved(self):
+        self.assertIsNone(triage.review_platform(self.review(1)))
+        self.assertIsNone(triage.review_platform(
+            self.review(2, {"registered_integration_service_name": "Some Other Importer"})))
+
+    def test_non_review_tickets_are_not_a_source_of_platform(self):
+        email = ticket(1, via={"channel": "email",
+                               "source": {"from": {"address": "a@b.c", "name": "A"}}})
+        self.assertIsNone(triage.review_platform(email))
+        self.assertIsNone(triage.review_platform(ticket(2, via={"channel": "web"})))
+
+    def test_the_ticket_overrides_the_models_guess(self):
+        findings = [finding(1, platform="ios"), finding(2, platform="unknown")]
+        corrected = triage.apply_review_platform(
+            findings, [self.google_play(1), self.app_store(2)])
+        self.assertEqual([f["platform"] for f in findings], ["android", "ios"])
+        self.assertEqual(corrected, 2)
+
+    def test_an_unresolved_source_leaves_the_guess_alone(self):
+        findings = [finding(1, platform="desktop_linux"), finding(2, platform="ios")]
+        corrected = triage.apply_review_platform(
+            findings, [self.review(1), ticket(2, via={"channel": "web"})])
+        self.assertEqual([f["platform"] for f in findings], ["desktop_linux", "ios"])
+        self.assertEqual(corrected, 0)
+
+    def test_an_agreeing_guess_is_not_counted_as_a_correction(self):
+        findings = [finding(1, platform="android")]
+        self.assertEqual(triage.apply_review_platform(findings, [self.google_play(1)]), 0)
+        self.assertEqual(findings[0]["platform"], "android")
+
+    def test_findings_without_a_fetched_ticket_are_untouched(self):
+        """The --findings path has no tickets to read a source from."""
+        findings = [finding(1, platform="unknown")]
+        self.assertEqual(triage.apply_review_platform(findings, []), 0)
+        self.assertEqual(findings[0]["platform"], "unknown")
+
+    def test_the_digest_line_shows_the_store_the_review_came_from(self):
+        findings = [finding(1, category="low_star_review", platform="unknown")]
+        triage.apply_review_platform(findings, [self.google_play(1)])
+        line = triage.build_ticket_line(findings[0], "acme")
+        self.assertIn(triage.PLATFORM_EMOJI["android"], line)
+        self.assertNotIn(triage.PLATFORM_EMOJI["unknown"], line)
+
+    def test_every_resolvable_source_maps_to_a_known_platform(self):
+        for _, platform in triage.REVIEW_SOURCE_PLATFORMS:
+            self.assertIn(platform, triage.PLATFORMS)
+
+
 class TestContentFreeTickets(unittest.TestCase):
     """Twitter DM tickets arrive with subject and body both 'Conversation with
     <handle>' — 15% of non-review tickets, unclassifiable as fetched."""
