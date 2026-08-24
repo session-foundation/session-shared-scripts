@@ -378,6 +378,46 @@ def request_with_retry(session, method, url, attempts=6, **kwargs):
     return resp
 
 
+def fetch_every_ticket(session, subdomain, query, max_tickets):
+    """Fetch past the Search API's 1000-result ceiling, in created_at slices.
+
+    The ceiling is per query, not per account: `created<=` the oldest result so far
+    is a different query with a fresh 1000 of its own. `query` must order by
+    created_at descending for that to hold.
+
+    Without this, a query matching more than 1000 truncates at the newest 1000 and
+    the tail is unreachable at any --max-tickets — permanently, when the surplus is
+    tickets the caller never removes. The positive-review job hit exactly that: 1,036
+    matches held open by 1,030 low-star reviews it will never solve, hiding six 4-5★
+    ones from August 2025 that it would have.
+
+    `created<=`, not `<`: created_at has second granularity, so `<` would skip every
+    ticket sharing the oldest second. The overlap is re-fetched and dropped by id
+    instead, and a slice that adds nothing new ends the walk — which is also what
+    stops a tie group larger than a whole slice from looping forever.
+
+    Returns (tickets, total_matched) like fetch_tickets, with total_matched from the
+    unsliced query so the caller still reports the true gap.
+    """
+    tickets, seen, total_matched, cutoff = [], set(), None, None
+    while len(tickets) < max_tickets:
+        sliced = query if cutoff is None else f"{query} created<={cutoff}"
+        batch, matched = fetch_tickets(session, subdomain, sliced,
+                                       max_tickets - len(tickets))
+        if total_matched is None:
+            total_matched = matched
+        fresh = [t for t in batch if t.get("id") not in seen]
+        if not fresh:
+            break
+        seen.update(t.get("id") for t in fresh)
+        tickets.extend(fresh)
+        stamps = [t.get("created_at") for t in batch if t.get("created_at")]
+        if not stamps or len(batch) < SEARCH_RESULT_LIMIT:
+            break
+        cutoff = min(stamps)
+    return tickets[:max_tickets], total_matched
+
+
 def fetch_tickets(session, subdomain, query, max_tickets):
     """Fetch tickets via the Zendesk Search API, following pagination.
 

@@ -362,7 +362,11 @@ def main():
 
     session = triage.zendesk_session(email, api_token)
     query = build_query()
-    tickets, total_matched = triage.fetch_tickets(session, subdomain, query, args.max_tickets)
+    # Every match, not the newest 1000: the tail of this query is held open by
+    # low-star reviews the job never solves, so a plain fetch hides the solvable
+    # ones behind them for good. See triage.fetch_every_ticket.
+    tickets, total_matched = triage.fetch_every_ticket(
+        session, subdomain, query, args.max_tickets)
     matched = "?" if total_matched is None else total_matched
     print(f"Fetched {len(tickets)} of {matched} matching tickets (query: {query!r}).")
 
