@@ -1,0 +1,9 @@
+# Test-only dependencies. The suite is stdlib unittest, so this covers what only the
+# tests import:
+#
+#   python -m unittest discover        # from zendesk_triage/
+#
+# test_relay.py drives the FastAPI app through starlette's TestClient, which ships no
+# HTTP client of its own. starlette still accepts httpx but warns that it is
+# deprecated for this, so the pin is the one it asks for.
+httpx2==2.12.0

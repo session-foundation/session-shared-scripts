@@ -22,7 +22,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import reply  # noqa: E402
 import triage  # noqa: E402
-from test_triage import FakeResponse, FakeSession  # noqa: E402
+from test_triage import FakeResponse, FakeSession, Patched  # noqa: E402
 
 
 GERMAN = {
@@ -64,34 +64,6 @@ def ticket(status="open", requester_id=42, description="Es geht nicht mehr."):
 
 def comment(body, author_id=42):
     return {"id": 1, "author_id": author_id, "public": True, "body": body}
-
-
-class Patched:
-    """Swap module attributes for the duration of a block, then put them back."""
-
-    def __init__(self, module, **attrs):
-        self.module = module
-        self.attrs = attrs
-        self.saved = {}
-
-    def __enter__(self):
-        for name, value in self.attrs.items():
-            try:
-                self.saved[name] = getattr(self.module, name)
-            except AttributeError:
-                # Roll back what is already swapped. Without this, a typo'd or
-                # since-removed attribute leaves earlier patches applied and
-                # __exit__ never runs — every later test in the file then fails
-                # against a module the failing test quietly rewrote.
-                self.__exit__()
-                raise
-            setattr(self.module, name, value)
-        return self
-
-    def __exit__(self, *exc):
-        for name, value in self.saved.items():
-            setattr(self.module, name, value)
-        return False
 
 
 class Recorder:
@@ -547,6 +519,28 @@ class TestLocalMode(unittest.TestCase):
                 reply.respond(dict(payload(), local=True), {"content": "hallo"})
         self.assertIn("hallo", printed.getvalue())
         self.assertEqual(session.calls, [])
+
+    def main(self, argv):
+        """Why reply.main() gave up on this command line.
+
+        Both channels: argparse writes its complaint to stderr and exits 2, while
+        get_env passes its message as the exit code itself.
+        """
+        with Patched(reply.sys, argv=["reply.py"] + argv), \
+                contextlib.redirect_stderr(io.StringIO()) as complaint:
+            with self.assertRaises(SystemExit) as caught:
+                reply.main()
+        return f"{complaint.getvalue()}\n{caught.exception}"
+
+    def test_local_alone_refuses_rather_than_writing(self):
+        """--local only redirects what goes back to Discord. On its own it still posts
+        a public comment, which is the opposite of what a hand-written payload is for
+        — and the mistake costs a real customer a real email."""
+        self.assertIn("--dry-run", self.main(["--local"]))
+
+    def test_local_with_dry_run_gets_past_the_gate(self):
+        """It must fail on the missing payload, not on the flags."""
+        self.assertIn("DISCORD_PAYLOAD", self.main(["--local", "--dry-run"]))
 
 
 if __name__ == "__main__":

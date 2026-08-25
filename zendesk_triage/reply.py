@@ -55,7 +55,8 @@ Usage:
     # everything except the two writes to Zendesk
     python reply.py --dry-run
 
-    # driven by a hand-written payload, touching neither Zendesk nor Discord
+    # driven by a hand-written payload, touching neither Zendesk nor Discord.
+    # --local refuses to run without --dry-run, because alone it still writes.
     python reply.py --dry-run --local
 """
 import argparse
@@ -309,8 +310,9 @@ def respond(payload, data):
     holds a Discord secret.
     """
     # --local, for a run driven by a hand-written payload whose interaction token is
-    # not real. It prints the reply and its translation, so the workflow is asserted
-    # never to pass it — see test_reply.py.
+    # not real. It prints the reply and its translation, so nothing that runs by
+    # itself may pass it: relay.run_reply builds the only command line production
+    # uses, and --dry-run is the only flag it can add.
     if payload.get("local"):
         print("Discord would receive:\n"
               + json.dumps(data, indent=2, ensure_ascii=False))
@@ -633,7 +635,7 @@ def main():
                         help="Print what would go back to Discord instead of "
                              "sending it, for a run driven by a hand-written "
                              "payload. Prints the reply and its translation, so "
-                             "local runs only.")
+                             "local runs only. Requires --dry-run.")
     parser.add_argument("--payload",
                         help="The relayed interaction as JSON (else DISCORD_PAYLOAD).")
     parser.add_argument("--subdomain", help="Zendesk subdomain (else ZENDESK_SUBDOMAIN).")
@@ -643,6 +645,11 @@ def main():
                         help=f"Claude model id or alias (else ZENDESK_REPLY_MODEL, "
                              f"default {DEFAULT_MODEL}).")
     args = parser.parse_args()
+    # --local only redirects what goes back to Discord. On its own it still posts a
+    # public comment, which is the opposite of what a hand-written payload is for —
+    # and the mistake costs a real customer a real email.
+    if args.local and not args.dry_run:
+        parser.error("--local needs --dry-run: by itself it still writes to Zendesk.")
 
     payload = load_payload(triage.get_env("DISCORD_PAYLOAD", args.payload))
     # The payload is this run's context and every path already carries it, so the

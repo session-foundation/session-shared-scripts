@@ -24,7 +24,7 @@ from nacl.signing import SigningKey
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import relay  # noqa: E402
 import triage  # noqa: E402
-from test_triage import FakeResponse, FakeSession  # noqa: E402
+from test_triage import FakeResponse, FakeSession, Patched  # noqa: E402
 
 
 SIGNING_KEY = SigningKey.generate()
@@ -62,32 +62,6 @@ class Env:
     def __exit__(self, *exc):
         os.environ.clear()
         os.environ.update(self.saved)
-        return False
-
-
-class Patched:
-    """Swap module attributes for the duration of a block, then put them back."""
-
-    def __init__(self, module, **attrs):
-        self.module, self.attrs, self.saved = module, attrs, {}
-
-    def __enter__(self):
-        for name, value in self.attrs.items():
-            try:
-                self.saved[name] = getattr(self.module, name)
-            except AttributeError:
-                # Roll back what is already swapped. Without this, a typo'd or
-                # since-removed attribute leaves earlier patches applied and
-                # __exit__ never runs — every later test in the file then fails
-                # against a module the failing test quietly rewrote.
-                self.__exit__()
-                raise
-            setattr(self.module, name, value)
-        return self
-
-    def __exit__(self, *exc):
-        for name, value in self.saved.items():
-            setattr(self.module, name, value)
         return False
 
 
@@ -178,6 +152,19 @@ class TestSignature(unittest.TestCase):
     def test_a_fresh_signature_inside_the_window_is_accepted(self):
         with Env():
             self.assertEqual(post({"type": 1}, age=10).status_code, 200)
+
+    def test_a_clock_a_little_behind_discords_still_works(self):
+        """A negative age is a timestamp from this host's future. Refusing those made
+        the endpoint's health a matter of NTP: a host a second behind Discord refused
+        every interaction, and the PING that registers the URL along with them."""
+        with Env():
+            self.assertEqual(post({"type": 1}, age=-10).status_code, 200)
+
+    def test_a_timestamp_far_in_the_future_is_still_refused(self):
+        with Env():
+            self.assertEqual(
+                post({"type": 1},
+                     age=-(relay.MAX_CLOCK_SKEW_SECONDS + 60)).status_code, 401)
 
     def test_another_keys_signature_is_refused(self):
         with Env(DISCORD_PUBLIC_KEY=SigningKey.generate().verify_key.encode().hex()):
@@ -330,6 +317,14 @@ class TestSubmittedValue(unittest.TestCase):
         components = [{"type": relay.TEXT_DISPLAY, "content": "a link"}]
         self.assertIsNone(relay.submitted_value(components, "body"))
 
+    def test_an_empty_box_is_a_value_not_a_miss(self):
+        """An empty box submits the empty string. Falling through that would keep
+        searching and report the modal's shape as wrong when the shape was fine."""
+        components = [
+            {"type": relay.LABEL, "component": {"custom_id": "body", "value": ""}},
+        ]
+        self.assertEqual(relay.submitted_value(components, "body"), "")
+
 
 # ---- Routing --------------------------------------------------------------
 
@@ -449,6 +444,76 @@ class TestRunReply(unittest.TestCase):
 
         with Env(), Patched(relay.subprocess, run=explode):
             relay.run_reply({"action": "draft", "ticket_id": 1})  # must not raise
+
+
+class TestFailuresReachTheAgent(unittest.TestCase):
+    """reply.py reports its own refusals and then exits. A crash, a non-zero exit and
+    the timeout kill are the ones it cannot report, and each used to leave the agent's
+    message on "⏳ Sending…" — which reads as *still working* for a write that may
+    already have emailed the customer."""
+
+    def report(self, outcome, payload=None):
+        """Run reply.py with `outcome` and return what Discord was asked to show."""
+        patched = {}
+        if isinstance(outcome, BaseException):
+            def run(command, **kwargs):
+                raise outcome
+            patched["run"] = run
+        else:
+            patched["run"] = lambda command, **kwargs: outcome
+        session = FakeSession([FakeResponse({})])
+        with Env(), Patched(relay.subprocess, **patched), \
+                Patched(relay, requests=type("M", (), {
+                    "Session": staticmethod(lambda: session)})):
+            relay.run_reply(payload if payload is not None else {
+                "action": "send", "ticket_id": 27896,
+                "application_id": "1300000000000000002",
+                "interaction_token": "interaction-token"})
+        return session.calls
+
+    def done(self, returncode, stderr=""):
+        return type("Done", (), {"returncode": returncode, "stdout": "",
+                                 "stderr": stderr})()
+
+    def test_a_timeout_tells_the_agent_to_check_the_ticket(self):
+        calls = self.report(relay.subprocess.TimeoutExpired("reply.py", 1))
+        self.assertEqual(len(calls), 1)
+        method, url, kwargs = calls[0]
+        self.assertEqual(method, "PATCH")
+        self.assertIn("interaction-token", url)
+        self.assertIn("@original", url)
+        self.assertIn("Zendesk", kwargs["json"]["content"])
+
+    def test_a_failed_run_tells_the_agent_too(self):
+        calls = self.report(self.done(1, stderr="Traceback…"))
+        self.assertEqual(len(calls), 1)
+        self.assertIn("❌", calls[0][2]["json"]["content"])
+
+    def test_the_outcome_says_the_reply_may_have_gone_out(self):
+        """Not "nothing was sent". A run killed after the private note may have got
+        as far as the reply itself, and only the ticket knows which."""
+        for outcome in (relay.subprocess.TimeoutExpired("reply.py", 1), self.done(1)):
+            with self.subTest(outcome=type(outcome).__name__):
+                content = self.report(outcome)[0][2]["json"]["content"]
+                self.assertIn("may have gone out", content)
+
+    def test_the_live_send_button_goes_with_it(self):
+        """Leaving the components behind would keep a Send button under a message
+        saying the reply failed, and pressing it would write a second time."""
+        kwargs = self.report(self.done(1))[0][2]
+        self.assertEqual(kwargs["json"]["components"], [])
+        self.assertEqual(kwargs["json"]["embeds"], [])
+
+    def test_a_successful_run_reports_nothing_of_its_own(self):
+        """reply.py has already told the agent what happened; a second edit would
+        overwrite its outcome with a worse one."""
+        self.assertEqual(self.report(self.done(0)), [])
+
+    def test_reporting_a_failure_cannot_add_one(self):
+        """run_reply promises never to raise, and this is the one part of it that
+        indexes rather than gets: a payload without a token must still be survivable."""
+        self.assertEqual(
+            self.report(self.done(1), payload={"action": "send", "ticket_id": 1}), [])
 
 
 if __name__ == "__main__":

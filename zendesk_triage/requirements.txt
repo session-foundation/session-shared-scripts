@@ -1,3 +1,4 @@
+# What the deployment runs. Test-only dependencies live in requirements-dev.txt.
 requests==2.32.3
 
 # relay.py only: the Discord interactions endpoint.

@@ -228,8 +228,12 @@ The file is written atomically (`os.replace`) so a crash mid-write cannot corrup
 ### Tests
 
 ```
+pip install -r zendesk_triage/requirements-dev.txt
 python -m unittest discover -s zendesk_triage -v
 ```
+
+`requirements-dev.txt` is the test-only half: `test_relay.py` drives the relay through
+starlette's `TestClient`, which needs an HTTP client the deployment does not.
 
 Offline tests covering the window arithmetic, dedup partitioning, state round-trip and pruning, corrupt-state degradation, Discord card rendering and message chunking, defensive JSON parsing, and the retry/pagination behaviour with a stub session. No secrets or network access needed.
 
@@ -419,6 +423,7 @@ truncated embed would mean sending a customer less than what was reviewed.
 ### Tests
 
 ```bash
+pip install -r zendesk_triage/requirements-dev.txt
 python -m unittest discover -s zendesk_triage -v
 ```
 

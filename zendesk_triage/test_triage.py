@@ -87,6 +87,25 @@ def digest_text(messages):
     return "\n".join(t for m in messages for t in text_displays(m["components"]))
 
 
+def all_text(message):
+    """Every character Discord counts towards a Components V2 message's ceiling.
+
+    The button labels as well as the Text Displays: an accessory's label is text in
+    the message the same way a ticket line is.
+    """
+    total = sum(len(t) for t in text_displays(message["components"]))
+
+    def labels(node):
+        if isinstance(node, list):
+            return sum(labels(item) for item in node)
+        if not isinstance(node, dict):
+            return 0
+        own = len(node.get("label") or "") if node.get("type") == triage.BUTTON else 0
+        return own + labels(node.get("components")) + labels(node.get("accessory"))
+
+    return total + labels(message["components"])
+
+
 def buttons(message):
     """Every button custom_id in a message, in order."""
     found = []
@@ -144,6 +163,37 @@ class FakeSession:
         if isinstance(item, Exception):
             raise item
         return item
+
+
+class Patched:
+    """Swap module attributes for the duration of a block, then put them back.
+
+    Lives here rather than in each test file because test_relay and test_reply both
+    need it, and two copies of a helper that restores state is two chances for one of
+    them to stop doing so.
+    """
+
+    def __init__(self, module, **attrs):
+        self.module, self.attrs, self.saved = module, attrs, {}
+
+    def __enter__(self):
+        for name, value in self.attrs.items():
+            try:
+                self.saved[name] = getattr(self.module, name)
+            except AttributeError:
+                # Roll back what is already swapped. Without this, a typo'd or
+                # since-removed attribute leaves earlier patches applied and
+                # __exit__ never runs — every later test in the file then fails
+                # against a module the failing test quietly rewrote.
+                self.__exit__()
+                raise
+            setattr(self.module, name, value)
+        return self
+
+    def __exit__(self, *exc):
+        for name, value in self.saved.items():
+            setattr(self.module, name, value)
+        return False
 
 
 class NoSleep:
@@ -1070,6 +1120,14 @@ class TestMessageCharLimit(unittest.TestCase):
         findings = [finding(i, summary="s", likely_root_cause="") for i in range(5)]
         self.assertEqual(len(build_messages(findings, "acme")), 1)
 
+    def test_the_button_labels_are_counted_too(self):
+        """Every Comment label is text in the message as much as the lines are. The
+        budget used to be the ceiling less a 100-character margin nobody wrote down,
+        which ten labels came within thirty characters of spending."""
+        findings = [self.fat(i) for i in range(triage.MAX_HIGHLIGHTS)]
+        for message in build_messages(findings, "acme"):
+            self.assertLessEqual(all_text(message), triage.MAX_MESSAGE_TEXT_CHARS)
+
     def test_the_card_count_splits_a_busy_day(self):
         """Short lines never reach the character budget, so without the component
         limit a 27-ticket day would build one illegal message."""
@@ -1687,6 +1745,130 @@ class TestRetryAfterSeconds(unittest.TestCase):
             resp = triage.request_with_retry(session, "GET", "https://x", attempts=3)
         self.assertEqual(resp.json(), {"ok": True})
         self.assertTrue(all(s >= 0 for s in clock.slept), clock.slept)
+
+
+# ---- The Claude Code CLI ---------------------------------------------------
+
+
+class TestClaudeCli(unittest.TestCase):
+    """Both Claude calls go through `claude --print`, so the flags are the contract.
+    Nothing here runs the CLI; subprocess.run is replaced by a recorder."""
+
+    SCHEMA = {"type": "object", "properties": {"a": {"type": "string"}}}
+
+    def run_cli(self, response=None, returncode=0, stderr="", raises=None,
+                prompt="ticket text"):
+        self.calls = []
+
+        def fake_run(command, **kwargs):
+            self.calls.append((command, kwargs))
+            if raises is not None:
+                raise raises
+            payload = {"subtype": "success", "is_error": False,
+                       "structured_output": {"a": "b"}}
+            if response is not None:
+                payload = response
+            return type("Done", (), {
+                "returncode": returncode,
+                "stdout": json.dumps(payload) if isinstance(payload, dict) else payload,
+                "stderr": stderr})()
+
+        with Patched(triage.subprocess, run=fake_run):
+            return triage.claude_cli_json("claude-opus-5", "medium", "be terse",
+                                          self.SCHEMA, prompt, 60, "a batch of 3")
+
+    def command(self, **kwargs):
+        self.run_cli(**kwargs)
+        return self.calls[0][0]
+
+    def test_the_prompt_goes_over_stdin_not_argv(self):
+        """Linux caps one argument at 128KB and a full batch is several times that, so
+        argv would work on a normal day and die on a backfill. argv is also
+        world-readable through /proc, and these prompts carry ticket text."""
+        self.run_cli(prompt="ticket text")
+        command, kwargs = self.calls[0]
+        self.assertEqual(kwargs["input"], "ticket text")
+        self.assertNotIn("ticket text", command)
+
+    def test_nothing_outside_the_call_can_change_what_the_model_is_told(self):
+        """--tools "" only removes the tools. Without --setting-sources "" a
+        .claude/settings.json beside this file, or one in the service account's home,
+        joins every classification and every translation — hooks included."""
+        command = self.command()
+        self.assertEqual(command[command.index("--setting-sources") + 1], "")
+        self.assertEqual(command[command.index("--tools") + 1], "")
+
+    def test_tools_stays_last(self):
+        """It is variadic, so it swallows any following argument that does not begin
+        with a dash — including the next flag's value."""
+        self.assertEqual(self.command()[-2:], ["--tools", ""])
+
+    def test_the_schema_is_enforced_by_the_cli(self):
+        command = self.command()
+        self.assertEqual(json.loads(command[command.index("--json-schema") + 1]),
+                         self.SCHEMA)
+        self.assertIn("--no-session-persistence", command)
+
+    def test_structured_output_beats_reparsing_the_result_string(self):
+        """One less decode, and immune to prose alongside the JSON."""
+        self.assertEqual(
+            self.run_cli(response={"subtype": "success", "is_error": False,
+                                   "structured_output": {"a": "from the object"},
+                                   "result": '{"a": "from the string"}'}),
+            {"a": "from the object"})
+
+    def test_a_result_string_is_parsed_when_there_is_no_object(self):
+        self.assertEqual(
+            self.run_cli(response={"subtype": "success", "is_error": False,
+                                   "result": '{"a": "b"}'}),
+            {"a": "b"})
+
+    def test_running_out_of_output_tokens_names_the_fix(self):
+        """There is no --max-tokens to raise, so a batch too large to answer comes
+        back as JSON that stops mid-object. Without this the parse below reports a
+        syntax error for something whose only fix is a smaller batch."""
+        with self.assertRaises(SystemExit) as caught:
+            self.run_cli(response={"subtype": "success", "is_error": False,
+                                   "stop_reason": "max_tokens",
+                                   "result": '{"a": "b'})
+        self.assertIn("--batch-size", str(caught.exception))
+
+    def test_a_successful_run_is_not_mistaken_for_a_truncated_one(self):
+        """Structured output reports stop_reason "tool_use" on success, because that
+        is how the schema is enforced underneath."""
+        self.assertEqual(
+            self.run_cli(response={"subtype": "success", "is_error": False,
+                                   "stop_reason": "tool_use",
+                                   "structured_output": {"a": "b"}}),
+            {"a": "b"})
+
+    def test_a_reported_failure_stops_the_run(self):
+        for response in ({"subtype": "error_during_execution", "is_error": False},
+                         {"subtype": "success", "is_error": True}):
+            with self.subTest(response=response):
+                with self.assertRaises(SystemExit):
+                    self.run_cli(response=response)
+
+    def test_a_non_zero_exit_reports_stderr_not_stdout(self):
+        """A non-zero exit means there is no JSON to read, and the CLI could echo the
+        prompt back — which this repo's public run logs must not carry."""
+        with self.assertRaises(SystemExit) as caught:
+            self.run_cli(returncode=1, stderr="not logged in")
+        self.assertIn("not logged in", str(caught.exception))
+
+    def test_output_that_is_not_json_is_named_as_such(self):
+        with self.assertRaises(SystemExit):
+            self.run_cli(response="<html>proxy error</html>")
+
+    def test_a_missing_cli_says_what_to_install(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.run_cli(raises=FileNotFoundError())
+        self.assertIn("PATH", str(caught.exception))
+
+    def test_a_wedged_cli_does_not_hang_the_run(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.run_cli(raises=triage.subprocess.TimeoutExpired("claude", 60))
+        self.assertIn("60s", str(caught.exception))
 
 
 # ---- Workflow wiring -------------------------------------------------------

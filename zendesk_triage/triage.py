@@ -144,7 +144,6 @@ DESCRIPTION_CHARS = 1500  # per-ticket description sent to Claude (triage only)
 # from the same output budget. 400 keeps a chunk far under the model's 128K output
 # ceiling; batches larger than this are split rather than truncated.
 DEFAULT_BATCH_SIZE = 400
-MAX_OUTPUT_TOKENS = 128000
 # The classifier is the local Claude Code CLI rather than the Anthropic SDK, so
 # authentication is whatever `claude` is already logged in as and no key lives here.
 CLAUDE_CLI = "claude"
@@ -926,8 +925,16 @@ def claude_cli_json(model, effort, system_prompt, schema, prompt, timeout, label
         "--json-schema", json.dumps(schema),
         "--output-format", "json",
         "--no-session-persistence",
-        # No tool should run for either of these, and the CLI otherwise reads a
-        # project's CLAUDE.md, skills and settings.
+        # Nothing outside this call may change what the model is told. The two flags
+        # cover different halves of that and neither implies the other:
+        # --setting-sources "" drops the user and project settings — and the hooks
+        # inside them — while --tools "" removes the tools. Without the first, a
+        # .claude/settings.json next to this file, or one in the service account's
+        # home, silently joins every classification and every translation.
+        #
+        # --tools stays last: it is variadic, so it swallows any following argument
+        # that does not begin with a dash.
+        "--setting-sources", "",
         "--tools", "",
     ]
     try:
@@ -951,13 +958,21 @@ def claude_cli_json(model, effort, system_prompt, schema, prompt, timeout, label
     if not isinstance(response, dict):
         sys.exit(f"{CLAUDE_CLI} returned {type(response).__name__} on {label}, "
                  f"expected an object.")
-    # is_error and subtype are the CLI's signals; stop_reason deliberately is not —
-    # a successful structured-output run reports "tool_use", because that is how the
-    # schema is enforced underneath.
+    # is_error and subtype are the CLI's signals for success; stop_reason deliberately
+    # is not — a successful structured-output run reports "tool_use", because that is
+    # how the schema is enforced underneath.
     if response.get("is_error") or response.get("subtype") != "success":
         sys.exit(f"{CLAUDE_CLI} reported failure on {label} "
                  f"(subtype={response.get('subtype')!r}, "
                  f"api_error_status={response.get('api_error_status')!r}).")
+    # stop_reason is worth reading for this one value. There is no --max-tokens to
+    # raise, so an answer too long to finish comes back as JSON that stops mid-object,
+    # and the parse below would report a baffling syntax error for something whose
+    # only fix is a smaller batch.
+    if response.get("stop_reason") == "max_tokens":
+        sys.exit(f"{CLAUDE_CLI} ran out of output tokens on {label}, so the JSON is "
+                 f"incomplete. Lower --batch-size (currently splitting at "
+                 f"{DEFAULT_BATCH_SIZE}).")
 
     # structured_output is the object --json-schema produced, so it beats re-parsing
     # the `result` string: one less decode, and immune to prose alongside the JSON.
@@ -1053,9 +1068,15 @@ BUTTON_SECONDARY = 2
 # costs two more, so the ceiling is twelve. Ten leaves room for the accounting lines
 # the header grows on a busy day.
 MAX_SECTIONS_PER_MESSAGE = 10
-# Text across a whole Components V2 message. Ten sections of clipped ticket text come
+COMMENT_BUTTON_LABEL = "Comment"
+# Discord's ceiling on all the text in one Components V2 message.
+MAX_MESSAGE_TEXT_CHARS = 4000
+# What the ticket lines and the header may spend of it. The accessory labels are text
+# in the message as much as the lines are, so they come off the budget rather than
+# being left to a margin nobody wrote down. Ten sections of clipped ticket text come
 # to roughly 3,500, so this is a guard rather than a routine constraint.
-MAX_COMPONENT_CHARS = 3900
+MAX_COMPONENT_CHARS = (MAX_MESSAGE_TEXT_CHARS
+                       - MAX_SECTIONS_PER_MESSAGE * len(COMMENT_BUTTON_LABEL))
 
 
 def ticket_url(subdomain, ticket_id):
@@ -1126,11 +1147,12 @@ def build_ticket_section(text, ticket_id):
         "accessory": {
             "type": BUTTON,
             "style": BUTTON_SECONDARY,
-            "label": "Comment",
+            "label": COMMENT_BUTTON_LABEL,
             # Parsed by relay.py, which answers it with the compose dialog.
             "custom_id": f"comment:{ticket_id}",
         },
     }
+
 
 def build_collapsed_line(collapsed, subdomain):
     """The whole batch of abuse reports as one line: a count, then the ticket links.
@@ -1241,14 +1263,19 @@ def chunk_entries(entries, max_items=MAX_SECTIONS_PER_MESSAGE,
 
     An entry longer than the character budget still gets its own message rather than
     being dropped; the pieces are pre-clipped so that shouldn't arise.
+
+    Entries are passed through, not rebuilt, so the caller can still tell which one
+    it is looking at by identity — build_messages needs that to find the collapsed
+    line again once its entry is somewhere inside a chunk.
     """
     chunks, current, current_chars = [], [], first_used
-    for text, ids in entries:
+    for entry in entries:
+        text, _ = entry
         if current and (len(current) >= max_items
                         or current_chars + len(text) > max_chars):
             chunks.append(current)
             current, current_chars = [], 0
-        current.append((text, ids))
+        current.append(entry)
         current_chars += len(text)
     if current:
         chunks.append(current)
@@ -1301,8 +1328,10 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
         for f in shown
     ]
     # Last, under the individual tickets: lowest position for the lowest priority.
+    collapsed_entry = None
     if collapsed:
-        entries.append((build_collapsed_line(collapsed, subdomain), collapsed_ids))
+        collapsed_entry = (build_collapsed_line(collapsed, subdomain), collapsed_ids)
+        entries.append(collapsed_entry)
 
     messages, coverage = [], []
     # A quiet day still owes the channel the header — chunk_entries has nothing to
@@ -1320,11 +1349,17 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
             # The header accounts for every classified ticket except the highlights
             # that didn't fit; those are covered by no message and stay eligible.
             covered |= header_ids
-        for text, ids in chunk:
+        for entry in chunk:
+            text, ids = entry
             # The collapsed line stands for every abuse report at once, so there is no
             # single ticket to comment on — and a group nobody can act on is the last
             # thing that should offer a reply button. Plain text, no accessory.
-            if collapsed and ids == collapsed_ids:
+            #
+            # Asked by identity rather than by comparing id sets: matching on the ids
+            # happened to work only because a collapsed ticket never also appears as
+            # its own line, which is a fact about build_messages and not about what
+            # this branch is trying to decide.
+            if entry is collapsed_entry:
                 blocks.append({"type": TEXT_DISPLAY, "content": text})
             else:
                 blocks.append(build_ticket_section(text, next(iter(ids))))

@@ -40,16 +40,20 @@ Config (env vars):
                           path runs and nothing is written to Zendesk
 
 Requests are rejected unless their signature is valid and their timestamp is within
-MAX_SIGNATURE_AGE_SECONDS, so a captured request cannot be replayed later.
+MAX_SIGNATURE_AGE_SECONDS, so a captured request cannot be replayed later. A timestamp
+slightly in the future is accepted, within MAX_CLOCK_SKEW_SECONDS: the alternative is
+an endpoint that refuses everything whenever this host's clock trails Discord's.
 
 Usage:
     uvicorn relay:app --host 127.0.0.1 --port 8080
 """
+import json
 import os
 import subprocess
 import sys
 import time
 
+import requests
 from fastapi import BackgroundTasks, FastAPI, Request, Response
 from nacl.exceptions import BadSignatureError
 from nacl.signing import VerifyKey
@@ -73,6 +77,18 @@ MAX_ATTACHMENTS = 8
 # minutes is Discord's own suggested window and is far more than the three seconds
 # they wait for an answer.
 MAX_SIGNATURE_AGE_SECONDS = 300
+# Skew allowed in the other direction. The signature still covers the timestamp, so
+# this widens nothing an attacker controls; without it a host whose clock is a second
+# behind Discord's refuses every interaction — the endpoint-registering PING included
+# — with a 401 that says nothing about clocks.
+MAX_CLOCK_SKEW_SECONDS = 60
+# How long one reply.py run may take, and unrelated to the three seconds Discord waits
+# for an answer: that deadline is met by the deferral, and the work then runs in the
+# background against the interaction token's own 15-minute life. What it covers is the
+# translation plus Zendesk calls whose retry budget can spend a minute of backoff
+# apiece, so a legitimate run can outlast this — which is why overrunning it reports
+# to the agent rather than only to the journal. See tell_discord.
+REPLY_TIMEOUT_SECONDS = 300
 
 INTERACTION_PING = 1
 INTERACTION_COMPONENT = 3
@@ -85,6 +101,7 @@ RESPONSE_UPDATE_MESSAGE = 7
 RESPONSE_MODAL = 9
 
 EPHEMERAL = 64
+SECTION = 9
 TEXT_DISPLAY = 10
 LABEL = 18
 TEXT_INPUT = 4
@@ -288,8 +305,14 @@ def submitted_value(node, custom_id):
         return None
     if node.get("custom_id") == custom_id and isinstance(node.get("value"), str):
         return node["value"]
-    return (submitted_value(node.get("components"), custom_id)
-            or submitted_value(node.get("component"), custom_id))
+    # `is not None` rather than `or`, the same test the list branch makes: an empty
+    # box submits "", and treating that as a miss would keep searching and report the
+    # modal's shape as wrong when the shape was fine.
+    for key in ("components", "component"):
+        found = submitted_value(node.get(key), custom_id)
+        if found is not None:
+            return found
+    return None
 
 
 def card_text(node, custom_id):
@@ -304,7 +327,7 @@ def card_text(node, custom_id):
     if not isinstance(node, dict):
         return None
     accessory = node.get("accessory") or {}
-    if node.get("type") == 9 and accessory.get("custom_id") == custom_id:
+    if node.get("type") == SECTION and accessory.get("custom_id") == custom_id:
         for child in node.get("components") or []:
             if child.get("type") == TEXT_DISPLAY:
                 return child.get("content")
@@ -312,6 +335,35 @@ def card_text(node, custom_id):
 
 
 # ---- Handing the writes to reply.py ---------------------------------------
+
+
+def tell_discord(payload, text):
+    """Replace the agent's pending message with an outcome. Never raises.
+
+    Only for the failures reply.py could not report itself. It reports its own
+    refusals and then exits, but a crash, a non-zero exit and the timeout kill all
+    leave the agent's message on "⏳ Sending…" — which reads as *still working* for a
+    write that may already have emailed the customer.
+
+    The interaction token that arrived in the payload is the credential, so this
+    needs no bot token. A fresh session, never a Zendesk one: that carries the API
+    token, and Discord has no business receiving it.
+
+    attempts=2 because this is the last thing in the run and its own failure has
+    nowhere to go: the full retry budget would hold a worker for minutes to tell
+    somebody something the journal already records.
+    """
+    try:
+        # Inside the try: run_reply promises not to raise, and this is the one part of
+        # it that indexes rather than gets.
+        url = (f"https://discord.com/api/v10/webhooks/{payload['application_id']}"
+               f"/{payload['interaction_token']}/messages/@original")
+        triage.request_with_retry(
+            requests.Session(), "PATCH", url, attempts=2,
+            json={"content": text, "embeds": [], "components": []})
+    except Exception as exc:  # noqa: BLE001 — reporting a failure must not add one
+        print(f"could not report the failure on #{payload.get('ticket_id')} to "
+              f"Discord ({exc})", flush=True)
 
 
 def run_reply(payload):
@@ -327,18 +379,27 @@ def run_reply(payload):
         command.append("--dry-run")
     try:
         done = subprocess.run(
-            command, check=False, timeout=300, capture_output=True, text=True,
-            env={**os.environ, "DISCORD_PAYLOAD": triage.json.dumps(payload)})
+            command, check=False, timeout=REPLY_TIMEOUT_SECONDS,
+            capture_output=True, text=True,
+            env={**os.environ, "DISCORD_PAYLOAD": json.dumps(payload)})
     except subprocess.TimeoutExpired:
         print(f"reply.py timed out on #{payload.get('ticket_id')}", flush=True)
+        # Deliberately not "nothing was sent": a run killed this late may have got
+        # as far as the private note, or the reply itself. Only the ticket knows.
+        tell_discord(payload, "❌ Timed out. Check the ticket in Zendesk before "
+                              "writing the reply again — it may have gone out.")
         return
     for line in (done.stdout or "").splitlines():
         print(line, flush=True)
     if done.returncode != 0:
-        # reply.py reports its own refusals to the agent before exiting, so this is
-        # for the failures it could not report. The message it prints is the reason.
+        # The message reply.py prints is the reason, and it goes to the journal
+        # rather than to Discord: on this path it is as likely to be a traceback as
+        # a sentence, and a stack trace under a customer's ticket number helps
+        # nobody who is only deciding whether to write the reply again.
         print(f"reply.py exited {done.returncode} on #{payload.get('ticket_id')}: "
               f"{(done.stderr or '').strip()[:300]}", flush=True)
+        tell_discord(payload, "❌ The reply failed. Check the ticket in Zendesk "
+                              "before writing it again — it may have gone out.")
 
 
 def dry_run_requested():
@@ -446,7 +507,7 @@ async def interactions(request: Request, background: BackgroundTasks):
         age = time.time() - float(timestamp)
     except (TypeError, ValueError):
         return Response("bad signature", status_code=401)
-    if age < 0 or age > MAX_SIGNATURE_AGE_SECONDS:
+    if age < -MAX_CLOCK_SKEW_SECONDS or age > MAX_SIGNATURE_AGE_SECONDS:
         return Response("stale signature", status_code=401)
     try:
         VerifyKey(bytes.fromhex(key)).verify(timestamp.encode() + raw,
@@ -454,7 +515,7 @@ async def interactions(request: Request, background: BackgroundTasks):
     except (BadSignatureError, ValueError):
         return Response("bad signature", status_code=401)
 
-    interaction = triage.json.loads(raw)
+    interaction = json.loads(raw)
     kind = interaction.get("type")
     if kind == INTERACTION_PING:
         return {"type": RESPONSE_PONG}
