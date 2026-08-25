@@ -47,6 +47,7 @@ an endpoint that refuses everything whenever this host's clock trails Discord's.
 Usage:
     uvicorn relay:app --host 127.0.0.1 --port 8080
 """
+import asyncio
 import json
 import os
 import subprocess
@@ -196,48 +197,90 @@ def attachment_lines(comments):
     return lines
 
 
-def ticket_context(ticket_id):
-    """What the ticket says, for the dialog. Returns markdown, or None.
+def zendesk_read(ticket_id, what, suffix, **params):
+    """One authenticated GET under /tickets/{id}, parsed. None on any failure.
 
-    One Zendesk call against a three-second budget that a modal cannot defer past.
-    Ascending order so comments[0] is the ticket as opened, which is both the body
-    worth reading and the way the requester is identified without a second call.
-
-    Returns None on any failure rather than raising: a slow or unreachable Zendesk
+    Returns None rather than raising, on every path: a slow or unreachable Zendesk
     should cost the dialog its context, never its ability to open.
+
+    Its own session per call, because two of these run concurrently and
+    requests.Session is not documented as thread-safe. Setting an auth header is all
+    a session is here, so there is nothing worth sharing.
     """
     subdomain = env("ZENDESK_SUBDOMAIN")
     email = env("ZENDESK_EMAIL")
     token = env("ZENDESK_API_TOKEN")
     if not (subdomain and email and token):
         return None
-    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}/comments.json"
+    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}{suffix}"
     try:
         session = triage.zendesk_session(email, token)
-        # attempts=2: the dialog is on a deadline, and the full retry budget can burn
-        # a minute of backoff on what is only enrichment.
+        # attempts=2: the dialog is on a deadline a modal cannot defer past, and the
+        # full retry budget can burn a minute of backoff on what is only enrichment.
         resp = triage.request_with_retry(session, "GET", url, attempts=2,
-                                         params={"per_page": 100})
+                                         params=params)
     except Exception as exc:  # noqa: BLE001 — enrichment must never break the dialog
-        print(f"#{ticket_id}: could not read comments ({exc})", flush=True)
+        print(f"#{ticket_id}: could not read {what} ({exc})", flush=True)
         return None
     if resp.status_code >= 400:
-        print(f"#{ticket_id}: comments returned {resp.status_code}", flush=True)
+        print(f"#{ticket_id}: {what} returned {resp.status_code}", flush=True)
         return None
     try:
-        comments = (resp.json() or {}).get("comments") or []
+        return resp.json() or {}
     except ValueError:
-        return None
-    if not comments:
+        print(f"#{ticket_id}: {what} was not JSON", flush=True)
         return None
 
-    requester = comments[0].get("author_id")
-    bodies = [c.get("body") or "" for c in comments
-              if c.get("author_id") == requester]
+
+async def read_ticket(ticket_id):
+    """The ticket and the requester's comments, as (ticket, comments).
+
+    Two calls rather than one, run concurrently so they cost about what one costs.
+    The second exists because `requester_id` is a field on the ticket and nothing on
+    the comments: inferring it from comments[0] was wrong on every ticket somebody
+    other than the requester opened — an agent taking a phone call, the review
+    importer — and reply.py reads the field, so the dialog showed one person's words
+    while the translation was chosen from another's.
+
+    Either half can be None; the caller renders what it has.
+    """
+    ticket, comments = await asyncio.gather(
+        run_in_threadpool(zendesk_read, ticket_id, "the ticket", ".json"),
+        # Ascending: the requester's words read as the story they told, oldest first.
+        # Spelled out rather than left to Zendesk's default for the endpoint.
+        run_in_threadpool(zendesk_read, ticket_id, "its comments", "/comments.json",
+                          per_page=100, sort_order="asc"),
+    )
+    return ((ticket or {}).get("ticket") or None,
+            (comments or {}).get("comments") or None)
+
+
+def ticket_context(ticket, comments):
+    """What the ticket says, for the dialog. Returns markdown, or None.
+
+    The requester's own comments, found by the ticket's `requester_id` — the same
+    question reply.py asks of the same ticket, answered the same way. An agent's
+    earlier English reply is text on the ticket too, and letting it in would drag the
+    dialog towards English on exactly the tickets this feature exists for.
+
+    When the ticket itself could not be read there is nobody to filter on, so every
+    comment goes in under a heading that does not claim whose words they are. Better
+    than an empty dialog, and it says which one you are looking at.
+    """
+    if not comments:
+        return None
+    requester = (ticket or {}).get("requester_id")
+    if requester is None:
+        heading = "**On the ticket**"
+        bodies = [c.get("body") or "" for c in comments]
+    else:
+        heading = "**What they wrote**"
+        bodies = [c.get("body") or "" for c in comments
+                  if c.get("author_id") == requester]
     blocks = []
     body = triage.clip("\n\n".join(b.strip() for b in bodies if b.strip()), BODY_CHARS)
     if body:
-        blocks.append(f"**What they wrote**\n{body}")
+        blocks.append(f"{heading}\n{body}")
     links = attachment_lines(comments)
     if links:
         blocks.append("\n".join(links))
@@ -446,7 +489,16 @@ async def handle_component(interaction, background):
         ticket_id = ticket_number(custom_id.split(":", 1)[1])
         if not ticket_id:
             return message("❌ That is not a ticket number.")
-        context = await run_in_threadpool(ticket_context, ticket_id)
+        ticket, comments = await read_ticket(ticket_id)
+        # Refused before the box opens rather than after a reply has been typed into
+        # it: Zendesk takes no comment on a closed ticket, and closing cannot be
+        # undone. Only when the ticket was actually read — an unreachable Zendesk must
+        # cost the dialog its context and not its existence, and reply.py checks again
+        # on its own before writing either way.
+        if (ticket or {}).get("status") == "closed":
+            return message(f"❌ #{ticket_id} is closed, and Zendesk takes no comments "
+                           f"on a closed ticket.")
+        context = ticket_context(ticket, comments)
         if context is None:
             context = card_text((interaction.get("message") or {}).get("components"),
                                 custom_id)

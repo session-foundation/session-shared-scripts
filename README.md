@@ -362,11 +362,20 @@ exactly what production runs.
 
 ### What the dialog shows
 
-One Zendesk call, against a three-second budget a modal cannot defer past:
+Two Zendesk calls, run concurrently so they cost about what one costs — the budget is
+the three seconds a modal cannot be deferred past:
 
 - a link to open the ticket in Zendesk
 - what the requester actually wrote, clipped to `BODY_CHARS`
 - attachments as links — filename and size
+
+The second call is for `requester_id`, which is a field on the ticket and nothing on
+its comments. Taking the requester to be whoever wrote the first comment is wrong on
+every ticket somebody else opened — an agent taking a phone call, the review importer
+— and `reply.py` reads the field, so the dialog would show one person's words while
+the translation was chosen from another's. Reading the ticket also means a **closed**
+one is refused before the box opens rather than after a whole reply has been typed
+into it.
 
 Attachments are **linked, never copied**. Zendesk's `content_url` is a capability URL
 that resolves without authentication, so there is nothing to download, nothing stored
@@ -375,9 +384,11 @@ have done, and which would have been worse egress than the local storage it was 
 to avoid. It is a bearer URL, which is why it only ever appears in an ephemeral
 dialog and never in a channel message or a log.
 
-If that call is slow or fails, the dialog still opens carrying the digest card's own
+If those calls are slow or fail, the dialog still opens carrying the digest card's own
 summary line, which the interaction hands over for free. Degrading is never failing
-to open.
+to open. Either half can fail on its own: without the ticket, the comments are shown
+under a heading that does not claim whose words they are, and an unreachable Zendesk
+is never mistaken for a closed ticket.
 
 ### What lands on the ticket
 

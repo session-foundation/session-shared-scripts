@@ -218,61 +218,146 @@ class TestAllowlist(unittest.TestCase):
 # ---- The dialog -----------------------------------------------------------
 
 
+REQUESTER_ID = 42
+
+
+def ticket_row(requester_id=REQUESTER_ID, status="open"):
+    return {"id": 27896, "requester_id": requester_id, "status": status}
+
+
 class TestTicketContext(unittest.TestCase):
-    def context(self, responses):
-        with Env(), Patched(relay.triage,
-                            zendesk_session=lambda *a: FakeSession(responses)):
-            return relay.ticket_context(27896)
+    """Rendering only: ticket_context is handed what read_ticket fetched, so the
+    filtering can be asserted without a session in the way."""
+
+    def context(self, comments, ticket=...):
+        """`ticket=None` is the real case of the ticket call having failed, so the
+        default has to be something else."""
+        return relay.ticket_context(ticket_row() if ticket is ... else ticket, comments)
 
     def test_the_requesters_words_are_shown(self):
-        got = self.context([FakeResponse({"comments": [
+        got = self.context([
             comment("Es geht nicht mehr."),
             comment("Thanks for reaching out!", author_id=7),
             comment("Immer noch kaputt."),
-        ]})])
+        ])
         self.assertIn("Es geht nicht mehr.", got)
         self.assertIn("Immer noch kaputt.", got)
 
     def test_an_agents_reply_is_not_mistaken_for_the_requesters(self):
-        """The first comment identifies the requester, so a later agent reply in
-        English must not join the sample."""
-        got = self.context([FakeResponse({"comments": [
+        """An agent's earlier English reply is text on the ticket too, and letting it
+        in drags the dialog towards English on the tickets this feature exists for."""
+        got = self.context([
             comment("Es geht nicht mehr."),
             comment("Thanks for reaching out!", author_id=7),
-        ]})])
+        ])
         self.assertNotIn("Thanks for reaching out", got)
 
+    def test_the_requester_is_the_ticket_field_not_whoever_opened_it(self):
+        """An agent taking a phone call is the author of comment 0 and not the
+        requester. Filtering on comments[0] showed the dialog that agent's English
+        while reply.py, which reads requester_id, translated for the customer."""
+        got = self.context([
+            comment("Called in about a login problem.", author_id=7),
+            comment("Ich komme nicht mehr rein."),
+        ])
+        self.assertIn("Ich komme nicht mehr rein.", got)
+        self.assertNotIn("Called in about", got)
+        self.assertIn("What they wrote", got)
+
+    def test_an_unreadable_ticket_shows_every_comment_without_claiming_whose(self):
+        """Half the fetch can fail. An empty dialog is worse than an unattributed
+        one, but a heading that names the requester would be a claim we cannot make."""
+        got = self.context([comment("Es geht nicht mehr."),
+                            comment("Thanks!", author_id=7)], ticket=None)
+        self.assertIn("Es geht nicht mehr.", got)
+        self.assertIn("Thanks!", got)
+        self.assertIn("On the ticket", got)
+        self.assertNotIn("What they wrote", got)
+
     def test_attachments_are_linked_with_name_and_size(self):
-        got = self.context([FakeResponse({"comments": [
-            comment("Siehe Anhang.", attachments=[attachment()]),
-        ]})])
+        got = self.context([comment("Siehe Anhang.", attachments=[attachment()])])
         self.assertIn("report.pdf", got)
         self.assertIn("https://acme.zendesk.com/attachments/token/abc/", got)
         self.assertIn("2 KB", got)
 
     def test_a_flood_of_attachments_is_capped_and_announced(self):
         many = [attachment(name=f"f{i}.pdf") for i in range(relay.MAX_ATTACHMENTS + 4)]
-        got = self.context([FakeResponse({"comments": [comment("x", attachments=many)]})])
+        got = self.context([comment("x", attachments=many)])
         self.assertEqual(got.count("📎"), relay.MAX_ATTACHMENTS)
         self.assertIn("4 more", got)
 
     def test_a_long_body_is_clipped(self):
-        got = self.context([FakeResponse({"comments": [comment("ä" * 9000)]})])
+        got = self.context([comment("ä" * 9000)])
         self.assertLess(len(got), relay.BODY_CHARS + 200)
+
+    def test_nothing_to_show_is_none_rather_than_an_empty_heading(self):
+        self.assertIsNone(self.context([]))
+        self.assertIsNone(self.context([comment("Ich bin es nicht", author_id=7)]))
+
+
+class TestZendeskRead(unittest.TestCase):
+    """The fetching half. Every failure costs the dialog its context and never its
+    ability to open, so every path returns None rather than raising."""
+
+    def read(self, responses, **env):
+        with Env(**env), Patched(relay.triage,
+                                 zendesk_session=lambda *a: FakeSession(responses)):
+            return relay.zendesk_read(27896, "its comments", "/comments.json",
+                                      per_page=100)
+
+    def test_a_readable_response_is_parsed(self):
+        self.assertEqual(self.read([FakeResponse({"comments": [1]})]),
+                         {"comments": [1]})
 
     def test_an_unreachable_zendesk_costs_context_not_the_dialog(self):
         # Two responses: request_with_retry(attempts=2) retries a 500, and a queue
         # that runs dry would exercise the exception path instead of this one.
-        self.assertIsNone(self.context([FakeResponse({}, status_code=500)] * 2))
-        self.assertIsNone(self.context([triage.requests.RequestException("down")] * 2))
+        self.assertIsNone(self.read([FakeResponse({}, status_code=500)] * 2))
+        self.assertIsNone(self.read([triage.requests.RequestException("down")] * 2))
 
     def test_an_unreadable_payload_costs_context_not_the_dialog(self):
         from test_triage import NonJsonResponse
-        self.assertIsNone(self.context([NonJsonResponse()]))
+        self.assertIsNone(self.read([NonJsonResponse()]))
 
     def test_missing_zendesk_config_is_not_an_error(self):
-        with Env(ZENDESK_API_TOKEN=None):
-            self.assertIsNone(relay.ticket_context(27896))
+        self.assertIsNone(self.read([], ZENDESK_API_TOKEN=None))
+
+
+class TestReadTicket(unittest.IsolatedAsyncioTestCase):
+    async def gathered(self, responses):
+        """read_ticket over a session shared by both calls, so the queue records the
+        two requests it makes."""
+        session = FakeSession(responses)
+        with Env(), Patched(relay.triage, zendesk_session=lambda *a: session):
+            return await relay.read_ticket(27896), session
+
+    async def test_the_ticket_and_its_comments_are_both_fetched(self):
+        (ticket, comments), session = await self.gathered([
+            FakeResponse({"ticket": ticket_row()}),
+            FakeResponse({"comments": [comment("hallo")]}),
+        ])
+        self.assertEqual(ticket["requester_id"], REQUESTER_ID)
+        self.assertEqual(len(comments), 1)
+        self.assertEqual(len(session.calls), 2)
+
+    async def test_the_comments_are_asked_for_oldest_first(self):
+        """The requester's words read as the story they told. Spelled out rather than
+        left to whatever the endpoint defaults to."""
+        _, session = await self.gathered([
+            FakeResponse({"ticket": ticket_row()}),
+            FakeResponse({"comments": []}),
+        ])
+        params = [kwargs["params"] for _, url, kwargs in session.calls
+                  if url.endswith("/comments.json")]
+        self.assertEqual(params, [{"per_page": 100, "sort_order": "asc"}])
+
+    async def test_one_half_failing_does_not_take_the_other_with_it(self):
+        (ticket, comments), _ = await self.gathered([
+            FakeResponse({}, status_code=404),
+            FakeResponse({"comments": [comment("hallo")]}),
+        ])
+        self.assertIsNone(ticket)
+        self.assertEqual(len(comments), 1)
 
 
 class TestModal(unittest.TestCase):
@@ -330,7 +415,12 @@ class TestSubmittedValue(unittest.TestCase):
 
 
 class TestRouting(unittest.TestCase):
-    def send(self, payload, responses=(FakeResponse({"comments": []}),)):
+    # zendesk_read builds its own session per call, so each of read_ticket's two
+    # calls gets a fresh queue of this rather than sharing one. A single response
+    # carrying both keys is what lets one entry serve either caller.
+    BOTH_READS = (FakeResponse({"ticket": ticket_row(), "comments": []}),)
+
+    def send(self, payload, responses=BOTH_READS):
         with Env(), Patched(relay.triage,
                             zendesk_session=lambda *a: FakeSession(list(responses))), \
              Patched(relay, run_reply=lambda payload: None):
@@ -340,6 +430,22 @@ class TestRouting(unittest.TestCase):
         body = self.send(interaction(3, custom_id="comment:27896"))
         self.assertEqual(body["type"], relay.RESPONSE_MODAL)
         self.assertIn("27896", body["data"]["title"])
+
+    def test_a_closed_ticket_is_refused_before_the_box_opens(self):
+        """Zendesk takes no comment on a closed ticket and closing cannot be undone,
+        so the reply was refused only after somebody had typed the whole thing."""
+        body = self.send(interaction(3, custom_id="comment:27896"),
+                         responses=(FakeResponse(
+                             {"ticket": ticket_row(status="closed")}),))
+        self.assertEqual(body["type"], relay.RESPONSE_MESSAGE)
+        self.assertIn("closed", body["data"]["content"])
+
+    def test_an_unreadable_ticket_still_opens_the_box(self):
+        """The closed check must cost the dialog its context, not its existence: an
+        unreachable Zendesk is not a closed ticket, and reply.py checks again anyway."""
+        body = self.send(interaction(3, custom_id="comment:27896"),
+                         responses=(FakeResponse({}, status_code=500),) * 2)
+        self.assertEqual(body["type"], relay.RESPONSE_MODAL)
 
     def test_the_comment_button_falls_back_to_the_card_when_zendesk_is_down(self):
         card = [{"type": 17, "components": [{
