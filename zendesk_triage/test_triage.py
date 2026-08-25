@@ -1480,6 +1480,58 @@ class TestFetchTickets(unittest.TestCase):
             triage.fetch_tickets(session, "acme", "q", 100)
 
 
+class TestFetchEveryTicket(unittest.TestCase):
+    """Walking past the Search API's 1000-result ceiling by created_at slices."""
+
+    def page(self, ids, count, stamp="2026-08-01T00:00:00Z"):
+        return FakeResponse({"count": count, "next_page": None, "results": [
+            {"id": i, "result_type": "ticket", "created_at": stamp} for i in ids]})
+
+    def test_one_short_slice_is_a_single_query(self):
+        session = FakeSession([self.page([1, 2, 3], 3)])
+        tickets, total = triage.fetch_every_ticket(session, "acme", "q", 100)
+        self.assertEqual([t["id"] for t in tickets], [1, 2, 3])
+        self.assertEqual((total, len(session.calls)), (3, 1))
+
+    def test_a_full_slice_is_followed_by_another(self):
+        """A full 1000 means there may be more behind it, so the walk continues from
+        the oldest created_at rather than stopping at Zendesk's ceiling."""
+        first = list(range(triage.SEARCH_RESULT_LIMIT))
+        session = FakeSession([
+            self.page(first, 1036, "2026-08-02T00:00:00Z"),
+            self.page(range(9000, 9036), 36, "2025-08-02T00:00:00Z"),
+        ])
+        tickets, total = triage.fetch_every_ticket(session, "acme", "q", 5000)
+        self.assertEqual(len(tickets), triage.SEARCH_RESULT_LIMIT + 36)
+        self.assertEqual(total, 1036, "total comes from the unsliced query")
+        self.assertIn("created<=2026-08-02T00:00:00Z", session.calls[1][2]["params"]["query"])
+
+    def test_the_overlapping_second_is_not_counted_twice(self):
+        """created<= re-fetches everything sharing the oldest second; ids dedupe it."""
+        first = list(range(triage.SEARCH_RESULT_LIMIT))
+        session = FakeSession([
+            self.page(first, 1002),
+            self.page([998, 999, 1000, 1001], 4),
+            self.page([], 0),
+        ])
+        tickets, _ = triage.fetch_every_ticket(session, "acme", "q", 5000)
+        self.assertEqual(len(tickets), len({t["id"] for t in tickets}))
+        self.assertEqual(len(tickets), triage.SEARCH_RESULT_LIMIT + 2)
+
+    def test_a_slice_that_adds_nothing_new_ends_the_walk(self):
+        """Otherwise a tie group larger than a slice would loop forever."""
+        first = list(range(triage.SEARCH_RESULT_LIMIT))
+        session = FakeSession([self.page(first, 99999), self.page(first, 99999)])
+        tickets, _ = triage.fetch_every_ticket(session, "acme", "q", 99999)
+        self.assertEqual(len(tickets), triage.SEARCH_RESULT_LIMIT)
+        self.assertEqual(len(session.calls), 2)
+
+    def test_it_never_returns_more_than_asked_for(self):
+        session = FakeSession([self.page(range(10), 10)])
+        tickets, _ = triage.fetch_every_ticket(session, "acme", "q", 4)
+        self.assertEqual(len(tickets), 4)
+
+
 class TestBacklogQueries(unittest.TestCase):
     def test_the_non_review_query_is_the_backlog_minus_the_review_channel(self):
         self.assertTrue(triage.BACKLOG_NON_REVIEW_QUERY.startswith(triage.BACKLOG_QUERY))
