@@ -71,6 +71,9 @@ REPLY_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reply.p
 MAX_REPLY_CHARS = 1200
 # What the dialog shows of the ticket. Enough to answer without opening Zendesk, not
 # so much that the requester's whole history is in a text box.
+# Optional. Until the field exists in Zendesk the dialog shows the customer's own
+# words, exactly as it did before — see english_rendering.
+ENGLISH_FIELD_ENV = "ZENDESK_ENGLISH_FIELD_ID"
 BODY_CHARS = 1200
 MAX_ATTACHMENTS = 8
 # How stale a signed request may be. The signature covers the timestamp, so this
@@ -255,6 +258,26 @@ async def read_ticket(ticket_id):
             (comments or {}).get("comments") or None)
 
 
+def english_rendering(ticket):
+    """The ticket's English rendering, or None.
+
+    Written by the digest, on the ticket itself, so reading it costs nothing the
+    dialog does not already spend: read_ticket fetches the ticket regardless, and a
+    Claude call here would not fit — a modal cannot be deferred, so this path has the
+    three seconds Discord allows and a translation needs several.
+
+    Absent is the normal case until the field exists in Zendesk, and the caller
+    falls back to the customer's own words, which is what it showed before this.
+    """
+    field_id = env(ENGLISH_FIELD_ENV)
+    if not field_id:
+        return None
+    for field in (ticket or {}).get("custom_fields") or []:
+        if str(field.get("id")) == str(field_id).strip():
+            return (field.get("value") or "").strip() or None
+    return None
+
+
 def ticket_context(ticket, comments):
     """What the ticket says, for the dialog. Returns markdown, or None.
 
@@ -269,8 +292,16 @@ def ticket_context(ticket, comments):
     """
     if not comments:
         return None
+    english = english_rendering(ticket)
     requester = (ticket or {}).get("requester_id")
-    if requester is None:
+    if english:
+        # The digest wrote this before the card carrying the button was posted, so a
+        # ticket that got here has one whenever the field is configured and the
+        # customer did not already write in English. Both sides of the conversation,
+        # so a customer's "still broken" has the reply it is answering above it.
+        heading = "**The conversation so far** (English)"
+        bodies = [english]
+    elif requester is None:
         heading = "**On the ticket**"
         bodies = [c.get("body") or "" for c in comments]
     else:

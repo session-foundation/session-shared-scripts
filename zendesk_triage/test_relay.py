@@ -274,6 +274,54 @@ class TestTicketContext(unittest.TestCase):
         self.assertIn("On the ticket", got)
         self.assertNotIn("What they wrote", got)
 
+    def test_the_english_rendering_replaces_the_original_when_the_field_is_set(self):
+        """The dialog exists so an agent who cannot read German can answer a German
+        ticket. The digest writes this to Zendesk before the card carrying the button
+        is posted, which is what makes it there to read."""
+        ticket = ticket_row()
+        ticket["custom_fields"] = [{"id": 42, "value": "It stopped working."}]
+        with Patched(relay.os, environ={"ZENDESK_ENGLISH_FIELD_ID": "42"}):
+            got = self.context([comment("Es geht nicht mehr.")], ticket=ticket)
+        self.assertIn("It stopped working.", got)
+        self.assertIn("The conversation so far", got)
+        self.assertNotIn("Es geht nicht mehr.", got)
+
+    def test_without_the_field_configured_nothing_changes(self):
+        """The field does not exist in Zendesk yet. Until it does, the dialog has to
+        behave exactly as it did before — the customer's own words, no heading that
+        claims a translation nobody made."""
+        ticket = ticket_row()
+        ticket["custom_fields"] = [{"id": 42, "value": "It stopped working."}]
+        with Patched(relay.os, environ={}):
+            got = self.context([comment("Es geht nicht mehr.")], ticket=ticket)
+        self.assertIn("Es geht nicht mehr.", got)
+        self.assertNotIn("It stopped working.", got)
+        self.assertNotIn("The conversation so far", got)
+
+    def test_an_empty_field_falls_back_rather_than_showing_a_blank_dialog(self):
+        """Zendesk returns the field on every ticket once it exists, with a null
+        value on the ones nothing was written to — an English ticket, or one the
+        digest could not render. That must read as absent, not as empty."""
+        for value in (None, "", "   "):
+            ticket = ticket_row()
+            ticket["custom_fields"] = [{"id": 42, "value": value}]
+            with Patched(relay.os, environ={"ZENDESK_ENGLISH_FIELD_ID": "42"}):
+                got = self.context([comment("Es geht nicht mehr.")], ticket=ticket)
+            self.assertIn("Es geht nicht mehr.", got, f"value={value!r}")
+            self.assertNotIn("The conversation so far", got, f"value={value!r}")
+
+    def test_another_custom_field_is_not_mistaken_for_the_rendering(self):
+        """Tickets carry many custom fields. Matching anything but the configured id
+        would put an unrelated field's value in front of the agent as the customer's
+        words."""
+        ticket = ticket_row()
+        ticket["custom_fields"] = [{"id": 7, "value": "android"},
+                                   {"id": 42, "value": "It stopped working."}]
+        with Patched(relay.os, environ={"ZENDESK_ENGLISH_FIELD_ID": "42"}):
+            got = self.context([comment("Es geht nicht mehr.")], ticket=ticket)
+        self.assertIn("It stopped working.", got)
+        self.assertNotIn("android", got)
+
     def test_attachments_are_linked_with_name_and_size(self):
         got = self.context([comment("Siehe Anhang.", attachments=[attachment()])])
         self.assertIn("report.pdf", got)

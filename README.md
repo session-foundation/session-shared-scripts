@@ -390,6 +390,52 @@ to open. Either half can fail on its own: without the ticket, the comments are s
 under a heading that does not claim whose words they are, and an unreachable Zendesk
 is never mistaken for a closed ticket.
 
+### Reading a ticket you cannot read
+
+Set `ZENDESK_ENGLISH_FIELD_ID` to the id of a multi-line text ticket field and the
+dialog shows the conversation in English instead of the language it happened in:
+
+```
+2026-08-28 00:22 UTC Customer:
+Since the last update I no longer receive notifications on Session Desktop…
+
+2026-08-28 01:31 UTC Support:
+Have you checked the notification settings under…
+```
+
+The digest is what fills that field: before it posts, it renders every non-English
+ticket it is about to show into English and writes it to the ticket. The ordering is
+the design rather than a convenience — the Comment button exists only on a digest
+card, so a ticket that can reach the dialog has necessarily been through that step,
+and the dialog needs no Claude call of its own. It has no room for one: a modal
+cannot be deferred, so it answers within the three seconds Discord allows, and a
+translation takes several.
+
+**Both sides, not just the customer's.** A customer's second message is usually an
+answer to a reply, and dropping the reply leaves "still broken" sitting under the
+original complaint with nothing visible for it to be answering. A turn already in
+English is passed through word for word rather than paraphrased.
+
+Private notes are left out. They are internal annotation rather than conversation,
+they are already English, and reply.py's own attribution notes are among them — their
+`[discord:…]` markers would reach the agent as if the customer had written them.
+
+The timestamps and the speaker labels are assembled in Python, and only the
+translating is asked of the model. Asked to format the transcript itself a model can
+drop a turn, merge two, or date one it was never given, and each of those is
+invisible in the output. A turn it fails to return keeps its original text: an
+untranslated turn is a degraded transcript, a missing one is a conversation that
+reads as if it never happened.
+
+The field is overwritten on each run, so a ticket carries one current English version
+rather than a chain of partial ones. Tickets the classifier reports as English are
+left alone, and a ticket with no `requester_id` is skipped rather than guessed at —
+there would be no way to label a turn, and a transcript that guesses would present an
+agent's own replies as the customer's words.
+
+Unset, none of this happens and the dialog shows the original, which is what it did
+before the field existed.
+
 ### What lands on the ticket
 
 - a **public comment** carrying the reply, and `status` → `pending`
