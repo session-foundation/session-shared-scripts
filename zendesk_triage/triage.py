@@ -797,38 +797,62 @@ def hydrate_descriptions(session, subdomain, tickets):
     return hydrated
 
 
-# ---- English rendering, for the reply dialog --------------------------------
+# ---- English transcript, for the reply dialog -------------------------------
 
 # Optional, and absent until the field exists in Zendesk. Everything below is a
 # no-op without it: the digest posts exactly as it did before and relay.py falls
-# back to the customer's own words, which is what it showed all along.
+# back to the ticket's own comments, which is what it showed all along.
 ENGLISH_FIELD_ENV = "ZENDESK_ENGLISH_FIELD_ID"
 ENGLISH_TIMEOUT_SECONDS = 180
-# Comfortably past the 1,200 relay.py shows, so the field is never the reason the
-# dialog is missing a sentence.
-ENGLISH_CHARS = 4000
+# The transcript is a whole conversation rather than one description, so both budgets
+# are larger than the classifier's. The field holds well past the 1,200 relay.py
+# shows, so the field is never why the dialog is missing a sentence.
+TRANSCRIPT_INPUT_CHARS = 8000
+TRANSCRIPT_CHARS = 12000
+# Private notes are left out. They are internal annotation rather than conversation,
+# they are already English — reply.py's own attribution notes among them — and
+# translating its `[discord:…]` markers back would put bookkeeping in front of an
+# agent as if the customer had said it.
+CUSTOMER_TURN = "Customer"
+SUPPORT_TURN = "Support"
 
-ENGLISH_SCHEMA = {
+TRANSCRIPT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["english"],
+    "required": ["turns"],
     "properties": {
-        "english": {
-            "type": "string",
-            "description": "Every one of the customer's messages, in English, in order.",
+        "turns": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["index", "english"],
+                "properties": {
+                    "index": {
+                        "type": "integer",
+                        "description": "The turn's index, echoed back unchanged.",
+                    },
+                    "english": {
+                        "type": "string",
+                        "description": "That turn in English, or the original text unchanged if it was already English.",
+                    },
+                },
+            },
         }
     },
 }
 
-ENGLISH_SYSTEM_PROMPT = (
-    "You translate support tickets into English for a support agent who does not "
-    "read the original language.\n\n"
-    "Translate faithfully and completely. Keep the customer's meaning, their order "
-    "of events and their tone — an angry ticket must still read as angry. Do not "
-    "summarise, do not answer, do not add notes of your own.\n\n"
-    "Leave Session IDs, version numbers, URLs and error strings exactly as written. "
-    "Where the customer wrote several messages, keep them as separate paragraphs in "
-    "the same order."
+TRANSCRIPT_SYSTEM_PROMPT = (
+    "You translate support conversations into English for an agent who does not read "
+    "the original language.\n\n"
+    "You are given the turns of one ticket as JSON, each with an index. Return one "
+    "object per input turn, echoing its index back unchanged.\n\n"
+    "Translate faithfully and completely. Keep the speaker's meaning, their order of "
+    "events and their tone — an angry turn must still read as angry. Do not "
+    "summarise, do not answer, do not merge turns, do not add notes of your own.\n\n"
+    "A turn already in English is returned unchanged, word for word. Do not "
+    "paraphrase it and do not 'improve' it.\n\n"
+    "Leave Session IDs, version numbers, URLs and error strings exactly as written."
 )
 
 
@@ -838,23 +862,29 @@ def is_english(finding):
     Unknown counts as English: the field is only worth writing when it says
     something the agent cannot already read, and a blank `language` is far more
     likely to be a classification that came back thin than a ticket nobody could
-    read. Guessing wrong this way costs a translation nobody needed; the other way
-    puts a machine translation on an English ticket, over the top of the words the
-    customer actually chose.
+    read. Guessing wrong this way costs a transcript nobody needed; the other way
+    puts a machine translation over the top of words everyone could already read.
     """
     language = (finding.get("language") or "").strip().lower()
     return not language or language.startswith(("english", "en"))
 
 
-def requester_words(session, subdomain, ticket):
-    """The requester's own comments on one ticket, oldest first. None on any failure.
+def conversation_turns(session, subdomain, ticket):
+    """One ticket's public comments as turns, oldest first. None on any failure.
 
-    Their comments rather than the description, because the description is only the
-    first of them: a customer who wrote three times has two more the dialog shows
-    and the description does not. Filtered by `requester_id` for the same reason
-    relay.py filters by it — an agent's earlier English reply is text on the ticket
-    too, and translating it back would be nonsense.
+    Both sides, not just the requester's. A customer's second message is usually an
+    answer to a reply, and dropping the reply leaves "still broken" sitting under the
+    original complaint with nothing visible for it to be answering.
+
+    Who spoke is decided by `requester_id` — the same question relay.py asks of the
+    same ticket. Without it there is no way to label a turn, and a transcript that
+    guesses is worse than none: it would present the agent's own replies as the
+    customer's words, with no heading to disclaim them the way the dialog has.
     """
+    requester = ticket.get("requester_id")
+    if requester is None:
+        print(f"Note: #{ticket['id']} has no requester_id; skipping its transcript.")
+        return None
     url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket['id']}/comments.json"
     try:
         resp = request_with_retry(session, "GET", url, attempts=2,
@@ -870,28 +900,76 @@ def requester_words(session, subdomain, ticket):
     except ValueError as exc:
         print(f"Note: unreadable comments payload for #{ticket['id']} ({exc}).")
         return None
-    requester = ticket.get("requester_id")
-    bodies = [(c.get("body") or "").strip() for c in comments
-              if requester is None or c.get("author_id") == requester]
-    return "\n\n".join(b for b in bodies if b) or None
+    turns = []
+    for comment in comments:
+        if not comment.get("public"):
+            continue
+        body = (comment.get("body") or "").strip()
+        if not body:
+            continue
+        turns.append({
+            "index": len(turns),
+            "who": (CUSTOMER_TURN if comment.get("author_id") == requester
+                    else SUPPORT_TURN),
+            "when": stamp_minutes(comment.get("created_at")),
+            "body": body,
+        })
+    return turns or None
+
+
+def stamp_minutes(created_at):
+    """Zendesk's ISO timestamp as `2026-08-28 01:31 UTC`, or '' if unparseable.
+
+    Minutes, not seconds: this dates a turn for somebody reading a conversation, and
+    the extra precision is noise in front of every paragraph.
+    """
+    try:
+        when = datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ")
+    except (TypeError, ValueError):
+        return ""
+    return when.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def render_transcript(turns, translated):
+    """Turns plus their translations as the text that goes on the ticket.
+
+    Python owns the timestamps and the speaker labels rather than the model. Asked to
+    format the transcript itself, a model can drop a turn, merge two, or date one it
+    was never given — and every one of those is invisible in the output. Translating
+    is the only part that needs a model, so it is the only part it is given.
+
+    A turn the model did not return keeps its original text. Untranslated is a
+    degraded transcript; missing is a conversation that reads as if it never happened.
+    """
+    english = {}
+    for item in translated or []:
+        try:
+            english[int(item.get("index"))] = (item.get("english") or "").strip()
+        except (TypeError, ValueError):
+            continue
+    blocks = []
+    for turn in turns:
+        header = " ".join(part for part in (turn["when"], f'{turn["who"]}:') if part)
+        blocks.append(f'{header}\n{english.get(turn["index"]) or turn["body"]}')
+    return "\n\n".join(blocks)
 
 
 def write_english_field(session, subdomain, ticket_id, field_id, english):
-    """Put the rendering on the ticket. Returns whether Zendesk took it.
+    """Put the transcript on the ticket. Returns whether Zendesk took it.
 
-    One field overwritten, not a note appended: a customer who replies gets a fresh
-    rendering covering the whole conversation, and the ticket carries one current
-    English version rather than a chain of partial ones to read in order.
+    One field overwritten, not a note appended: a ticket carries one current English
+    version of the whole conversation rather than a chain of partial ones to read in
+    order.
     """
     url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}.json"
     payload = {"ticket": {"custom_fields": [{"id": field_id, "value": english}]}}
     try:
         resp = request_with_retry(session, "PUT", url, attempts=2, json=payload)
     except requests.RequestException as exc:
-        print(f"Note: could not write the English rendering to #{ticket_id} ({exc}).")
+        print(f"Note: could not write the English transcript to #{ticket_id} ({exc}).")
         return False
     if resp.status_code >= 400:
-        print(f"Note: #{ticket_id} rejected the English rendering "
+        print(f"Note: #{ticket_id} rejected the English transcript "
               f"({resp.status_code}).")
         return False
     return True
@@ -922,26 +1000,30 @@ def attach_english(session, subdomain, tickets, findings, model, field_id):
         ticket = by_id.get(finding.get("id"))
         if not ticket:
             continue
-        words = requester_words(session, subdomain, ticket)
-        if not words:
+        turns = conversation_turns(session, subdomain, ticket)
+        if not turns:
             continue
+        payload = json.dumps(
+            [{"index": t["index"], "speaker": t["who"], "text": t["body"]}
+             for t in turns], ensure_ascii=False)
         try:
             rendered = claude_cli_json(
-                model, "medium", ENGLISH_SYSTEM_PROMPT, ENGLISH_SCHEMA,
-                clip(words, DESCRIPTION_CHARS), ENGLISH_TIMEOUT_SECONDS,
-                f"the English rendering of #{ticket['id']}")
+                model, "medium", TRANSCRIPT_SYSTEM_PROMPT, TRANSCRIPT_SCHEMA,
+                clip(payload, TRANSCRIPT_INPUT_CHARS), ENGLISH_TIMEOUT_SECONDS,
+                f"the English transcript of #{ticket['id']}")
         except SystemExit as exc:
             # claude_cli_json exits on a failed call, which is right for the
             # classification it was written for and wrong here: one ticket nobody
             # can translate must not take the digest down with it.
             print(f"Note: could not render #{ticket['id']} in English ({exc}).")
             continue
-        english = clip(rendered.get("english"), ENGLISH_CHARS)
+        english = clip(render_transcript(turns, rendered.get("turns")),
+                       TRANSCRIPT_CHARS)
         if english and write_english_field(session, subdomain, ticket["id"],
                                            field_id, english):
             written += 1
     if written:
-        print(f"Wrote an English rendering to {written} ticket(s).")
+        print(f"Wrote an English transcript to {written} ticket(s).")
     return written
 
 

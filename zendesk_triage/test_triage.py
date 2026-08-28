@@ -1975,20 +1975,20 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class TestEnglishRendering(unittest.TestCase):
+class TestEnglishTranscript(unittest.TestCase):
     """The digest writes the English the reply dialog reads. It runs before the post
     because the Comment button only exists on a card the post creates."""
 
     def test_a_ticket_the_classifier_called_english_is_left_alone(self):
         """Translating English into English would put a machine's wording in front of
-        the agent in place of the words the customer actually chose."""
+        the agent in place of the words everyone could already read."""
         for language in ("English", "english", "en", "EN"):
             self.assertTrue(triage.is_english({"language": language}), language)
 
     def test_an_unknown_language_counts_as_english(self):
         """A blank `language` is far more likely to be a thin classification than a
         ticket nobody could read. Guessing this way wastes nothing; the other way
-        overwrites an English customer's words with a translation of them."""
+        overwrites words everyone could read with a translation of them."""
         for language in ("", None, "   "):
             self.assertTrue(triage.is_english({"language": language}), repr(language))
 
@@ -1996,12 +1996,115 @@ class TestEnglishRendering(unittest.TestCase):
         for language in ("German", "Spanish", "Japanese"):
             self.assertFalse(triage.is_english({"language": language}), language)
 
+    # ---- turns -------------------------------------------------------------
+
+    def turns(self, comments, requester_id=5):
+        class Resp:
+            status_code = 200
+            @staticmethod
+            def json():
+                return {"comments": comments}
+
+        with Patched(triage, request_with_retry=lambda *a, **k: Resp()):
+            return triage.conversation_turns(object(), "acme",
+                                             {"id": 1, "requester_id": requester_id})
+
+    def comment(self, body, author_id=5, public=True, created_at="2026-08-28T00:22:38Z"):
+        return {"body": body, "author_id": author_id, "public": public,
+                "created_at": created_at}
+
+    def test_both_sides_of_the_conversation_are_kept(self):
+        """A customer's second message is usually an answer to a reply. Dropping the
+        reply leaves "still broken" under the original complaint with nothing visible
+        for it to be answering."""
+        turns = self.turns([
+            self.comment("Ich komme nicht mehr rein."),
+            self.comment("Have you tried your recovery password?", author_id=7),
+            self.comment("Immer noch kaputt."),
+        ])
+        self.assertEqual([t["who"] for t in turns],
+                         ["Customer", "Support", "Customer"])
+        self.assertEqual([t["index"] for t in turns], [0, 1, 2])
+
+    def test_private_notes_are_left_out(self):
+        """Internal annotation, not conversation — and reply.py's own attribution
+        notes are among them, so their `[discord:…]` markers would reach the agent as
+        if the customer had written them."""
+        turns = self.turns([
+            self.comment("Ich komme nicht mehr rein."),
+            self.comment("Reply sent from Discord by Audric.\n\n[discord:123]",
+                         author_id=7, public=False),
+        ])
+        self.assertEqual(len(turns), 1)
+        self.assertNotIn("discord:123", turns[0]["body"])
+
+    def test_a_ticket_with_no_requester_is_skipped_rather_than_guessed(self):
+        """Without requester_id there is no way to label a turn, and a transcript that
+        guesses would present the agent's own replies as the customer's words — with
+        no heading to disclaim them the way the dialog has."""
+        self.assertIsNone(self.turns([self.comment("Es geht nicht.")],
+                                     requester_id=None))
+
+    def test_empty_comments_are_dropped(self):
+        turns = self.turns([self.comment("Es geht nicht."), self.comment("   ")])
+        self.assertEqual(len(turns), 1)
+
+    # ---- rendering ---------------------------------------------------------
+
+    def test_python_owns_the_timestamps_and_the_speaker_labels(self):
+        """Asked to format the transcript itself, a model can drop a turn, merge two,
+        or date one it was never given — and each is invisible in the output."""
+        turns = [{"index": 0, "who": "Customer", "when": "2026-08-28 00:22 UTC",
+                  "body": "Es geht nicht."},
+                 {"index": 1, "who": "Support", "when": "2026-08-28 01:31 UTC",
+                  "body": "Have you tried?"}]
+        got = triage.render_transcript(turns, [
+            {"index": 0, "english": "It does not work."},
+            {"index": 1, "english": "Have you tried?"},
+        ])
+        self.assertEqual(got,
+                         "2026-08-28 00:22 UTC Customer:\nIt does not work.\n\n"
+                         "2026-08-28 01:31 UTC Support:\nHave you tried?")
+
+    def test_a_turn_the_model_skipped_keeps_its_original_text(self):
+        """Untranslated is a degraded transcript. Missing is a conversation that reads
+        as if that turn never happened."""
+        turns = [{"index": 0, "who": "Customer", "when": "", "body": "Es geht nicht."},
+                 {"index": 1, "who": "Customer", "when": "", "body": "Immer noch."}]
+        got = triage.render_transcript(turns, [{"index": 0, "english": "Broken."}])
+        self.assertIn("Broken.", got)
+        self.assertIn("Immer noch.", got)
+
+    def test_a_scrambled_index_does_not_shift_every_later_turn(self):
+        """The model echoes indexes back. Matching by position instead would put one
+        speaker's words under another's name for the rest of the transcript."""
+        turns = [{"index": 0, "who": "Customer", "when": "", "body": "eins"},
+                 {"index": 1, "who": "Support", "when": "", "body": "zwei"}]
+        got = triage.render_transcript(turns, [{"index": 1, "english": "two"},
+                                               {"index": 0, "english": "one"}])
+        self.assertEqual(got, "Customer:\none\n\nSupport:\ntwo")
+
+    def test_an_unparseable_timestamp_leaves_the_turn_labelled(self):
+        self.assertEqual(triage.stamp_minutes("not a date"), "")
+        self.assertEqual(triage.stamp_minutes(None), "")
+        got = triage.render_transcript(
+            [{"index": 0, "who": "Customer", "when": "", "body": "x"}], [])
+        self.assertEqual(got, "Customer:\nx")
+
+    def test_the_stamp_is_minutes_not_seconds(self):
+        """This dates a turn for somebody reading a conversation; seconds are noise in
+        front of every paragraph."""
+        self.assertEqual(triage.stamp_minutes("2026-08-28T01:31:09Z"),
+                         "2026-08-28 01:31 UTC")
+
+    # ---- the run -----------------------------------------------------------
+
     def test_nothing_happens_until_the_field_exists(self):
         """The field is not in Zendesk yet. Until its id is configured the digest has
         to behave exactly as it did before — no comment fetches, no Claude calls, no
         writes."""
         calls = []
-        with Patched(triage, requester_words=lambda *a: calls.append(a),
+        with Patched(triage, conversation_turns=lambda *a: calls.append(a),
                      claude_cli_json=lambda *a, **k: calls.append(a)):
             written = triage.attach_english(object(), "acme", [{"id": 1}],
                                             [{"id": 1, "language": "German"}],
@@ -2018,6 +2121,15 @@ class TestEnglishRendering(unittest.TestCase):
                                   "claude-sonnet-5", field_id=42),
             0)
 
+    def test_a_run_that_posts_no_card_writes_nothing(self):
+        """--no-discord is the flag CI runs with. No post means no Comment button,
+        so a transcript written on that path is a write to a production ticket for a
+        dialog nobody can open. Guarded at the call site by `needs_discord`."""
+        source = inspect.getsource(triage.main)
+        call = source.index("attach_english(")
+        guard = source.rindex("if needs_discord:", 0, call)
+        self.assertNotIn("\n    ", source[guard:call].rstrip())
+
     def test_one_ticket_that_cannot_be_rendered_does_not_stop_the_digest(self):
         """claude_cli_json exits on a failed call, which is right for the
         classification it was written for. Here it would take down a digest that is
@@ -2027,7 +2139,8 @@ class TestEnglishRendering(unittest.TestCase):
 
         written = []
         with Patched(triage,
-                     requester_words=lambda *a: "Es geht nicht.",
+                     conversation_turns=lambda *a: [
+                         {"index": 0, "who": "Customer", "when": "", "body": "x"}],
                      claude_cli_json=explode,
                      write_english_field=lambda *a: written.append(a) or True):
             got = triage.attach_english(
@@ -2037,41 +2150,35 @@ class TestEnglishRendering(unittest.TestCase):
         self.assertEqual(got, 0)
         self.assertEqual(written, [])
 
-    def test_a_run_that_posts_no_card_writes_nothing(self):
-        """--no-discord is the flag CI runs with. No post means no Comment button,
-        so a rendering written on that path is a write to a production ticket for a
-        dialog nobody can open. Guarded at the call site by `needs_discord`."""
-        source = inspect.getsource(triage.main)
-        call = source.index("attach_english(")
-        guard = source.rindex("if needs_discord:", 0, call)
-        # Nothing between the guard and the call but the call itself.
-        self.assertNotIn("\n    ", source[guard:call].rstrip())
-
-    def test_the_rendering_is_written_to_the_configured_field(self):
+    def test_the_transcript_is_written_to_the_configured_field(self):
         puts = []
         with Patched(triage,
-                     requester_words=lambda *a: "Es geht nicht.",
-                     claude_cli_json=lambda *a, **k: {"english": "It does not work."},
+                     conversation_turns=lambda *a: [
+                         {"index": 0, "who": "Customer", "when": "2026-08-28 00:22 UTC",
+                          "body": "Es geht nicht."}],
+                     claude_cli_json=lambda *a, **k: {
+                         "turns": [{"index": 0, "english": "It does not work."}]},
                      write_english_field=lambda *a: puts.append(a) or True):
             got = triage.attach_english(
                 object(), "acme", [{"id": 1}, {"id": 2}],
                 [{"id": 1, "language": "German"}, {"id": 2, "language": "English"}],
                 "claude-sonnet-5", field_id=42)
         self.assertEqual(got, 1)
-        # The English one was never touched, and the German one carries the rendering.
-        self.assertEqual([(p[2], p[3], p[4]) for p in puts],
-                         [(1, 42, "It does not work.")])
+        # The English ticket was never touched; the German one carries the transcript.
+        self.assertEqual([(p[2], p[3]) for p in puts], [(1, 42)])
+        self.assertIn("Customer:", puts[0][4])
+        self.assertIn("It does not work.", puts[0][4])
 
     def test_a_ticket_with_no_matching_row_is_skipped(self):
         """--findings and a partial fetch both leave findings whose ticket was never
         loaded. There is nothing to read comments from, so there is nothing to do."""
         with Patched(triage,
-                     requester_words=lambda *a: "Es geht nicht.",
-                     claude_cli_json=lambda *a, **k: {"english": "x"},
+                     conversation_turns=lambda *a: [
+                         {"index": 0, "who": "Customer", "when": "", "body": "x"}],
+                     claude_cli_json=lambda *a, **k: {"turns": []},
                      write_english_field=lambda *a: True):
             self.assertEqual(
                 triage.attach_english(object(), "acme", [],
                                       [{"id": 99, "language": "German"}],
                                       "claude-sonnet-5", field_id=42),
                 0)
-

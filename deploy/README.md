@@ -137,10 +137,10 @@ ALLOWED_ROLE_IDS=
 
 # Optional, and read by both units. The numeric id of a multi-line text ticket
 # field in Zendesk; the digest renders every non-English ticket it is about to post
-# into English there, and the compose dialog shows that instead of the original.
-# Until this is set, neither half does anything and the dialog shows the customer's
-# own words. Settings -> Ticket Fields -> Multi-line text, then read the id off the
-# field's URL.
+# into English there — both sides of the conversation, timestamped — and the compose
+# dialog shows that instead of the original. Until this is set, neither half does
+# anything and the dialog shows the ticket's own comments. Settings -> Ticket Fields
+# -> Multi-line text, not customer-visible, then read the id off the field's URL.
 #ZENDESK_ENGLISH_FIELD_ID=
 
 # Uncomment to run the whole path and write nothing to Zendesk.

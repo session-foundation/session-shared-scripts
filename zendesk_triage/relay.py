@@ -297,8 +297,9 @@ def ticket_context(ticket, comments):
     if english:
         # The digest wrote this before the card carrying the button was posted, so a
         # ticket that got here has one whenever the field is configured and the
-        # customer did not already write in English.
-        heading = "**What they wrote** (translated)"
+        # customer did not already write in English. Both sides of the conversation,
+        # so a customer's "still broken" has the reply it is answering above it.
+        heading = "**The conversation so far** (English)"
         bodies = [english]
     elif requester is None:
         heading = "**On the ticket**"

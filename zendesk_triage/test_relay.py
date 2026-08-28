@@ -283,7 +283,7 @@ class TestTicketContext(unittest.TestCase):
         with Patched(relay.os, environ={"ZENDESK_ENGLISH_FIELD_ID": "42"}):
             got = self.context([comment("Es geht nicht mehr.")], ticket=ticket)
         self.assertIn("It stopped working.", got)
-        self.assertIn("translated", got)
+        self.assertIn("The conversation so far", got)
         self.assertNotIn("Es geht nicht mehr.", got)
 
     def test_without_the_field_configured_nothing_changes(self):
@@ -296,7 +296,7 @@ class TestTicketContext(unittest.TestCase):
             got = self.context([comment("Es geht nicht mehr.")], ticket=ticket)
         self.assertIn("Es geht nicht mehr.", got)
         self.assertNotIn("It stopped working.", got)
-        self.assertNotIn("translated", got)
+        self.assertNotIn("The conversation so far", got)
 
     def test_an_empty_field_falls_back_rather_than_showing_a_blank_dialog(self):
         """Zendesk returns the field on every ticket once it exists, with a null
@@ -308,7 +308,7 @@ class TestTicketContext(unittest.TestCase):
             with Patched(relay.os, environ={"ZENDESK_ENGLISH_FIELD_ID": "42"}):
                 got = self.context([comment("Es geht nicht mehr.")], ticket=ticket)
             self.assertIn("Es geht nicht mehr.", got, f"value={value!r}")
-            self.assertNotIn("translated", got, f"value={value!r}")
+            self.assertNotIn("The conversation so far", got, f"value={value!r}")
 
     def test_another_custom_field_is_not_mistaken_for_the_rendering(self):
         """Tickets carry many custom fields. Matching anything but the configured id
