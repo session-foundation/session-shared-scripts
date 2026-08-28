@@ -1790,6 +1790,25 @@ class TestClaudeCli(unittest.TestCase):
         self.assertEqual(kwargs["input"], "ticket text")
         self.assertNotIn("ticket text", command)
 
+    def test_an_anthropic_key_in_the_environment_cannot_outrank_the_login(self):
+        """The CLI authenticates as whatever `claude` is logged in as, and any of
+        these takes precedence over it. A box that once ran the API backend still has
+        the key in its EnvironmentFile, and inheriting it there swapped the credential
+        for every translation until the CLI refused outright."""
+        with Patched(os, environ={"ANTHROPIC_API_KEY": "sk-dead",
+                                  "ANTHROPIC_AUTH_TOKEN": "t",
+                                  "ANTHROPIC_BASE_URL": "https://elsewhere",
+                                  "CLAUDE_CODE_OAUTH_TOKEN": "o",
+                                  "PATH": "/usr/bin", "HOME": "/home/zendesk"}):
+            self.run_cli()
+        child_env = self.calls[0][1]["env"]
+        for name in triage.CLAUDE_AUTH_OVERRIDES:
+            self.assertNotIn(name, child_env)
+        # Everything else still reaches it: HOME is where the login lives, and PATH is
+        # how a per-user install is found at all.
+        self.assertEqual(child_env["HOME"], "/home/zendesk")
+        self.assertEqual(child_env["PATH"], "/usr/bin")
+
     def test_nothing_outside_the_call_can_change_what_the_model_is_told(self):
         """--tools "" only removes the tools. Without --setting-sources "" a
         .claude/settings.json beside this file, or one in the service account's home,

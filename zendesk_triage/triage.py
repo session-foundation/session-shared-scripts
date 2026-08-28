@@ -147,6 +147,17 @@ DEFAULT_BATCH_SIZE = 400
 # The classifier is the local Claude Code CLI rather than the Anthropic SDK, so
 # authentication is whatever `claude` is already logged in as and no key lives here.
 CLAUDE_CLI = "claude"
+
+# Dropped from the CLI's environment. It authenticates as whatever `claude` is logged
+# in as, and any of these silently outranks that login — a box that once ran the API
+# backend still has the key in its EnvironmentFile, where it is now dead config that
+# would otherwise pick the credential for every classification and translation.
+CLAUDE_AUTH_OVERRIDES = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+)
 # A 400-ticket chunk at medium effort is minutes of work. Generous, because being
 # killed mid-batch costs the whole chunk — and bounded, because a wedged CLI would
 # otherwise hold the digest until the unit's own TimeoutStartSec fires.
@@ -937,9 +948,11 @@ def claude_cli_json(model, effort, system_prompt, schema, prompt, timeout, label
         "--setting-sources", "",
         "--tools", "",
     ]
+    child_env = {name: value for name, value in os.environ.items()
+                 if name not in CLAUDE_AUTH_OVERRIDES}
     try:
         done = subprocess.run(command, input=prompt, capture_output=True, text=True,
-                              check=False, timeout=timeout)
+                              check=False, timeout=timeout, env=child_env)
     except FileNotFoundError:
         sys.exit(f"{CLAUDE_CLI} is not on PATH. {label} runs through the Claude Code "
                  f"CLI, so it has to be installed and logged in.")
