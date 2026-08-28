@@ -990,18 +990,28 @@ def attach_english(session, subdomain, tickets, findings, model, field_id):
     Never raises: this is enrichment, and a digest that fails to post because a
     translation failed would be a worse trade than a dialog showing German.
     """
-    if not (field_id and session):
+    if not session:
+        return 0
+    if not field_id:
+        print(f"No {ENGLISH_FIELD_ENV} set; no English transcripts written.")
+        return 0
+    candidates = [f for f in findings if not is_english(f)]
+    if not candidates:
+        print(f"No non-English tickets among the {len(findings)} being posted; "
+              f"no English transcripts to write.")
         return 0
     by_id = {t.get("id"): t for t in tickets}
     written = 0
-    for finding in findings:
-        if is_english(finding):
-            continue
+    for finding in candidates:
         ticket = by_id.get(finding.get("id"))
         if not ticket:
+            # --findings, or a fetch that returned the classification but not the row.
+            print(f"Note: #{finding.get('id')} was classified {finding.get('language')!r} "
+                  f"but never fetched; no transcript.")
             continue
         turns = conversation_turns(session, subdomain, ticket)
         if not turns:
+            print(f"Note: #{ticket['id']} has no public comments to render.")
             continue
         payload = json.dumps(
             [{"index": t["index"], "speaker": t["who"], "text": t["body"]}
@@ -1022,8 +1032,11 @@ def attach_english(session, subdomain, tickets, findings, model, field_id):
         if english and write_english_field(session, subdomain, ticket["id"],
                                            field_id, english):
             written += 1
-    if written:
-        print(f"Wrote an English transcript to {written} ticket(s).")
+    # Printed even at zero. A run that wrote nothing and a run that never reached
+    # this step read identically in the journal otherwise, which is the one thing
+    # somebody checking whether the feature is on actually needs to tell apart.
+    print(f"Wrote an English transcript to {written} of {len(candidates)} "
+          f"non-English ticket(s).")
     return written
 
 
