@@ -1,0 +1,20 @@
+[Unit]
+Description=Report a failed Zendesk unit to Discord
+Documentation=https://github.com/session-foundation/session-shared-scripts
+
+[Service]
+Type=oneshot
+User=zendesk
+Group=zendesk
+EnvironmentFile=/etc/zendesk/env
+
+# %i is the failing unit, passed by its own OnFailure=. A script rather than a shell
+# one-liner because the message needs JSON encoding, and quoting that through
+# systemd -> sh -> jq is the kind of thing that works until a unit name has a
+# character nobody thought about.
+ExecStart=/opt/zendesk/venv/bin/python /opt/zendesk/deploy/alert.py %i
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes

@@ -1,0 +1,53 @@
+[Unit]
+Description=Zendesk positive-review resolver, then the triage digest
+Documentation=https://github.com/session-foundation/session-shared-scripts
+After=network-online.target
+Wants=network-online.target
+OnFailure=zendesk-alert@%n.service
+
+[Service]
+Type=oneshot
+User=zendesk
+Group=zendesk
+WorkingDirectory=/opt/zendesk/zendesk_triage
+EnvironmentFile=/etc/zendesk/env
+
+# Two ExecStart lines, in this order, rather than two units: a solved review leaves
+# the digest's `status<solved` query, so resolving first is what stops the digest
+# re-counting reviews that were just closed. oneshot runs them sequentially.
+#
+# The resolver is wrapped rather than prefixed with `-`. A bare `-` does keep its
+# failure from blocking the digest, but it also hides it completely: systemd treats
+# the unit as successful, so OnFailure never fires and a resolver broken for weeks
+# looks exactly like one with nothing to do. The `||` reports it and still lets the
+# digest run. If the alert itself also fails, the shell exits non-zero and the unit's
+# own OnFailure catches that.
+ExecStart=/bin/sh -c '/opt/zendesk/venv/bin/python resolve_reviews.py --apply || /opt/zendesk/venv/bin/python /opt/zendesk/deploy/alert.py resolve_reviews.py zendesk-digest.service'
+ExecStart=/opt/zendesk/venv/bin/python triage.py --window-hours 72 \
+    --state /var/lib/zendesk/seen.json
+
+# Covers the worst case rather than the normal one. The resolver polls each bulk job
+# for up to JOB_TIMEOUT_SECONDS (300s) and a full 1000-ticket run is ten batches, so
+# it alone can legitimately take 50 minutes; the digest adds a few more. At 20min a
+# backlog-draining run would have been killed mid-flight, taking the digest with it.
+TimeoutStartSec=90min
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+# See zendesk-relay.service: the classification shells out to the Claude Code CLI,
+# which reads its login from $HOME, and ProtectHome=yes would hide it.
+ProtectHome=tmpfs
+BindPaths=/home/zendesk
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+# /var/lib/zendesk holds the dedup state — losing it re-reports the window once:
+# noisy, never wrong, so it needs persisting rather than backing up. /home/zendesk is
+# where the Claude Code CLI keeps its credentials and cache.
+ReadWritePaths=/var/lib/zendesk /home/zendesk
+StateDirectory=zendesk

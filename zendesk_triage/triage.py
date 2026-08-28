@@ -22,19 +22,26 @@ Categories Claude sorts each ticket into:
     bug_report | low_star_review | legal_request | security_or_legislation
     | question | feature_request | other
 
-Classification goes through the Anthropic API, with structured outputs enforcing
-SCHEMA. --findings skips it entirely and renders findings produced elsewhere.
+Classification is driven by the local Claude Code CLI (`claude --print`), with
+--json-schema enforcing SCHEMA exactly as the API's structured outputs did.
+--findings skips it entirely and renders findings produced elsewhere.
 
 Config (env vars, or flags for local runs):
     ZENDESK_SUBDOMAIN     e.g. "mycompany"  -> https://mycompany.zendesk.com
     ZENDESK_EMAIL         agent email for API token auth
     ZENDESK_API_TOKEN     Zendesk API token
-    ANTHROPIC_API_KEY     Claude API key (read by the SDK itself)
-    ZENDESK_DISCORD_WEBHOOK_URL
-                          Discord incoming webhook for the triage channel, which is
-                          its own webhook rather than the shared DISCORD_WEBHOOK_URL
-                          the failure notifier uses (not needed with --dry-run
-                          or --no-discord)
+                          Classification runs through the locally installed
+                          Claude Code CLI, which supplies its own credentials,
+                          so no Claude key lives in this deployment at all.
+    DISCORD_BOT_TOKEN     Bot token for the app that answers the digest's Comment
+                          buttons (see relay.py). Every ticket gets one, and an
+                          incoming webhook cannot send interactive components —
+                          only an application can — so this posts as the bot
+                          (not needed with --dry-run or --no-discord)
+    ZENDESK_DISCORD_CHANNEL_ID
+                          Channel the digest posts into. The bot needs Send Messages
+                          there. Replaces ZENDESK_DISCORD_WEBHOOK_URL, which
+                          resolve_reviews.py still uses for its tally.
     ZENDESK_QUERY         (optional) Zendesk search query; see DEFAULT_QUERY
     ZENDESK_TRIAGE_MODEL  (optional) Claude model id or alias; defaults to
                           claude-opus-5. Set it to override, e.g. `sonnet` for a
@@ -66,13 +73,13 @@ import json
 import math
 import os
 import re
+import subprocess
 import sys
 import textwrap
 import time
 from datetime import datetime, timedelta, timezone
 from functools import partial
 
-import anthropic
 import requests
 
 # Open, pending, new, and on-hold tickets, newest first. Broad on purpose: we
@@ -137,7 +144,24 @@ DESCRIPTION_CHARS = 1500  # per-ticket description sent to Claude (triage only)
 # from the same output budget. 400 keeps a chunk far under the model's 128K output
 # ceiling; batches larger than this are split rather than truncated.
 DEFAULT_BATCH_SIZE = 400
-MAX_OUTPUT_TOKENS = 128000
+# The classifier is the local Claude Code CLI rather than the Anthropic SDK, so
+# authentication is whatever `claude` is already logged in as and no key lives here.
+CLAUDE_CLI = "claude"
+
+# Dropped from the CLI's environment. It authenticates as whatever `claude` is logged
+# in as, and any of these silently outranks that login — a box that once ran the API
+# backend still has the key in its EnvironmentFile, where it is now dead config that
+# would otherwise pick the credential for every classification and translation.
+CLAUDE_AUTH_OVERRIDES = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+)
+# A 400-ticket chunk at medium effort is minutes of work. Generous, because being
+# killed mid-batch costs the whole chunk — and bounded, because a wedged CLI would
+# otherwise hold the digest until the unit's own TimeoutStartSec fires.
+CLAUDE_TIMEOUT_SECONDS = 1800
 
 # ---- Taxonomy --------------------------------------------------------------
 #
@@ -488,9 +512,11 @@ def fetch_total_unsolved(session, subdomain, query=BACKLOG_QUERY):
 #
 # Maps ticket id -> {requester_updated_at, last_reported}. A ticket is re-reported
 # only if the requester has touched it since we last showed it, so neither the
-# overlapping window nor our own replies repost yesterday's tickets. The state lives outside the repo
-# (CI restores it from the Actions cache), so every read degrades gracefully: a
-# missing or corrupt file just means everything looks new.
+# overlapping window nor our own replies repost yesterday's tickets. The state lives
+# outside the repo — /var/lib/zendesk on the host — and every read degrades
+# gracefully: a missing or corrupt file just means everything looks new. That
+# tolerance was written for a best-effort CI cache and is worth keeping now that the
+# file is a real one, because it is what makes losing it merely noisy.
 
 
 def empty_state():
@@ -790,7 +816,7 @@ def compact_ticket(ticket):
 
 
 def resolve_api_model(model):
-    """Map a shorthand model name onto the id the Anthropic API expects.
+    """Map a shorthand model name onto the id `claude --model` expects.
 
     Anything that isn't a known shorthand passes through untouched, so a pinned id
     (`claude-opus-4-8`) or a model newer than this table still works.
@@ -886,35 +912,104 @@ def analyze_in_chunks(analyzer, compact_tickets, batch_size):
     return findings
 
 
-def analyze(client, model, effort, compact_tickets):
-    prompt = build_analysis_prompt(compact_tickets)
-    with client.messages.stream(
-        model=model,
-        max_tokens=MAX_OUTPUT_TOKENS,
-        thinking={"type": "adaptive"},
-        output_config={
-            "format": {"type": "json_schema", "schema": SCHEMA},
-            "effort": effort,
-        },
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
-    ) as stream:
-        message = stream.get_final_message()
+def claude_cli_json(model, effort, system_prompt, schema, prompt, timeout, label):
+    """Run one schema-enforced Claude Code request. Returns the parsed payload.
 
-    if message.stop_reason == "refusal":
-        sys.exit("Claude refused to process the batch.")
-    if message.stop_reason == "max_tokens":
-        # Structured output truncated mid-JSON: json.loads below would fail with a
-        # baffling parse error, so say what actually went wrong.
-        sys.exit(
-            f"Claude hit the {MAX_OUTPUT_TOKENS} output-token limit on a batch of "
-            f"{len(compact_tickets)} tickets, so the JSON is incomplete. "
-            f"Lower --batch-size (currently splitting at {DEFAULT_BATCH_SIZE})."
-        )
-    text = next((b.text for b in message.content if b.type == "text"), None)
-    if not text:
-        sys.exit("Claude returned no structured output.")
-    return tickets_from_payload(json.loads(text), "Claude")
+    Shared by the digest's classification and reply.py's translation: same flags,
+    same error semantics, one place to keep them right.
+
+    `--json-schema` enforces the schema the way the API's structured outputs did.
+    Authentication is whatever `claude` is already logged in as, so neither caller
+    holds a Claude key.
+
+    The prompt goes over **stdin**, not argv. Linux caps one argument at 128KB
+    (MAX_ARG_STRLEN) and a full --batch-size 400 chunk is around 685KB, so passing it
+    as an argument would work on a normal day and die with "Argument list too long"
+    on a backfill. It is also the more private channel: argv is world-readable
+    through /proc, and these prompts carry ticket text.
+    """
+    command = [
+        CLAUDE_CLI, "--print",
+        "--model", model,
+        "--effort", effort,
+        "--system-prompt", system_prompt,
+        "--json-schema", json.dumps(schema),
+        "--output-format", "json",
+        "--no-session-persistence",
+        # Nothing outside this call may change what the model is told. The two flags
+        # cover different halves of that and neither implies the other:
+        # --setting-sources "" drops the user and project settings — and the hooks
+        # inside them — while --tools "" removes the tools. Without the first, a
+        # .claude/settings.json next to this file, or one in the service account's
+        # home, silently joins every classification and every translation.
+        #
+        # --tools stays last: it is variadic, so it swallows any following argument
+        # that does not begin with a dash.
+        "--setting-sources", "",
+        "--tools", "",
+    ]
+    child_env = {name: value for name, value in os.environ.items()
+                 if name not in CLAUDE_AUTH_OVERRIDES}
+    try:
+        done = subprocess.run(command, input=prompt, capture_output=True, text=True,
+                              check=False, timeout=timeout, env=child_env)
+    except FileNotFoundError:
+        sys.exit(f"{CLAUDE_CLI} is not on PATH. {label} runs through the Claude Code "
+                 f"CLI, so it has to be installed and logged in.")
+    except subprocess.TimeoutExpired:
+        sys.exit(f"{CLAUDE_CLI} did not finish {label} within {timeout}s.")
+
+    if done.returncode != 0:
+        # stderr, not stdout: a non-zero exit means there is no JSON to read. Clipped,
+        # because the CLI could echo input back and this log must not carry it.
+        sys.exit(f"{CLAUDE_CLI} exited {done.returncode} on {label}: "
+                 f"{(done.stderr or '').strip()[:300]}")
+    try:
+        response = json.loads(done.stdout)
+    except ValueError as exc:
+        sys.exit(f"{CLAUDE_CLI} returned output that is not JSON on {label} ({exc}).")
+    if not isinstance(response, dict):
+        sys.exit(f"{CLAUDE_CLI} returned {type(response).__name__} on {label}, "
+                 f"expected an object.")
+    # is_error and subtype are the CLI's signals for success; stop_reason deliberately
+    # is not — a successful structured-output run reports "tool_use", because that is
+    # how the schema is enforced underneath.
+    if response.get("is_error") or response.get("subtype") != "success":
+        sys.exit(f"{CLAUDE_CLI} reported failure on {label} "
+                 f"(subtype={response.get('subtype')!r}, "
+                 f"api_error_status={response.get('api_error_status')!r}).")
+    # stop_reason is worth reading for this one value. There is no --max-tokens to
+    # raise, so an answer too long to finish comes back as JSON that stops mid-object,
+    # and the parse below would report a baffling syntax error for something whose
+    # only fix is a smaller batch.
+    if response.get("stop_reason") == "max_tokens":
+        sys.exit(f"{CLAUDE_CLI} ran out of output tokens on {label}, so the JSON is "
+                 f"incomplete. Lower --batch-size (currently splitting at "
+                 f"{DEFAULT_BATCH_SIZE}).")
+
+    # structured_output is the object --json-schema produced, so it beats re-parsing
+    # the `result` string: one less decode, and immune to prose alongside the JSON.
+    payload = response.get("structured_output")
+    if payload is not None:
+        return payload
+    raw = response.get("result")
+    if not raw:
+        sys.exit(f"{CLAUDE_CLI} returned neither structured_output nor a result "
+                 f"on {label}.")
+    try:
+        return json.loads(raw)
+    except ValueError as exc:
+        sys.exit(f"{CLAUDE_CLI} result on {label} is not the JSON the schema asked "
+                 f"for ({exc}).")
+
+
+def analyze(model, effort, compact_tickets):
+    """Classify a batch through the Claude Code CLI. Returns findings."""
+    payload = claude_cli_json(
+        model, effort, SYSTEM_PROMPT, SCHEMA,
+        build_analysis_prompt(compact_tickets), CLAUDE_TIMEOUT_SECONDS,
+        f"a batch of {len(compact_tickets)} tickets")
+    return tickets_from_payload(payload, "Claude")
 
 
 # ---- Discord rendering -----------------------------------------------------
@@ -963,6 +1058,38 @@ COLLAPSED_CATEGORY = "abuse_report"
 # Character budget for the links on that line, so a day of nothing but abuse reports
 # can't push it past MAX_MESSAGE_CHARS. Past it the rest are counted, not linked.
 COLLAPSED_LINKS_CHARS = 900
+
+# ---- Components V2 ---------------------------------------------------------
+#
+# The digest is posted by the app rather than through an incoming webhook, because a
+# plain webhook cannot carry interactive components at all, and each ticket needs its
+# own Comment button. Embeds cannot do this either: components attach to the message,
+# not to an embed, so ten embeds would sit above ten anonymous buttons. A Section
+# owns its accessory, which is what makes "this button, that ticket" unambiguous.
+#
+# https://docs.discord.com/developers/components/reference
+COMPONENTS_V2_FLAG = 1 << 15
+CONTAINER = 17
+SECTION = 9
+TEXT_DISPLAY = 10
+SEPARATOR = 14
+BUTTON = 2
+BUTTON_SECONDARY = 2
+
+# Discord allows 40 components in one message. A ticket costs three — its Section,
+# the Text Display inside it, and the button hanging off it — and the header block
+# costs two more, so the ceiling is twelve. Ten leaves room for the accounting lines
+# the header grows on a busy day.
+MAX_SECTIONS_PER_MESSAGE = 10
+COMMENT_BUTTON_LABEL = "Comment"
+# Discord's ceiling on all the text in one Components V2 message.
+MAX_MESSAGE_TEXT_CHARS = 4000
+# What the ticket lines and the header may spend of it. The accessory labels are text
+# in the message as much as the lines are, so they come off the budget rather than
+# being left to a margin nobody wrote down. Ten sections of clipped ticket text come
+# to roughly 3,500, so this is a guard rather than a routine constraint.
+MAX_COMPONENT_CHARS = (MAX_MESSAGE_TEXT_CHARS
+                       - MAX_SECTIONS_PER_MESSAGE * len(COMMENT_BUTTON_LABEL))
 
 
 def ticket_url(subdomain, ticket_id):
@@ -1018,6 +1145,26 @@ def build_ticket_line(finding, subdomain, is_update=False):
     if reported:
         parts.append(f"Reported: `{reported}`")
     return " | ".join(parts)
+
+
+def build_ticket_section(text, ticket_id):
+    """One ticket as a card carrying its own Comment button.
+
+    A Section owns its accessory, and that ownership is the whole point: components
+    attach to a message rather than to an embed, so ten embeds would sit above ten
+    buttons the reader has to match back to tickets by eye.
+    """
+    return {
+        "type": SECTION,
+        "components": [{"type": TEXT_DISPLAY, "content": text}],
+        "accessory": {
+            "type": BUTTON,
+            "style": BUTTON_SECONDARY,
+            "label": COMMENT_BUTTON_LABEL,
+            # Parsed by relay.py, which answers it with the compose dialog.
+            "custom_id": f"comment:{ticket_id}",
+        },
+    }
 
 
 def build_collapsed_line(collapsed, subdomain):
@@ -1112,22 +1259,37 @@ def build_header(findings, highlights, stats=None):
     return "\n".join(lines)
 
 
-def chunk_entries(entries):
-    """Group (line, ticket_ids) pairs into messages within MAX_MESSAGE_CHARS.
+def chunk_entries(entries, max_items=MAX_SECTIONS_PER_MESSAGE,
+                  max_chars=MAX_COMPONENT_CHARS, first_used=0):
+    """Group (line, ticket_ids) pairs into messages within Discord's budgets.
 
-    Lines are joined with a newline, so each one after the first costs a character
-    more than its own length. An entry longer than the cap still gets its own message
-    rather than being dropped; the pieces are pre-clipped so that shouldn't arise.
+    Two limits rather than one, and whichever binds first splits the message: a
+    Components V2 message allows 40 components, of which a ticket costs three, and a
+    character budget that clipped lines rarely approach. Sections are separate
+    components rather than joined text, so unlike the old plain-content digest
+    nothing is spent on the newlines between them.
+
+    `first_used` is what the caller has already spent on the first message before any
+    ticket goes in — the header. Without it the header rides on top of a full budget
+    of ticket lines, and a busy day's accounting lines are enough to put message one
+    over the limit.
+
+    An entry longer than the character budget still gets its own message rather than
+    being dropped; the pieces are pre-clipped so that shouldn't arise.
+
+    Entries are passed through, not rebuilt, so the caller can still tell which one
+    it is looking at by identity — build_messages needs that to find the collapsed
+    line again once its entry is somewhere inside a chunk.
     """
-    chunks, current, current_chars = [], [], 0
-    for text, ids in entries:
-        projected = current_chars + len(text) + (1 if current else 0)
-        if current and projected > MAX_MESSAGE_CHARS:
+    chunks, current, current_chars = [], [], first_used
+    for entry in entries:
+        text, _ = entry
+        if current and (len(current) >= max_items
+                        or current_chars + len(text) > max_chars):
             chunks.append(current)
             current, current_chars = [], 0
-            projected = len(text)
-        current.append((text, ids))
-        current_chars = projected
+        current.append(entry)
+        current_chars += len(text)
     if current:
         chunks.append(current)
     return chunks
@@ -1173,37 +1335,96 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
     if omitted:
         header += (f"\nShowing the top **{len(shown)}** of "
                    f"**{len(shown) + len(omitted)}** worth looking into.")
-    entries = [(header, header_ids)]
-    entries += [
+    entries = [
         (build_ticket_line(f, subdomain, is_update=f.get("id") in updated_ids),
          {f.get("id")})
         for f in shown
     ]
     # Last, under the individual tickets: lowest position for the lowest priority.
+    collapsed_entry = None
     if collapsed:
-        entries.append((build_collapsed_line(collapsed, subdomain), collapsed_ids))
+        collapsed_entry = (build_collapsed_line(collapsed, subdomain), collapsed_ids)
+        entries.append(collapsed_entry)
 
     messages, coverage = [], []
-    for chunk in chunk_entries(entries):
-        messages.append({"content": "\n".join(text for text, _ in chunk)})
+    # A quiet day still owes the channel the header — chunk_entries has nothing to
+    # chunk when no ticket is worth looking into, so seed one empty chunk.
+    # The header only lands on message one, so only message one's budget pays for
+    # it. chunk_entries resets to zero for every chunk after the first.
+    chunks = chunk_entries(entries, first_used=len(header)) or [[]]
+    for index, chunk in enumerate(chunks):
+        blocks = []
         covered = set()
-        for _, ids in chunk:
+        if index == 0:
+            blocks.append({"type": TEXT_DISPLAY, "content": header})
+            if chunk:
+                blocks.append({"type": SEPARATOR})
+            # The header accounts for every classified ticket except the highlights
+            # that didn't fit; those are covered by no message and stay eligible.
+            covered |= header_ids
+        for entry in chunk:
+            text, ids = entry
+            # The collapsed line stands for every abuse report at once, so there is no
+            # single ticket to comment on — and a group nobody can act on is the last
+            # thing that should offer a reply button. Plain text, no accessory.
+            #
+            # Asked by identity rather than by comparing id sets: matching on the ids
+            # happened to work only because a collapsed ticket never also appears as
+            # its own line, which is a fact about build_messages and not about what
+            # this branch is trying to decide.
+            if entry is collapsed_entry:
+                blocks.append({"type": TEXT_DISPLAY, "content": text})
+            else:
+                blocks.append(build_ticket_section(text, next(iter(ids))))
             covered |= ids
+        messages.append({
+            "flags": COMPONENTS_V2_FLAG,
+            "components": [{"type": CONTAINER, "components": blocks}],
+        })
         coverage.append(covered)
     return messages, coverage
 
 
-def post_to_discord(session, webhook_url, messages):
+def discord_bot_session(token):
+    """A session authorized as the application, for posting the digest.
+
+    The digest carries a Comment button per ticket, and an incoming webhook cannot
+    send interactive components at all — only an application can. That is why the
+    digest posts to a channel as the bot rather than through the webhook the
+    positive-review tally still uses.
+    """
+    session = requests.Session()
+    session.headers["Authorization"] = f"Bot {token}"
+    return session
+
+
+def channel_messages_url(channel_id):
+    return f"https://discord.com/api/v10/channels/{channel_id}/messages"
+
+
+def post_to_discord(session, url, messages):
     """POST each message in order; return how many Discord accepted.
+
+    Transport-agnostic on purpose: the digest passes a bot session and a channel
+    URL, while resolve_reviews passes a bare session and an incoming webhook.
 
     Stops at the first failure and returns the accepted count instead of exiting, so
     the caller can record the tickets that did land before signalling the failure —
     otherwise a failure on message 3 of 3 reposts messages 1 and 2 on the next run.
     """
     for index, payload in enumerate(messages):
-        resp = request_with_retry(session, "POST", webhook_url, json=payload)
+        try:
+            resp = request_with_retry(session, "POST", url, json=payload)
+        except requests.RequestException as exc:
+            # request_with_retry re-raises once its budget is spent. Letting that
+            # propagate would skip save_state entirely, so the messages that already
+            # landed would be reposted on the next run — the exact thing returning a
+            # count exists to prevent.
+            print(f"Discord unreachable on message {index + 1}/{len(messages)} "
+                  f"({exc}).")
+            return index
         if resp.status_code >= 400:
-            print(f"Discord webhook failed on message {index + 1}/{len(messages)} "
+            print(f"Discord rejected message {index + 1}/{len(messages)} "
                   f"({resp.status_code}): {resp.text[:300]}")
             return index
     return len(messages)
@@ -1214,7 +1435,10 @@ def main():
     parser.add_argument("--subdomain", help="Zendesk subdomain (else ZENDESK_SUBDOMAIN).")
     parser.add_argument("--email", help="Zendesk agent email (else ZENDESK_EMAIL).")
     parser.add_argument("--api-token", help="Zendesk API token (else ZENDESK_API_TOKEN).")
-    parser.add_argument("--webhook", help="Discord webhook URL (else ZENDESK_DISCORD_WEBHOOK_URL).")
+    parser.add_argument("--bot-token",
+                        help="Discord bot token (else DISCORD_BOT_TOKEN). The digest's\n"
+                             "Comment buttons mean it must post as the app, not a webhook.")
+    parser.add_argument("--channel", help="Discord channel id (else ZENDESK_DISCORD_CHANNEL_ID).")
     parser.add_argument("--query", help="Zendesk search query (else ZENDESK_QUERY, else default). "
                                         "Takes precedence over --window-hours.")
     parser.add_argument("--window-hours", type=int, metavar="N",
@@ -1264,8 +1488,12 @@ def main():
     # Subdomain is always needed: it builds the ticket links in the Discord payload.
     subdomain = get_env("ZENDESK_SUBDOMAIN", args.subdomain)
     # A dump exits before rendering anything, so it never needs the webhook either.
-    needs_webhook = not (args.dry_run or args.no_discord or args.dump_batch)
-    webhook = get_env("ZENDESK_DISCORD_WEBHOOK_URL", args.webhook, required=needs_webhook)
+    # Resolved up front, before anything is fetched or classified: a missing
+    # credential should stop the run rather than have it spend tokens on a digest it
+    # cannot deliver. A dump exits before rendering, so it never needs them either.
+    needs_discord = not (args.dry_run or args.no_discord or args.dump_batch)
+    bot_token = get_env("DISCORD_BOT_TOKEN", args.bot_token, required=needs_discord)
+    channel_id = get_env("ZENDESK_DISCORD_CHANNEL_ID", args.channel, required=needs_discord)
     model = args.model or os.environ.get("ZENDESK_TRIAGE_MODEL") or DEFAULT_MODEL
 
     stats = {}
@@ -1359,8 +1587,7 @@ def main():
             print("Classify it, then: --findings <path> --dry-run")
             return
 
-        client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
-        analyzer = partial(analyze, client, resolve_api_model(model), args.effort)
+        analyzer = partial(analyze, resolve_api_model(model), args.effort)
         findings = analyze_in_chunks(analyzer, compact, args.batch_size)
 
         # Keep only findings whose id maps to a fetched ticket, in case of drift.
@@ -1408,7 +1635,8 @@ def main():
               f"next run.")
         return
 
-    posted = post_to_discord(requests.Session(), webhook, messages)
+    posted = post_to_discord(discord_bot_session(bot_token),
+                             channel_messages_url(channel_id), messages)
     print(f"Posted {posted} of {len(messages)} Discord message(s).")
 
     # Record only tickets covered by messages Discord actually accepted, so a partial

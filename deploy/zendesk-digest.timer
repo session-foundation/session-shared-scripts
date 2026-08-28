@@ -1,0 +1,25 @@
+[Unit]
+Description=Run the Zendesk digest on weekday mornings
+Documentation=https://github.com/session-foundation/session-shared-scripts
+
+[Timer]
+# 10:00 where the people reading the digest are, tracking daylight saving: 00:00 UTC
+# in winter, 23:00 UTC the previous day under AEDT. The cron this replaces had to pin
+# UTC+10 year-round and drift an hour, because GitHub cron is UTC-only; a named zone
+# has no such constraint and keeps the day-of-week local too.
+#
+# The timezone belongs in the expression: there is no Timezone= key in [Timer], and
+# systemd *ignores* one silently, which would leave this firing at 10:00 in whatever
+# the host is set to. Check any change with:
+#     systemd-analyze calendar "Mon..Fri 10:00 Australia/Melbourne"
+OnCalendar=Mon..Fri 10:00 Australia/Melbourne
+# A machine that was asleep or down at 10:00 still gets its digest, once, on the next
+# boot. The old GitHub schedule silently skipped instead, and the 72h window exists
+# partly to paper over exactly that.
+Persistent=yes
+# Nothing else contends for the API, but a few seconds of jitter keeps the digest from
+# landing at the same instant as every other timer on the box.
+RandomizedDelaySec=2min
+
+[Install]
+WantedBy=timers.target
