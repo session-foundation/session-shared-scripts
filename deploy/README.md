@@ -286,9 +286,10 @@ live here only, so recovery means fixing the host rather than failing over.
 
 What that costs, in order of how much it matters:
 
-- **Replies stop.** A Comment button on a digest card gets no answer at all. Nothing
-  is half-written: `reply.py` posts the public comment before the private note, and
-  the marker in that note means re-running the same interaction cannot double-post.
+- **Replies stop.** A Comment button on a digest card gets no answer at all. The
+  worst a half-run leaves is an orphan private note and no reply: `reply.py` posts
+  the note first because it carries the marker, so a re-run of the same interaction
+  refuses rather than emailing the customer twice.
 - **The digest is late, not lost.** `Persistent=yes` on the timer means a host that
   was down at 10:00 runs the digest once when it comes back, and the 72-hour window
   covers the gap.
