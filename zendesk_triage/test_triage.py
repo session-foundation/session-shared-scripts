@@ -1973,3 +1973,105 @@ class TestDigestFlags(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEnglishRendering(unittest.TestCase):
+    """The digest writes the English the reply dialog reads. It runs before the post
+    because the Comment button only exists on a card the post creates."""
+
+    def test_a_ticket_the_classifier_called_english_is_left_alone(self):
+        """Translating English into English would put a machine's wording in front of
+        the agent in place of the words the customer actually chose."""
+        for language in ("English", "english", "en", "EN"):
+            self.assertTrue(triage.is_english({"language": language}), language)
+
+    def test_an_unknown_language_counts_as_english(self):
+        """A blank `language` is far more likely to be a thin classification than a
+        ticket nobody could read. Guessing this way wastes nothing; the other way
+        overwrites an English customer's words with a translation of them."""
+        for language in ("", None, "   "):
+            self.assertTrue(triage.is_english({"language": language}), repr(language))
+
+    def test_a_non_english_ticket_is_translated(self):
+        for language in ("German", "Spanish", "Japanese"):
+            self.assertFalse(triage.is_english({"language": language}), language)
+
+    def test_nothing_happens_until_the_field_exists(self):
+        """The field is not in Zendesk yet. Until its id is configured the digest has
+        to behave exactly as it did before — no comment fetches, no Claude calls, no
+        writes."""
+        calls = []
+        with Patched(triage, requester_words=lambda *a: calls.append(a),
+                     claude_cli_json=lambda *a, **k: calls.append(a)):
+            written = triage.attach_english(object(), "acme", [{"id": 1}],
+                                            [{"id": 1, "language": "German"}],
+                                            "claude-sonnet-5", field_id=None)
+        self.assertEqual(written, 0)
+        self.assertEqual(calls, [])
+
+    def test_nothing_happens_without_a_zendesk_session(self):
+        """--findings never builds one: the findings already exist and no ticket was
+        ever fetched, so there is nothing to read comments from or write back to."""
+        self.assertEqual(
+            triage.attach_english(None, "acme", [{"id": 1}],
+                                  [{"id": 1, "language": "German"}],
+                                  "claude-sonnet-5", field_id=42),
+            0)
+
+    def test_one_ticket_that_cannot_be_rendered_does_not_stop_the_digest(self):
+        """claude_cli_json exits on a failed call, which is right for the
+        classification it was written for. Here it would take down a digest that is
+        otherwise ready to post over one ticket nobody can translate."""
+        def explode(*args, **kwargs):
+            raise SystemExit("claude exited 1")
+
+        written = []
+        with Patched(triage,
+                     requester_words=lambda *a: "Es geht nicht.",
+                     claude_cli_json=explode,
+                     write_english_field=lambda *a: written.append(a) or True):
+            got = triage.attach_english(
+                object(), "acme", [{"id": 1}, {"id": 2}],
+                [{"id": 1, "language": "German"}, {"id": 2, "language": "German"}],
+                "claude-sonnet-5", field_id=42)
+        self.assertEqual(got, 0)
+        self.assertEqual(written, [])
+
+    def test_a_run_that_posts_no_card_writes_nothing(self):
+        """--no-discord is the flag CI runs with. No post means no Comment button,
+        so a rendering written on that path is a write to a production ticket for a
+        dialog nobody can open. Guarded at the call site by `needs_discord`."""
+        source = inspect.getsource(triage.main)
+        call = source.index("attach_english(")
+        guard = source.rindex("if needs_discord:", 0, call)
+        # Nothing between the guard and the call but the call itself.
+        self.assertNotIn("\n    ", source[guard:call].rstrip())
+
+    def test_the_rendering_is_written_to_the_configured_field(self):
+        puts = []
+        with Patched(triage,
+                     requester_words=lambda *a: "Es geht nicht.",
+                     claude_cli_json=lambda *a, **k: {"english": "It does not work."},
+                     write_english_field=lambda *a: puts.append(a) or True):
+            got = triage.attach_english(
+                object(), "acme", [{"id": 1}, {"id": 2}],
+                [{"id": 1, "language": "German"}, {"id": 2, "language": "English"}],
+                "claude-sonnet-5", field_id=42)
+        self.assertEqual(got, 1)
+        # The English one was never touched, and the German one carries the rendering.
+        self.assertEqual([(p[2], p[3], p[4]) for p in puts],
+                         [(1, 42, "It does not work.")])
+
+    def test_a_ticket_with_no_matching_row_is_skipped(self):
+        """--findings and a partial fetch both leave findings whose ticket was never
+        loaded. There is nothing to read comments from, so there is nothing to do."""
+        with Patched(triage,
+                     requester_words=lambda *a: "Es geht nicht.",
+                     claude_cli_json=lambda *a, **k: {"english": "x"},
+                     write_english_field=lambda *a: True):
+            self.assertEqual(
+                triage.attach_english(object(), "acme", [],
+                                      [{"id": 99, "language": "German"}],
+                                      "claude-sonnet-5", field_id=42),
+                0)
+

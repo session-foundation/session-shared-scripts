@@ -797,6 +797,154 @@ def hydrate_descriptions(session, subdomain, tickets):
     return hydrated
 
 
+# ---- English rendering, for the reply dialog --------------------------------
+
+# Optional, and absent until the field exists in Zendesk. Everything below is a
+# no-op without it: the digest posts exactly as it did before and relay.py falls
+# back to the customer's own words, which is what it showed all along.
+ENGLISH_FIELD_ENV = "ZENDESK_ENGLISH_FIELD_ID"
+ENGLISH_TIMEOUT_SECONDS = 180
+# Comfortably past the 1,200 relay.py shows, so the field is never the reason the
+# dialog is missing a sentence.
+ENGLISH_CHARS = 4000
+
+ENGLISH_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["english"],
+    "properties": {
+        "english": {
+            "type": "string",
+            "description": "Every one of the customer's messages, in English, in order.",
+        }
+    },
+}
+
+ENGLISH_SYSTEM_PROMPT = (
+    "You translate support tickets into English for a support agent who does not "
+    "read the original language.\n\n"
+    "Translate faithfully and completely. Keep the customer's meaning, their order "
+    "of events and their tone — an angry ticket must still read as angry. Do not "
+    "summarise, do not answer, do not add notes of your own.\n\n"
+    "Leave Session IDs, version numbers, URLs and error strings exactly as written. "
+    "Where the customer wrote several messages, keep them as separate paragraphs in "
+    "the same order."
+)
+
+
+def is_english(finding):
+    """Whether the classifier called this ticket English.
+
+    Unknown counts as English: the field is only worth writing when it says
+    something the agent cannot already read, and a blank `language` is far more
+    likely to be a classification that came back thin than a ticket nobody could
+    read. Guessing wrong this way costs a translation nobody needed; the other way
+    puts a machine translation on an English ticket, over the top of the words the
+    customer actually chose.
+    """
+    language = (finding.get("language") or "").strip().lower()
+    return not language or language.startswith(("english", "en"))
+
+
+def requester_words(session, subdomain, ticket):
+    """The requester's own comments on one ticket, oldest first. None on any failure.
+
+    Their comments rather than the description, because the description is only the
+    first of them: a customer who wrote three times has two more the dialog shows
+    and the description does not. Filtered by `requester_id` for the same reason
+    relay.py filters by it — an agent's earlier English reply is text on the ticket
+    too, and translating it back would be nonsense.
+    """
+    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket['id']}/comments.json"
+    try:
+        resp = request_with_retry(session, "GET", url, attempts=2,
+                                  params={"per_page": 100, "sort_order": "asc"})
+    except requests.RequestException as exc:
+        print(f"Note: could not fetch comments for #{ticket['id']} ({exc}).")
+        return None
+    if resp.status_code >= 400:
+        print(f"Note: comments for #{ticket['id']} returned {resp.status_code}.")
+        return None
+    try:
+        comments = resp.json().get("comments", [])
+    except ValueError as exc:
+        print(f"Note: unreadable comments payload for #{ticket['id']} ({exc}).")
+        return None
+    requester = ticket.get("requester_id")
+    bodies = [(c.get("body") or "").strip() for c in comments
+              if requester is None or c.get("author_id") == requester]
+    return "\n\n".join(b for b in bodies if b) or None
+
+
+def write_english_field(session, subdomain, ticket_id, field_id, english):
+    """Put the rendering on the ticket. Returns whether Zendesk took it.
+
+    One field overwritten, not a note appended: a customer who replies gets a fresh
+    rendering covering the whole conversation, and the ticket carries one current
+    English version rather than a chain of partial ones to read in order.
+    """
+    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}.json"
+    payload = {"ticket": {"custom_fields": [{"id": field_id, "value": english}]}}
+    try:
+        resp = request_with_retry(session, "PUT", url, attempts=2, json=payload)
+    except requests.RequestException as exc:
+        print(f"Note: could not write the English rendering to #{ticket_id} ({exc}).")
+        return False
+    if resp.status_code >= 400:
+        print(f"Note: #{ticket_id} rejected the English rendering "
+              f"({resp.status_code}).")
+        return False
+    return True
+
+
+def attach_english(session, subdomain, tickets, findings, model, field_id):
+    """Render every non-English ticket about to be posted into English, on the ticket.
+
+    Runs before the digest is posted, and that order is the whole design: the Comment
+    button exists only on a digest card, so a ticket that reaches the dialog has
+    necessarily been through here first. relay.py can then read the field it needs
+    without a Claude call of its own — which it has no time for, being on the three
+    seconds Discord allows a dialog that cannot be deferred.
+
+    Scoped to the tickets that actually get a button. Translating the rest would be
+    paying for every ticket in the window to serve the handful anybody replies to.
+
+    Never raises: this is enrichment, and a digest that fails to post because a
+    translation failed would be a worse trade than a dialog showing German.
+    """
+    if not (field_id and session):
+        return 0
+    by_id = {t.get("id"): t for t in tickets}
+    written = 0
+    for finding in findings:
+        if is_english(finding):
+            continue
+        ticket = by_id.get(finding.get("id"))
+        if not ticket:
+            continue
+        words = requester_words(session, subdomain, ticket)
+        if not words:
+            continue
+        try:
+            rendered = claude_cli_json(
+                model, "medium", ENGLISH_SYSTEM_PROMPT, ENGLISH_SCHEMA,
+                clip(words, DESCRIPTION_CHARS), ENGLISH_TIMEOUT_SECONDS,
+                f"the English rendering of #{ticket['id']}")
+        except SystemExit as exc:
+            # claude_cli_json exits on a failed call, which is right for the
+            # classification it was written for and wrong here: one ticket nobody
+            # can translate must not take the digest down with it.
+            print(f"Note: could not render #{ticket['id']} in English ({exc}).")
+            continue
+        english = clip(rendered.get("english"), ENGLISH_CHARS)
+        if english and write_english_field(session, subdomain, ticket["id"],
+                                           field_id, english):
+            written += 1
+    if written:
+        print(f"Wrote an English rendering to {written} ticket(s).")
+    return written
+
+
 def compact_ticket(ticket):
     """Reduce a Zendesk ticket to the fields Claude needs for triage."""
     description = (ticket.get("description") or "").strip()
@@ -1499,6 +1647,7 @@ def main():
     stats = {}
     state = None
     classified = []
+    zd = None
     updated_ids = set()
 
     if args.findings:
@@ -1614,6 +1763,18 @@ def main():
     shown, omitted = select_highlights(findings)
     print(f"{len(findings)} tickets classified; {len(shown) + len(omitted)} worth looking into"
           + (f" ({len(omitted)} beyond the display cap)." if omitted else "."))
+
+    # Before the post, never after: the Comment button only exists on a digest card,
+    # so writing the rendering first is what guarantees every ticket that can reach
+    # the dialog already carries one.
+    #
+    # Gated on the post actually happening, not just on --dry-run. --no-discord is
+    # the flag CI runs with, and a run that posts no card creates no button — so a
+    # rendering written there would be a write to a production ticket for a dialog
+    # that can never be opened.
+    if needs_discord:
+        attach_english(zd, subdomain, classified, shown, model,
+                       get_env(ENGLISH_FIELD_ENV, required=False))
 
     messages, coverage = build_messages(findings, subdomain, stats, updated_ids)
     if args.dry_run:

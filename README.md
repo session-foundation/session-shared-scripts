@@ -390,6 +390,27 @@ to open. Either half can fail on its own: without the ticket, the comments are s
 under a heading that does not claim whose words they are, and an unreachable Zendesk
 is never mistaken for a closed ticket.
 
+### Reading a ticket you cannot read
+
+Set `ZENDESK_ENGLISH_FIELD_ID` to the id of a multi-line text ticket field and the
+dialog shows the customer's words in English instead of the language they wrote in.
+
+The digest is what fills that field: before it posts, it renders every non-English
+ticket it is about to show into English and writes it to the ticket. The ordering is
+the design rather than a convenience — the Comment button exists only on a digest
+card, so a ticket that can reach the dialog has necessarily been through that step,
+and the dialog needs no Claude call of its own. It has no room for one: a modal
+cannot be deferred, so it answers within the three seconds Discord allows, and a
+translation takes several.
+
+It is the requester's comments that are rendered, not the ticket description — a
+customer who wrote three times has two more the dialog shows — and the field is
+overwritten on each run, so a ticket carries one current English version rather than
+a chain of partial ones. Tickets the classifier reports as English are left alone.
+
+Unset, nothing above happens and the dialog shows the original, which is what it did
+before the field existed.
+
 ### What lands on the ticket
 
 - a **public comment** carrying the reply, and `status` → `pending`
