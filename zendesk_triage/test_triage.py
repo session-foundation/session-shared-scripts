@@ -8,7 +8,9 @@ Stdlib unittest so the repo needs no test dependency. Run from anywhere:
 Everything here is offline — no Zendesk, Claude, or Discord calls. The fetch
 tests drive fetch_tickets with a stub session instead.
 """
+import contextlib
 import inspect
+import io
 import json
 import os
 import re
@@ -2129,6 +2131,47 @@ class TestEnglishTranscript(unittest.TestCase):
         call = source.index("attach_english(")
         guard = source.rindex("if needs_discord:", 0, call)
         self.assertNotIn("\n    ", source[guard:call].rstrip())
+
+    def said(self, **kwargs):
+        """attach_english's console output for one call."""
+        out = io.StringIO()
+        defaults = dict(session=object(), subdomain="acme", tickets=[], findings=[],
+                        model="claude-sonnet-5", field_id=42)
+        defaults.update(kwargs)
+        with contextlib.redirect_stdout(out):
+            triage.attach_english(**defaults)
+        return out.getvalue()
+
+    def test_a_run_that_wrote_nothing_says_so(self):
+        """The count printed only when it was non-zero, so a run that wrote nothing
+        and a run that never reached this step read identically in the journal — the
+        one thing somebody checking whether the feature is on needs to tell apart."""
+        with Patched(triage, conversation_turns=lambda *a: None):
+            said = self.said(tickets=[{"id": 1}],
+                             findings=[{"id": 1, "language": "German"}])
+        self.assertIn("0 of 1", said)
+
+    def test_an_unset_field_id_says_which_variable_is_missing(self):
+        said = self.said(field_id=None, findings=[{"id": 1, "language": "German"}])
+        self.assertIn(triage.ENGLISH_FIELD_ENV, said)
+
+    def test_an_all_english_digest_says_so_rather_than_nothing(self):
+        said = self.said(findings=[{"id": 1, "language": "English"},
+                                   {"id": 2, "language": "English"}])
+        self.assertIn("No non-English tickets", said)
+        self.assertIn("2", said)
+
+    def test_a_ticket_that_was_classified_but_never_fetched_is_named(self):
+        said = self.said(tickets=[], findings=[{"id": 99, "language": "German"}])
+        self.assertIn("99", said)
+        self.assertIn("never fetched", said)
+
+    def test_a_ticket_with_no_public_comments_is_named(self):
+        with Patched(triage, conversation_turns=lambda *a: None):
+            said = self.said(tickets=[{"id": 7}],
+                             findings=[{"id": 7, "language": "German"}])
+        self.assertIn("7", said)
+        self.assertIn("no public comments", said)
 
     def test_one_ticket_that_cannot_be_rendered_does_not_stop_the_digest(self):
         """claude_cli_json exits on a failed call, which is right for the
