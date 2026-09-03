@@ -12,6 +12,10 @@ so the tests are about the gates: that an unsigned or tampered request is refuse
 that an unlisted person is refused, that a dialog still opens when Zendesk is
 unreachable, and that an attachment URL never reaches a channel-visible message.
 """
+import base64
+import datetime
+import hashlib
+import hmac
 import json
 import os
 import sys
@@ -672,3 +676,98 @@ class TestFailuresReachTheAgent(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---- The Zendesk note webhook ----------------------------------------------
+
+
+ZENDESK_SECRET = "s3cret"
+
+
+def zendesk_post(body=None, *, secret=ZENDESK_SECRET, sign=True, age=0, tamper=False):
+    """Send a signed Zendesk webhook through the real endpoint."""
+    raw = json.dumps({"ticket_id": "27603"} if body is None else body).encode()
+    when = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=age)
+    stamp = when.strftime("%Y-%m-%dT%H:%M:%SZ")
+    headers = {"Content-Type": "application/json"}
+    if sign:
+        digest = hmac.new(secret.encode(), stamp.encode() + raw, hashlib.sha256).digest()
+        headers[relay.ZENDESK_SIGNATURE_HEADER] = base64.b64encode(digest).decode()
+        headers[relay.ZENDESK_TIMESTAMP_HEADER] = stamp
+    if tamper:
+        raw = raw.replace(b"27603", b"27604")
+    with TestClient(relay.app) as client:
+        return client.post("/zendesk/notes", content=raw, headers=headers)
+
+
+class TestZendeskWebhook(unittest.TestCase):
+    """The second gate on a path that publishes comments to customers. The Zendesk
+    trigger is the first, and note_reply.py decides who may command it."""
+
+    def setUp(self):
+        self.ran = []
+
+    def run_with(self, **env):
+        with Env(ZENDESK_WEBHOOK_SECRET=ZENDESK_SECRET, **env), \
+                Patched(relay, run_note_reply=self.ran.append):
+            return zendesk_post(**self.kwargs)
+
+    def test_a_signed_webhook_queues_the_ticket(self):
+        self.kwargs = {}
+        response = self.run_with()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.ran, ["27603"])
+
+    def test_an_unsigned_webhook_is_refused(self):
+        self.kwargs = {"sign": False}
+        self.assertEqual(self.run_with().status_code, 401)
+        self.assertEqual(self.ran, [])
+
+    def test_the_wrong_secret_is_refused(self):
+        self.kwargs = {"secret": "wrong"}
+        self.assertEqual(self.run_with().status_code, 401)
+        self.assertEqual(self.ran, [])
+
+    def test_a_tampered_body_is_refused(self):
+        """The signature covers the body, so swapping the ticket id invalidates it —
+        otherwise anyone who captured one webhook could redirect it at any ticket."""
+        self.kwargs = {"tamper": True}
+        self.assertEqual(self.run_with().status_code, 401)
+        self.assertEqual(self.ran, [])
+
+    def test_a_stale_webhook_is_refused(self):
+        self.kwargs = {"age": relay.MAX_SIGNATURE_AGE_SECONDS + 60}
+        self.assertEqual(self.run_with().status_code, 401)
+        self.assertEqual(self.ran, [])
+
+    def test_an_unconfigured_relay_refuses_everything(self):
+        """No secret must mean no, not yes. This URL writes to customers."""
+        self.kwargs = {}
+        with Env(ZENDESK_WEBHOOK_SECRET=None), Patched(relay, run_note_reply=self.ran.append):
+            self.assertEqual(zendesk_post().status_code, 401)
+        self.assertEqual(self.ran, [])
+
+    def test_a_missing_ticket_id_is_a_400(self):
+        self.kwargs = {"body": {"nothing": "here"}}
+        self.assertEqual(self.run_with().status_code, 400)
+        self.assertEqual(self.ran, [])
+
+    def test_a_bogus_ticket_id_is_refused(self):
+        self.kwargs = {"body": {"ticket_id": "27603; rm -rf /"}}
+        self.assertEqual(self.run_with().status_code, 400)
+        self.assertEqual(self.ran, [])
+
+    def test_a_non_json_body_is_refused_not_crashed(self):
+        with Env(ZENDESK_WEBHOOK_SECRET=ZENDESK_SECRET), \
+                Patched(relay, run_note_reply=self.ran.append):
+            raw = b"not json"
+            stamp = datetime.datetime.now(datetime.timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ")
+            digest = hmac.new(ZENDESK_SECRET.encode(), stamp.encode() + raw,
+                              hashlib.sha256).digest()
+            with TestClient(relay.app) as client:
+                response = client.post("/zendesk/notes", content=raw, headers={
+                    relay.ZENDESK_SIGNATURE_HEADER: base64.b64encode(digest).decode(),
+                    relay.ZENDESK_TIMESTAMP_HEADER: stamp})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.ran, [])

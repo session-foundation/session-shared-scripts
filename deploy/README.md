@@ -135,6 +135,15 @@ DISCORD_GUILD_ID=
 ALLOWED_USER_IDS=
 ALLOWED_ROLE_IDS=
 
+# Verifies Zendesk's webhook signatures, for the `claude:` private-note route.
+# Empty refuses every note webhook: a URL that writes public comments must not
+# default to open. Same value as the secret on the Zendesk webhook itself.
+ZENDESK_WEBHOOK_SECRET=
+# Optional. Comma-separated Zendesk user ids allowed to drive `claude:` notes.
+# Empty means any agent or admin, which is already everybody who can write a
+# private note. The agent/admin role check applies either way.
+#ZENDESK_NOTE_AUTHORS=
+
 # Optional, and read by both units. The numeric id of a multi-line text ticket
 # field in Zendesk; the digest renders every non-English ticket it is about to post
 # into English there — both sides of the conversation, timestamped — and the compose
@@ -143,7 +152,8 @@ ALLOWED_ROLE_IDS=
 # -> Multi-line text, not customer-visible, then read the id off the field's URL.
 #ZENDESK_ENGLISH_FIELD_ID=
 
-# Uncomment to run the whole path and write nothing to Zendesk.
+# Uncomment to run the whole path and write nothing to Zendesk. Covers both the
+# Discord reply flow and the `claude:` note flow.
 #RELAY_DRY_RUN=1
 ```
 
