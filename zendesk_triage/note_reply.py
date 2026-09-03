@@ -29,6 +29,8 @@ Two actions, both read from the ticket's own comments:
            reviewed is what goes out, or the review means nothing.
   english  Post the whole conversation, both sides, in English as a private note.
            Reads only; the customer never sees it.
+  solve    Solve the ticket, writing nothing to the customer. For the ones that
+           need no reply at all. The private note records who asked and why.
   explain  Post what support usually replies to this kind of ticket, and what was
            actually done about it before — fixes shipped, bugs filed, escalations.
            Reads only. This is where known fixes are surfaced, because `draft`
@@ -83,10 +85,14 @@ BRIEF_CHARS = 2000
 # Status the ticket moves to once the reply is out: the ball is with the customer.
 # Same convention as reply.py, so `open` keeps meaning "ours".
 REPLIED_STATUS = "pending"
+# `claude: solve` sets this. Not "closed": Zendesk refuses closed over the API, and
+# the account's own automation closes a solved ticket four days later anyway.
+SOLVED_STATUS = "solved"
 
 TAG_QUEUED = "claude-queued"
 TAG_DRAFTED = "claude-drafted"
 TAG_SENT = "claude-sent"
+TAG_SOLVED = "claude-solved"
 TAG_ERROR = "claude-error"
 # Where a ticket was filed in the taxonomy, cached on the ticket so a second draft
 # does not pay for the classification again. Also what a future `group` verb writes.
@@ -156,7 +162,7 @@ def english_marker(latest_public_id):
 # Anchored to the start of a line so that prose mentioning the command in passing —
 # including the instructions in Claude's own draft notes — is not a command.
 COMMAND = re.compile(
-    r"^[\s>*_]*claude\s*:\s*(draft|reply|english|explain)\b[\s\-–—:.]*(.*)$",
+    r"^[\s>*_]*claude\s*:\s*(draft|reply|english|explain|solve)\b[\s\-–—:.]*(.*)$",
     re.IGNORECASE)
 
 
@@ -835,6 +841,38 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
                     drop_tags=[TAG_QUEUED, TAG_ERROR])
 
 
+def run_solve(session, subdomain, ticket, command, dry_run):
+    """Solve the ticket without writing anything to the customer.
+
+    For the ones that need no reply — spam, an abuse report with nothing actionable,
+    a duplicate, a question already answered elsewhere. There were 197 of those in
+    the backlog when this was written.
+
+    The private note is the point: a status change on its own leaves nothing on the
+    ticket saying who decided that or why, which is exactly what somebody reopening
+    it in three months needs to know.
+    """
+    ticket_id = ticket["id"]
+    if ticket.get("status") == SOLVED_STATUS:
+        say(session, subdomain, ticket_id, command["id"],
+            "This ticket is already solved.", dry_run, error=False)
+        return
+    author = fetch_user(session, subdomain, command["author"])
+    who = author.get("name") or f"user {command['author']}"
+    if dry_run:
+        print(f"#{ticket_id}: dry run, would solve on behalf of {who}.")
+        return
+    note = [para(f"Solved by {who}, from their note on this ticket. "
+                 f"No reply was sent to the customer.")]
+    if command["brief"]:
+        note.append(para("Reason given: " + command["brief"]))
+    note.append(para(done_marker(command["id"])))
+    write_to_ticket(session, subdomain, ticket_id, "".join(note), public=False,
+                    status=SOLVED_STATUS, as_html=True, add_tags=[TAG_SOLVED],
+                    drop_tags=[TAG_QUEUED, TAG_ERROR])
+    print(f"#{ticket_id}: solved, no reply sent.")
+
+
 def run_explain(session, subdomain, model, ticket, comments, command, dry_run):
     """Say what we already know about this kind of ticket, without writing a reply.
 
@@ -1077,6 +1115,8 @@ def main():
     if command["action"] == "draft":
         run_draft(session, subdomain, args.model, ticket, comments, command,
                   api_user, args.dry_run)
+    elif command["action"] == "solve":
+        run_solve(session, subdomain, ticket, command, args.dry_run)
     elif command["action"] == "explain":
         run_explain(session, subdomain, args.model, ticket, comments, command,
                     args.dry_run)

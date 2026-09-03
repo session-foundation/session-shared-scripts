@@ -504,13 +504,26 @@ claude: draft - attachments are only kept on the server for 14 days. A second
 ```
 
 Claude replies with a private note carrying the drafted reply, a back-translation,
-and the brief it was written from. The agent reads it and writes:
+and the brief it was written from. A draft usually offers two or three genuinely
+different approaches, numbered, so the agent reads:
 
 ```
-claude: reply
+claude: reply 2
 ```
 
-which publishes the draft **verbatim** and moves the ticket to `pending`.
+which publishes that option **verbatim** and moves the ticket to `pending`. A bare
+`claude: reply` sends the only option when there is one, and refuses to guess when
+there are several.
+
+### The commands
+
+| Command | What it does | Touches the customer |
+| --- | --- | --- |
+| `claude: draft - <brief>` | Compose the reply from the brief, in the requester's language. A second `draft` amends the one already there rather than starting over | no |
+| `claude: reply [n]` | Publish the chosen option verbatim, status -> `pending` | **yes** |
+| `claude: english` | Post the conversation, both sides, in English. Says so and writes nothing when the ticket is already English | no |
+| `claude: explain` | Post what support usually replied to this kind of ticket, what was actually done about it, and the caveats | no |
+| `claude: solve [reason]` | Solve without writing to the customer, for tickets that need no reply. The note records who decided and why | no comment, but **solving fires the CSAT automation** |
 
 ### Why a draft is always reviewed
 

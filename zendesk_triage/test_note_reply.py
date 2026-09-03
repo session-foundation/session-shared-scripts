@@ -522,6 +522,63 @@ class QueueTag(unittest.TestCase):
         note_reply.clear_queued(session, "sub", 7)   # must not raise
 
 
+class Solve(unittest.TestCase):
+    """Solving writes to no customer, but it is still a state change on a real
+    ticket — and the account's CSAT automation fires on it."""
+
+    CMD = {"id": 9, "author": AGENT, "action": "solve", "brief": ""}
+
+    def test_solve_is_a_command(self):
+        self.assertEqual(note_reply.parse_command("claude: solve"), ("solve", ""))
+
+    def test_it_sets_solved_and_writes_no_public_comment(self):
+        session = fake_session(FakeResponse({"user": {"id": AGENT, "name": "Audric"}}),
+                               FakeResponse({"ticket": {}}))
+        note_reply.run_solve(session, "sub", {"id": 7, "status": "open"}, self.CMD,
+                             dry_run=False)
+        ticket = next(kw["json"]["ticket"] for m, u, kw in session.calls
+                      if m == "PUT" and "/tags.json" not in u)
+        self.assertEqual(ticket["status"], note_reply.SOLVED_STATUS)
+        self.assertIs(ticket["comment"]["public"], False)
+
+    def test_the_note_records_who_decided_and_why(self):
+        """A status change on its own leaves nothing on the ticket explaining it."""
+        session = fake_session(FakeResponse({"user": {"id": AGENT, "name": "Audric"}}),
+                               FakeResponse({"ticket": {}}))
+        note_reply.run_solve(session, "sub", {"id": 7, "status": "open"},
+                             dict(self.CMD, brief="spam, nothing actionable"),
+                             dry_run=False)
+        body = next(kw["json"]["ticket"]["comment"]["html_body"]
+                    for m, u, kw in session.calls if m == "PUT" and "/tags.json" not in u)
+        self.assertIn("Audric", body)
+        self.assertIn("spam, nothing actionable", body)
+
+    def test_it_is_tagged_so_a_batch_can_be_found_again(self):
+        session = fake_session(FakeResponse({"user": {"id": AGENT, "name": "Audric"}}),
+                               FakeResponse({"ticket": {}}))
+        note_reply.run_solve(session, "sub", {"id": 7, "status": "open"}, self.CMD,
+                             dry_run=False)
+        added = [kw["json"]["tags"] for m, u, kw in session.calls
+                 if m == "PUT" and "/tags.json" in u]
+        self.assertEqual(added, [[note_reply.TAG_SOLVED]])
+
+    def test_an_already_solved_ticket_is_not_an_error(self):
+        session = fake_session(FakeResponse({"ticket": {}}))
+        note_reply.run_solve(session, "sub", {"id": 7, "status": "solved"}, self.CMD,
+                             dry_run=False)
+        body = next(kw["json"]["ticket"]["comment"]["html_body"]
+                    for m, u, kw in session.calls if m == "PUT" and "/tags.json" not in u)
+        self.assertIn("already solved", body)
+        self.assertEqual([kw["json"]["tags"] for m, u, kw in session.calls
+                          if m == "PUT" and "/tags.json" in u], [])
+
+    def test_a_dry_run_solves_nothing(self):
+        session = fake_session(FakeResponse({"user": {"id": AGENT, "name": "Audric"}}))
+        note_reply.run_solve(session, "sub", {"id": 7, "status": "open"}, self.CMD,
+                             dry_run=True)
+        self.assertEqual([c for c in session.calls if c[0] == "PUT"], [])
+
+
 class Explain(unittest.TestCase):
     """The read-only verb that surfaces known fixes, which `draft` refuses to assert."""
 
