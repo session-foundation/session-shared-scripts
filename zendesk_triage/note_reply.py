@@ -213,6 +213,39 @@ def fetch_user(session, subdomain, user_id):
     return (resp.json() or {}).get("user") or {}
 
 
+def customer_sample(session, subdomain, ticket, comments):
+    """The customer's own words, for deciding which language to reply in.
+
+    reply.customer_text takes only comments the REQUESTER authored, which is right
+    for email and web tickets. On a Twitter or Sunshine DM the integration authors
+    the customer's message under its own id, so that filter drops everything they
+    wrote and leaves the ticket's "Conversation with <handle>" description — and the
+    reply goes out in English to somebody writing Chinese.
+
+    So: the requester's own words when the ticket carries any, and otherwise every
+    public comment written by someone who is not an agent on this account. Roles are
+    looked up rather than guessed from the id, because the integration's id is an
+    account detail and an unknown author is a customer, not an agent.
+    """
+    if not triage.is_content_free(ticket):
+        return reply.customer_text(ticket, comments)
+    roles, parts = {}, []
+    subject = triage.squash(ticket.get("subject"))
+    for comment in reversed(comments):          # oldest first, so it reads in order
+        if not comment.get("public"):
+            continue
+        author = comment.get("author_id")
+        if author not in roles:
+            roles[author] = (fetch_user(session, subdomain, author) or {}).get("role")
+        if roles[author] in ("agent", "admin"):
+            continue
+        body = triage.squash(comment.get("body"))
+        if body and body != subject:
+            parts.append(body)
+    return triage.clip("\n\n".join(parts),
+                       CUSTOMER_SAMPLE_CHARS) or reply.customer_text(ticket, comments)
+
+
 def may_command(user):
     """Whether this Zendesk user may drive the command.
 
@@ -228,6 +261,29 @@ def may_command(user):
     return not allowed or str(user.get("id")) in allowed
 
 
+def change_tags(session, subdomain, ticket_id, add=(), drop=()):
+    """Add and remove tags, through the tags sub-resource.
+
+    NOT `additional_tags`/`remove_tags` on the ticket update: those are update_many
+    fields. A single-ticket update accepts them with a 200 and silently ignores them,
+    which is how every tag this tool set went missing while every call reported
+    success. Measured against the live API, not assumed.
+
+    The sub-resource is also additive rather than read-modify-write, so two runs on
+    one ticket cannot clobber each other's tags.
+    """
+    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}/tags.json"
+    for method, names in (("PUT", [t for t in add if t]),
+                          ("DELETE", [t for t in drop if t])):
+        if not names:
+            continue
+        resp = triage.request_with_retry(session, method, url, json={"tags": names})
+        if resp.status_code >= 400:
+            # Never worth failing a run over: tags are a dashboard light, not the work.
+            print(f"Note: could not {method.lower()} tags on #{ticket_id} "
+                  f"({resp.status_code}).")
+
+
 def clear_queued(session, subdomain, ticket_id, dry_run=False):
     """Take the ticket out of the "waiting on Claude" queue, writing no comment.
 
@@ -240,13 +296,7 @@ def clear_queued(session, subdomain, ticket_id, dry_run=False):
     """
     if dry_run:
         return
-    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}.json"
-    resp = triage.request_with_retry(session, "PUT", url,
-                                     json={"ticket": {"remove_tags": [TAG_QUEUED]}})
-    if resp.status_code >= 400:
-        # Never worth failing a run over: the tag is a dashboard light, not the work.
-        print(f"Note: could not clear {TAG_QUEUED} on #{ticket_id} "
-              f"({resp.status_code}).")
+    change_tags(session, subdomain, ticket_id, drop=[TAG_QUEUED])
 
 
 def para(text):
@@ -309,15 +359,13 @@ def write_to_ticket(session, subdomain, ticket_id, body, public,
     fields = {"comment": {("html_body" if as_html else "body"): body, "public": public}}
     if status:
         fields["status"] = status
-    if add_tags:
-        fields["additional_tags"] = list(add_tags)
-    if drop_tags:
-        fields["remove_tags"] = list(drop_tags)
     url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}.json"
     resp = triage.request_with_retry(session, "PUT", url, json={"ticket": fields})
     if resp.status_code >= 400:
         sys.exit(f"Zendesk rejected the {'reply' if public else 'note'} on "
                  f"#{ticket_id} ({resp.status_code}).")
+    # After the comment, so a tag failure cannot lose the thing that mattered.
+    change_tags(session, subdomain, ticket_id, add_tags, drop_tags)
 
 
 # ---- What we usually reply ---------------------------------------------------
@@ -387,10 +435,10 @@ PLACEMENT_SYSTEM = textwrap.dedent(
 ).strip()
 
 
-def place_ticket(model, book, ticket, comments):
+def place_ticket(model, book, ticket, sample):
     """Which group and platform this ticket belongs to. (None, None) if unplaceable."""
     catalogue = "\n".join(f"- {g['key']}: {g['title']}" for g in book["groups"])
-    body = triage.clip(reply.customer_text(ticket, comments), CUSTOMER_SAMPLE_CHARS)
+    body = triage.clip(sample, CUSTOMER_SAMPLE_CHARS)
     try:
         found = triage.claude_cli_json(
             model, "medium", PLACEMENT_SYSTEM, PLACEMENT_SCHEMA,
@@ -753,11 +801,12 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
     shown = find_draft(comments, api_user)
     previous = "\n\n".join(f"Option {n}:\n{shown[n]}" for n in sorted(shown)) or None
 
+    sample = customer_sample(session, subdomain, ticket, comments)
     book = load_house()
     group, platform = tagged_placement(ticket)
     new_tags = []
     if book and not group:
-        group, platform = place_ticket(model, book, ticket, comments)
+        group, platform = place_ticket(model, book, ticket, sample)
         # Cached on the ticket so a revision does not pay for the same call again,
         # and so the placement is visible to a human who disagrees with it.
         new_tags = ([f"{TAG_GROUP_PREFIX}{group}"] if group else []) + \
@@ -770,7 +819,6 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
         print(f"#{ticket_id}: grounded in {group}/{covering} "
               f"({cell['n']} solved, {cell['consistency']} consistency).")
 
-    sample = reply.customer_text(ticket, comments)
     result = compose(model, triage.clip(sample, CUSTOMER_SAMPLE_CHARS), brief,
                      previous, precedent)
     print(f"#{ticket_id}: {'revised' if previous else 'drafted'} "
@@ -806,7 +854,8 @@ def run_explain(session, subdomain, model, ticket, comments, command, dry_run):
     group, platform = tagged_placement(ticket)
     new_tags = []
     if not group:
-        group, platform = place_ticket(model, book, ticket, comments)
+        group, platform = place_ticket(
+            model, book, ticket, customer_sample(session, subdomain, ticket, comments))
         new_tags = ([f"{TAG_GROUP_PREFIX}{group}"] if group else []) + \
                    ([f"{TAG_PLATFORM_PREFIX}{platform}"] if platform else [])
     cell, covering = house_cell(book, group, platform)

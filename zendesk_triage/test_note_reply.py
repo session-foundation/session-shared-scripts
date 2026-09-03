@@ -40,6 +40,15 @@ GERMAN_THREE = {"language": "German", "language_code": "de", "is_english": False
                             option("Dritte Antwort", "answer and keep it open")]}
 
 
+def fake_session(*responses):
+    """A stub session with room for the tag sub-resource calls a write now makes.
+
+    Tag changes go through PUT/DELETE /tickets/{id}/tags.json rather than fields on
+    the ticket update, so every write costs up to two extra requests.
+    """
+    return FakeSession(list(responses) + [FakeResponse({}) for _ in range(6)])
+
+
 def comment(body, author=AGENT, public=False, cid=1):
     return {"id": cid, "author_id": author, "public": public,
             "body": body, "plain_body": body}
@@ -127,7 +136,7 @@ class EnglishTranscript(unittest.TestCase):
         comments = [comment("claude: english", cid=9),
                     dict(comment("hallo", author=42, cid=7), public=True), prior]
         with Patched(triage, conversation_turns=lambda *a: called.append(a)):
-            session = FakeSession([FakeResponse({"ticket": {}})])
+            session = fake_session(*[FakeResponse({"ticket": {}})])
             note_reply.run_english(session, "sub", "model", {"id": 7}, comments,
                                    {"id": 9, "author": AGENT, "action": "english",
                                     "brief": ""}, dry_run=False)
@@ -140,19 +149,24 @@ class EnglishTranscript(unittest.TestCase):
                         author=API_USER, cid=8)
         comments = [comment("claude: english", cid=9),
                     dict(comment("hallo", author=42, cid=7), public=True), prior]
-        session = FakeSession([FakeResponse({"ticket": {}})])
+        session = fake_session(*[FakeResponse({"ticket": {}})])
         with Patched(triage, conversation_turns=lambda *a: None):
             note_reply.run_english(session, "sub", "model", {"id": 7}, comments,
                                    {"id": 9, "author": AGENT, "action": "english",
                                     "brief": ""}, dry_run=False)
-        ticket = session.calls[0][2]["json"]["ticket"]
-        self.assertEqual(ticket.get("additional_tags", []), [])
-        self.assertIn(note_reply.TAG_ERROR, ticket["remove_tags"])
+        # the note itself carries no tag fields; the tag work is separate calls
+        self.assertNotIn("additional_tags", session.calls[0][2]["json"]["ticket"])
+        dropped = [kw["json"]["tags"] for m, u, kw in session.calls
+                   if m == "DELETE" and "/tags.json" in u]
+        self.assertTrue(any(note_reply.TAG_ERROR in names for names in dropped))
+        added = [kw["json"]["tags"] for m, u, kw in session.calls
+                 if m == "PUT" and "/tags.json" in u]
+        self.assertEqual(added, [], "a working command must not be tagged an error")
 
     def test_an_english_ticket_gets_no_transcript(self):
         """A transcript of English text repeats what is already on the ticket."""
         turns = [{"index": 0, "who": "Customer", "when": "t", "body": "My app crashes"}]
-        session = FakeSession([FakeResponse({"ticket": {}})])
+        session = fake_session(*[FakeResponse({"ticket": {}})])
         with Patched(triage, conversation_turns=lambda *a: turns,
                      claude_cli_json=lambda *a, **k: {
                          "turns": [{"index": 0, "english": "My app crashes"}]}):
@@ -213,7 +227,7 @@ class EnglishTranscript(unittest.TestCase):
     def test_the_transcript_note_is_never_public(self):
         turns = [{"index": 0, "who": "Customer", "when": "2026-09-03 10:00 UTC",
                   "body": "Hallo"}]
-        session = FakeSession([FakeResponse({"ticket": {}})])
+        session = fake_session(*[FakeResponse({"ticket": {}})])
         with Patched(triage, conversation_turns=lambda *a: turns,
                      claude_cli_json=lambda *a, **k: {"turns": [{"index": 0,
                                                                 "english": "Hello"}]}):
@@ -363,6 +377,53 @@ class FindDraft(unittest.TestCase):
         self.assertIn("a &amp; b &lt;c&gt;", note["body"])
 
 
+class CustomerSample(unittest.TestCase):
+    """Which text decides the language the customer is answered in."""
+
+    TWEET = {"id": 1, "subject": "Conversation with 我命由我不由天",
+             "description": "Conversation with 我命由我不由天", "requester_id": 999}
+    EMAIL = {"id": 2, "subject": "Cannot log in",
+             "description": "Ich kann mich nicht anmelden.", "requester_id": 999}
+
+    def test_an_ordinary_ticket_uses_the_requester_s_own_words(self):
+        session = fake_session()
+        got = note_reply.customer_sample(session, "sub", self.EMAIL, [])
+        self.assertIn("Ich kann mich nicht anmelden", got)
+        self.assertEqual(session.calls, [], "no lookups needed for a normal ticket")
+
+    def test_a_dm_falls_back_to_the_integration_authored_message(self):
+        """The bug this exists for: on a Twitter DM the integration authors the
+        customer's message under its own id, so filtering on requester_id drops
+        every word they wrote and the reply goes out in English to a Chinese
+        speaker."""
+        comments = [
+            {"id": 20, "author_id": 901790886886, "public": True,
+             "body": "Thanks for getting in touch."},
+            {"id": 10, "author_id": -1, "public": True,
+             "body": "(10:36:27) 我命由我不由天: 中国大陆可以使用吗？"},
+        ]
+        # oldest comment first, so the integration author is resolved before the agent
+        session = fake_session(FakeResponse({"user": {}}),
+                               FakeResponse({"user": {"id": 901790886886, "role": "admin"}}))
+        got = note_reply.customer_sample(session, "sub", self.TWEET, comments)
+        self.assertIn("中国大陆可以使用吗", got)
+        self.assertNotIn("Thanks for getting in touch", got,
+                         "an agent's English reply must not skew the detection")
+
+    def test_an_unknown_author_counts_as_the_customer(self):
+        """The integration's id is an account detail; a user we cannot resolve is a
+        customer, not an agent."""
+        comments = [{"id": 10, "author_id": -1, "public": True, "body": "中国大陆可以使用吗？"}]
+        session = fake_session(FakeResponse({}, status_code=404))
+        self.assertIn("中国大陆", note_reply.customer_sample(session, "sub", self.TWEET, comments))
+
+    def test_private_notes_never_reach_the_detector(self):
+        comments = [{"id": 10, "author_id": -1, "public": False, "body": "claude: draft - x"}]
+        session = fake_session(FakeResponse({"user": {}}))
+        got = note_reply.customer_sample(session, "sub", self.TWEET, comments)
+        self.assertNotIn("claude: draft", got)
+
+
 class ChoosingAnOption(unittest.TestCase):
     """Which of the offered replies actually reaches the customer."""
 
@@ -391,37 +452,40 @@ class ChoosingAnOption(unittest.TestCase):
                 self.assertEqual(note_reply.asked_option(text), want)
 
     def test_reply_two_sends_the_second_option_verbatim(self):
-        session = FakeSession([FakeResponse({"user": {"id": AGENT, "name": "Audric"}}),
+        session = fake_session(*[FakeResponse({"user": {"id": AGENT, "name": "Audric"}}),
                                FakeResponse({"ticket": {}}), FakeResponse({"ticket": {}})])
         comments = [comment("claude: reply 2", cid=3),
                     draft_note("erste", "zweite", "dritte", cid=2)]
         note_reply.run_reply(session, "sub", {"id": 7}, comments,
                              {"id": 3, "author": AGENT, "action": "reply", "brief": "2"},
                              API_USER, dry_run=False)
-        puts = [c for c in session.calls if c[0] == "PUT"]
+        puts = [c for c in session.calls if c[0] == "PUT" and "/tags.json" not in c[1]]
         self.assertEqual(puts[0][2]["json"]["ticket"]["comment"],
                          {"body": "zweite", "public": True})
 
     def test_an_ambiguous_reply_writes_no_public_comment(self):
-        session = FakeSession([FakeResponse({"ticket": {}})])
+        session = fake_session(*[FakeResponse({"ticket": {}})])
         comments = [comment("claude: reply", cid=3),
                     draft_note("erste", "zweite", cid=2)]
         note_reply.run_reply(session, "sub", {"id": 7}, comments,
                              {"id": 3, "author": AGENT, "action": "reply", "brief": ""},
                              API_USER, dry_run=False)
-        for _, _, kwargs in session.calls:
+        for _, url, kwargs in session.calls:
+            if "/tags.json" in url:
+                continue
             self.assertIs(kwargs["json"]["ticket"]["comment"]["public"], False)
 
     def test_being_asked_to_choose_is_not_an_error(self):
         """`claude-error` is the queue of broken tickets, not of ordinary prompts."""
-        session = FakeSession([FakeResponse({"ticket": {}})])
+        session = fake_session(*[FakeResponse({"ticket": {}})])
         note_reply.run_reply(session, "sub", {"id": 7},
                              [comment("claude: reply", cid=3),
                               draft_note("a", "b", cid=2)],
                              {"id": 3, "author": AGENT, "action": "reply", "brief": ""},
                              API_USER, dry_run=False)
-        ticket = session.calls[0][2]["json"]["ticket"]
-        self.assertEqual(ticket.get("additional_tags", []), [])
+        added = [kw["json"]["tags"] for m, u, kw in session.calls
+                 if m == "PUT" and "/tags.json" in u]
+        self.assertEqual(added, [], "being asked to choose is not an error")
 
     def test_the_prompt_asks_for_genuinely_different_options(self):
         prompt = " ".join(note_reply.COMPOSE_SYSTEM.lower().split())
@@ -436,20 +500,20 @@ class QueueTag(unittest.TestCase):
     def test_a_run_with_nothing_to_do_still_clears_the_tag(self):
         """Claude's own notes name the commands, so posting one re-fires the trigger.
         That second run finds only its own note — and must not leave the tag behind."""
-        session = FakeSession([FakeResponse({"ticket": {}})])
+        session = fake_session(*[FakeResponse({})])
         note_reply.clear_queued(session, "sub", 7)
-        ticket = session.calls[0][2]["json"]["ticket"]
-        self.assertEqual(ticket["remove_tags"], [note_reply.TAG_QUEUED])
-        self.assertNotIn("comment", ticket)
+        method, url, kwargs = session.calls[0]
+        self.assertEqual((method, kwargs["json"]), ("DELETE", {"tags": [note_reply.TAG_QUEUED]}))
+        self.assertTrue(url.endswith("/tickets/7/tags.json"))
 
     def test_a_dry_run_clears_nothing(self):
-        session = FakeSession([])
+        session = fake_session(*[])
         note_reply.clear_queued(session, "sub", 7, dry_run=True)
         self.assertEqual(session.calls, [])
 
     def test_a_failure_to_clear_is_not_fatal(self):
         """The tag is a dashboard light, not the work."""
-        session = FakeSession([FakeResponse({}, status_code=500),
+        session = fake_session(*[FakeResponse({}, status_code=500),
                                FakeResponse({}, status_code=500),
                                FakeResponse({}, status_code=500),
                                FakeResponse({}, status_code=500),
@@ -469,7 +533,7 @@ class Explain(unittest.TestCase):
                     actions=["Fix shipped in v2.15.3 (case 27896)"])
         book = {"groups": BOOK["groups"],
                 "cells": dict(BOOK["cells"], **{"attachments|android": cell})}
-        session = FakeSession([FakeResponse({"ticket": {}})])
+        session = fake_session(*[FakeResponse({"ticket": {}})])
         with Patched(note_reply, load_house=lambda *a: book):
             note_reply.run_explain(
                 session, "sub", "model",
@@ -484,17 +548,19 @@ class Explain(unittest.TestCase):
     def test_it_writes_nothing_when_the_ticket_matches_nothing(self):
         with Patched(note_reply, load_house=lambda *a: BOOK,
                      place_ticket=lambda *a: (None, "android")):
-            session = FakeSession([FakeResponse({"ticket": {}})])
+            session = fake_session(*[FakeResponse({"ticket": {}})])
             note_reply.run_explain(session, "sub", "model", {"id": 7, "tags": []}, [],
                                    {"id": 9, "author": AGENT, "action": "explain",
                                     "brief": ""}, dry_run=False)
-        ticket = session.calls[0][2]["json"]["ticket"]
-        self.assertIn("no precedent", ticket["comment"]["html_body"])
-        self.assertEqual(ticket.get("additional_tags", []), [])
+        self.assertIn("no precedent",
+                      session.calls[0][2]["json"]["ticket"]["comment"]["html_body"])
+        added = [kw["json"]["tags"] for m, u, kw in session.calls
+                 if m == "PUT" and "/tags.json" in u]
+        self.assertEqual(added, [])
 
     def test_no_house_answers_configured_is_said_plainly(self):
         with Patched(note_reply, load_house=lambda *a: None):
-            session = FakeSession([FakeResponse({"ticket": {}})])
+            session = fake_session(*[FakeResponse({"ticket": {}})])
             note_reply.run_explain(session, "sub", "model", {"id": 7, "tags": []}, [],
                                    {"id": 9, "author": AGENT, "action": "explain",
                                     "brief": ""}, dry_run=False)
@@ -522,7 +588,7 @@ class Authorisation(unittest.TestCase):
 
 class LatestCommand(unittest.TestCase):
     def session_for(self, role="agent"):
-        return FakeSession([FakeResponse({"user": {"id": AGENT, "role": role}})])
+        return fake_session(*[FakeResponse({"user": {"id": AGENT, "role": role}})])
 
     def test_takes_the_newest_command(self):
         comments = [comment("claude: reply", cid=3), comment("claude: draft - x", cid=2)]
@@ -551,7 +617,7 @@ class LatestCommand(unittest.TestCase):
 
     def test_no_command_present(self):
         self.assertIsNone(note_reply.latest_command(
-            [comment("just a note")], API_USER, FakeSession([]), "sub"))
+            [comment("just a note")], API_USER, fake_session(*[]), "sub"))
 
 
 class Idempotency(unittest.TestCase):
@@ -569,13 +635,13 @@ class Idempotency(unittest.TestCase):
 
 class Writes(unittest.TestCase):
     def test_reply_sends_the_draft_verbatim_and_sets_pending(self):
-        session = FakeSession([FakeResponse({"user": {"id": AGENT, "name": "Audric"}}),
+        session = fake_session(*[FakeResponse({"user": {"id": AGENT, "name": "Audric"}}),
                                FakeResponse({"ticket": {}}), FakeResponse({"ticket": {}})])
         comments = [comment("claude: reply", cid=3), draft_note("Hallo Welt", cid=2)]
         note_reply.run_reply(session, "sub", {"id": 7}, comments,
                              {"id": 3, "author": AGENT, "action": "reply", "brief": ""},
                              API_USER, dry_run=False)
-        puts = [call for call in session.calls if call[0] == "PUT"]
+        puts = [c for c in session.calls if c[0] == "PUT" and "/tags.json" not in c[1]]
         self.assertEqual(len(puts), 2)
         public = puts[0][2]["json"]["ticket"]
         self.assertEqual(public["comment"], {"body": "Hallo Welt", "public": True})
@@ -583,39 +649,56 @@ class Writes(unittest.TestCase):
         self.assertIs(puts[1][2]["json"]["ticket"]["comment"]["public"], False)
 
     def test_reply_without_a_draft_writes_no_public_comment(self):
-        session = FakeSession([FakeResponse({"ticket": {}})])
+        session = fake_session(*[FakeResponse({"ticket": {}})])
         note_reply.run_reply(session, "sub", {"id": 7}, [comment("claude: reply", cid=3)],
                              {"id": 3, "author": AGENT, "action": "reply", "brief": ""},
                              API_USER, dry_run=False)
-        for _, _, kwargs in session.calls:
+        for _, url, kwargs in session.calls:
+            if "/tags.json" in url:
+                continue
             self.assertIs(kwargs["json"]["ticket"]["comment"]["public"], False)
 
     def test_a_dry_run_writes_nothing(self):
-        session = FakeSession([FakeResponse({"user": {"id": AGENT, "name": "Audric"}})])
+        session = fake_session(*[FakeResponse({"user": {"id": AGENT, "name": "Audric"}})])
         note_reply.run_reply(session, "sub", {"id": 7},
                              [comment("claude: reply", cid=3), draft_note("Hallo", cid=2)],
                              {"id": 3, "author": AGENT, "action": "reply", "brief": ""},
                              API_USER, dry_run=True)
-        self.assertEqual([call for call in session.calls if call[0] == "PUT"], [])
+        self.assertEqual([c for c in session.calls if c[0] == "PUT"], [])
 
     def test_an_empty_brief_is_refused_without_calling_claude(self):
         called = []
         with Patched(note_reply, compose=lambda *a: called.append(a)):
-            session = FakeSession([FakeResponse({"ticket": {}})])
+            session = fake_session(*[FakeResponse({"ticket": {}})])
             note_reply.run_draft(session, "sub", "model", {"id": 7}, [],
                                  {"id": 3, "author": AGENT, "action": "draft", "brief": ""},
                                  API_USER, dry_run=False)
         self.assertEqual(called, [])
         self.assertIs(session.calls[0][2]["json"]["ticket"]["comment"]["public"], False)
 
-    def test_tags_move_the_ticket_out_of_the_queue(self):
-        session = FakeSession([FakeResponse({"ticket": {}})])
+    def test_tags_go_through_the_sub_resource_not_the_ticket_update(self):
+        """`additional_tags`/`remove_tags` are update_many fields. A single-ticket
+        update takes them with a 200 and silently ignores them, which is how every
+        tag this tool set went missing while every call looked successful."""
+        session = fake_session(*[FakeResponse({"ticket": {}}), FakeResponse({}),
+                               FakeResponse({})])
         note_reply.write_to_ticket(session, "sub", 7, "note", public=False,
                                    add_tags=[note_reply.TAG_DRAFTED],
                                    drop_tags=[note_reply.TAG_QUEUED])
-        ticket = session.calls[0][2]["json"]["ticket"]
-        self.assertEqual(ticket["additional_tags"], [note_reply.TAG_DRAFTED])
-        self.assertEqual(ticket["remove_tags"], [note_reply.TAG_QUEUED])
+        comment_put = session.calls[0][2]["json"]["ticket"]
+        self.assertNotIn("additional_tags", comment_put)
+        self.assertNotIn("remove_tags", comment_put)
+        tag_calls = [(m, u.rsplit("/", 1)[-1], kw["json"]["tags"])
+                     for m, u, kw in session.calls[1:]]
+        self.assertEqual(tag_calls, [("PUT", "tags.json", [note_reply.TAG_DRAFTED]),
+                                     ("DELETE", "tags.json", [note_reply.TAG_QUEUED])])
+
+    def test_the_comment_is_written_before_the_tags(self):
+        """A tag failure must not lose the note."""
+        session = fake_session(*[FakeResponse({"ticket": {}}), FakeResponse({})])
+        note_reply.write_to_ticket(session, "sub", 7, "note", public=False,
+                                   add_tags=[note_reply.TAG_SENT])
+        self.assertIn("comment", session.calls[0][2]["json"]["ticket"])
 
 
 class DraftNote(unittest.TestCase):
@@ -692,7 +775,7 @@ class Composition(unittest.TestCase):
             seen.update(brief=brief, previous=previous, precedent=precedent)
             return GERMAN
         with Patched(note_reply, compose=fake):
-            session = FakeSession([FakeResponse({"ticket": {}})])
+            session = fake_session(*[FakeResponse({"ticket": {}})])
             note_reply.run_draft(
                 session, "sub", "model", {"id": 7, "requester_id": 42},
                 [comment("claude: draft - also mention X", cid=11),
@@ -709,7 +792,7 @@ class Composition(unittest.TestCase):
             seen.update(previous=previous, precedent=precedent)
             return GERMAN
         with Patched(note_reply, compose=fake):
-            session = FakeSession([FakeResponse({"ticket": {}})])
+            session = fake_session(*[FakeResponse({"ticket": {}})])
             note_reply.run_draft(
                 session, "sub", "model", {"id": 7, "requester_id": 42},
                 [comment("claude: draft - x", cid=11)],
