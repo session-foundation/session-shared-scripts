@@ -149,6 +149,67 @@ class EnglishTranscript(unittest.TestCase):
         self.assertEqual(ticket.get("additional_tags", []), [])
         self.assertIn(note_reply.TAG_ERROR, ticket["remove_tags"])
 
+    def test_an_english_ticket_gets_no_transcript(self):
+        """A transcript of English text repeats what is already on the ticket."""
+        turns = [{"index": 0, "who": "Customer", "when": "t", "body": "My app crashes"}]
+        session = FakeSession([FakeResponse({"ticket": {}})])
+        with Patched(triage, conversation_turns=lambda *a: turns,
+                     claude_cli_json=lambda *a, **k: {
+                         "turns": [{"index": 0, "english": "My app crashes"}]}):
+            note_reply.run_english(session, "sub", "model", {"id": 7},
+                                   [comment("claude: english", cid=9)],
+                                   {"id": 9, "author": AGENT, "action": "english",
+                                    "brief": ""}, dry_run=False)
+        body = session.calls[0][2]["json"]["ticket"]["comment"]["html_body"]
+        self.assertIn("already in English", body)
+        self.assertEqual(session.calls[0][2]["json"]["ticket"].get("additional_tags", []), [])
+
+    def test_unaccented_german_is_still_translated(self):
+        """The reason this is checked after the call, not guessed before it:
+        "Hallo, ich habe ein Problem" is pure ASCII, and a character test would have
+        called it English and left the agent unable to read it."""
+        turns = [{"index": 0, "who": "Customer", "when": "t",
+                  "body": "Hallo, ich habe ein Problem"}]
+        self.assertFalse(note_reply.already_english(
+            turns, [{"index": 0, "english": "Hello, I have a problem"}]))
+
+    def test_a_turn_the_model_dropped_counts_as_needing_translation(self):
+        turns = [{"index": 0, "who": "Customer", "when": "t", "body": "Hallo"},
+                 {"index": 1, "who": "Support", "when": "t", "body": "Hi"}]
+        self.assertFalse(note_reply.already_english(
+            turns, [{"index": 0, "english": "Hallo"}]))
+
+    def test_whitespace_and_case_do_not_count_as_a_translation(self):
+        turns = [{"index": 0, "who": "Customer", "when": "t", "body": "My  app\ncrashes"}]
+        self.assertTrue(note_reply.already_english(
+            turns, [{"index": 0, "english": "my app crashes"}]))
+
+    def test_a_turn_with_blank_lines_stays_one_turn(self):
+        """The first version split render_transcript's output on blank lines, which
+        tore a single multi-paragraph message into a row of disconnected boxes."""
+        turns = [{"index": 0, "who": "Customer", "when": "2026-09-03 10:00 UTC",
+                  "body": "Hallo,\n\nzweiter Absatz.\n\ndritter Absatz."}]
+        blocks = note_reply.transcript_blocks(turns, [])
+        self.assertEqual(sum(1 for b in blocks if "<strong>" in b), 1,
+                         "one speaker line per turn, not one per paragraph")
+        self.assertEqual(len(blocks), 4)  # speaker line + three paragraphs
+
+    def test_the_transcript_is_prose_not_code_blocks(self):
+        """<pre> is for text that gets extracted and sent byte for byte. Nothing
+        extracts a transcript, and a code box is the wrong shape for prose."""
+        turns = [{"index": 0, "who": "Customer", "when": "", "body": "Hallo"}]
+        self.assertNotIn("<pre>", "".join(note_reply.transcript_blocks(turns, [])))
+
+    def test_each_turn_gets_its_speaker_line(self):
+        turns = [{"index": 0, "who": "Customer", "when": "t1", "body": "a"},
+                 {"index": 1, "who": "Support", "when": "t2", "body": "b"}]
+        blocks = note_reply.transcript_blocks(turns, [{"index": 1, "english": "B"}])
+        joined = "".join(blocks)
+        self.assertIn("Customer:", joined)
+        self.assertIn("Support:", joined)
+        self.assertIn("B", joined)          # translated turn used
+        self.assertIn("a", joined)          # untranslated turn falls back to original
+
     def test_the_transcript_note_is_never_public(self):
         turns = [{"index": 0, "who": "Customer", "when": "2026-09-03 10:00 UTC",
                   "body": "Hallo"}]
@@ -366,6 +427,79 @@ class ChoosingAnOption(unittest.TestCase):
         prompt = " ".join(note_reply.COMPOSE_SYSTEM.lower().split())
         self.assertIn("genuinely different", prompt)
         self.assertIn("if the brief only supports one honest reply, return one", prompt)
+
+
+class QueueTag(unittest.TestCase):
+    """`claude-queued` means "a webhook fired and nobody serviced it". Anything else
+    left in it turns the dropped-job view into noise."""
+
+    def test_a_run_with_nothing_to_do_still_clears_the_tag(self):
+        """Claude's own notes name the commands, so posting one re-fires the trigger.
+        That second run finds only its own note — and must not leave the tag behind."""
+        session = FakeSession([FakeResponse({"ticket": {}})])
+        note_reply.clear_queued(session, "sub", 7)
+        ticket = session.calls[0][2]["json"]["ticket"]
+        self.assertEqual(ticket["remove_tags"], [note_reply.TAG_QUEUED])
+        self.assertNotIn("comment", ticket)
+
+    def test_a_dry_run_clears_nothing(self):
+        session = FakeSession([])
+        note_reply.clear_queued(session, "sub", 7, dry_run=True)
+        self.assertEqual(session.calls, [])
+
+    def test_a_failure_to_clear_is_not_fatal(self):
+        """The tag is a dashboard light, not the work."""
+        session = FakeSession([FakeResponse({}, status_code=500),
+                               FakeResponse({}, status_code=500),
+                               FakeResponse({}, status_code=500),
+                               FakeResponse({}, status_code=500),
+                               FakeResponse({}, status_code=500),
+                               FakeResponse({}, status_code=500)])
+        note_reply.clear_queued(session, "sub", 7)   # must not raise
+
+
+class Explain(unittest.TestCase):
+    """The read-only verb that surfaces known fixes, which `draft` refuses to assert."""
+
+    def test_explain_is_a_command(self):
+        self.assertEqual(note_reply.parse_command("claude: explain"), ("explain", ""))
+
+    def test_it_shows_what_was_actually_done(self):
+        cell = dict(BOOK["cells"]["attachments|android"],
+                    actions=["Fix shipped in v2.15.3 (case 27896)"])
+        book = {"groups": BOOK["groups"],
+                "cells": dict(BOOK["cells"], **{"attachments|android": cell})}
+        session = FakeSession([FakeResponse({"ticket": {}})])
+        with Patched(note_reply, load_house=lambda *a: book):
+            note_reply.run_explain(
+                session, "sub", "model",
+                {"id": 7, "tags": ["grp-attachments", "plat-android"]}, [],
+                {"id": 9, "author": AGENT, "action": "explain", "brief": ""},
+                dry_run=False)
+        body = session.calls[0][2]["json"]["ticket"]["comment"]["html_body"]
+        self.assertIn("v2.15.3", body)
+        self.assertIn("never shipped", body)      # the caveat travels with it
+        self.assertIs(session.calls[0][2]["json"]["ticket"]["comment"]["public"], False)
+
+    def test_it_writes_nothing_when_the_ticket_matches_nothing(self):
+        with Patched(note_reply, load_house=lambda *a: BOOK,
+                     place_ticket=lambda *a: (None, "android")):
+            session = FakeSession([FakeResponse({"ticket": {}})])
+            note_reply.run_explain(session, "sub", "model", {"id": 7, "tags": []}, [],
+                                   {"id": 9, "author": AGENT, "action": "explain",
+                                    "brief": ""}, dry_run=False)
+        ticket = session.calls[0][2]["json"]["ticket"]
+        self.assertIn("no precedent", ticket["comment"]["html_body"])
+        self.assertEqual(ticket.get("additional_tags", []), [])
+
+    def test_no_house_answers_configured_is_said_plainly(self):
+        with Patched(note_reply, load_house=lambda *a: None):
+            session = FakeSession([FakeResponse({"ticket": {}})])
+            note_reply.run_explain(session, "sub", "model", {"id": 7, "tags": []}, [],
+                                   {"id": 9, "author": AGENT, "action": "explain",
+                                    "brief": ""}, dry_run=False)
+        self.assertIn("No house answers",
+                      session.calls[0][2]["json"]["ticket"]["comment"]["html_body"])
 
 
 class Authorisation(unittest.TestCase):

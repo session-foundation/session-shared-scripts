@@ -29,6 +29,10 @@ Two actions, both read from the ticket's own comments:
            reviewed is what goes out, or the review means nothing.
   english  Post the whole conversation, both sides, in English as a private note.
            Reads only; the customer never sees it.
+  explain  Post what support usually replies to this kind of ticket, and what was
+           actually done about it before — fixes shipped, bugs filed, escalations.
+           Reads only. This is where known fixes are surfaced, because `draft`
+           refuses to assert one that is not in the brief.
 
 The action comes from the newest private note that parses as a command, so the
 webhook only has to say which ticket changed. Notes written by the API user are
@@ -151,8 +155,9 @@ def english_marker(latest_public_id):
 
 # Anchored to the start of a line so that prose mentioning the command in passing —
 # including the instructions in Claude's own draft notes — is not a command.
-COMMAND = re.compile(r"^[\s>*_]*claude\s*:\s*(draft|reply|english)\b[\s\-–—:.]*(.*)$",
-                     re.IGNORECASE)
+COMMAND = re.compile(
+    r"^[\s>*_]*claude\s*:\s*(draft|reply|english|explain)\b[\s\-–—:.]*(.*)$",
+    re.IGNORECASE)
 
 
 def parse_command(text):
@@ -223,9 +228,59 @@ def may_command(user):
     return not allowed or str(user.get("id")) in allowed
 
 
+def clear_queued(session, subdomain, ticket_id, dry_run=False):
+    """Take the ticket out of the "waiting on Claude" queue, writing no comment.
+
+    Every run that finishes servicing a ticket clears it, including one that decides
+    there is nothing to do. Otherwise the tag accumulates: Claude's own notes name
+    the commands, so posting one re-fires the trigger, and that second run finds only
+    its own note and writes nothing — leaving `claude-queued` behind on every ticket
+    it ever touched, which is precisely the signal that is supposed to mean a job was
+    dropped.
+    """
+    if dry_run:
+        return
+    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}.json"
+    resp = triage.request_with_retry(session, "PUT", url,
+                                     json={"ticket": {"remove_tags": [TAG_QUEUED]}})
+    if resp.status_code >= 400:
+        # Never worth failing a run over: the tag is a dashboard light, not the work.
+        print(f"Note: could not clear {TAG_QUEUED} on #{ticket_id} "
+              f"({resp.status_code}).")
+
+
 def para(text):
     """One paragraph of the note, escaped."""
     return f"<p>{html.escape(text)}</p>"
+
+
+def bold_para(text):
+    """A paragraph that leads a section — a speaker line in a transcript."""
+    return f"<p><strong>{html.escape(text)}</strong></p>"
+
+
+def transcript_blocks(turns, translated):
+    """One turn at a time, as readable paragraphs.
+
+    Deliberately not triage.render_transcript's output re-split on blank lines: a
+    turn whose own text contains a blank line gets torn into several pieces that
+    way, which is what made the first version render as a row of disconnected code
+    boxes. The speaker line leads each turn and the body follows as prose — nothing
+    extracts this text, so it wants readability, not byte fidelity.
+    """
+    english = {}
+    for item in translated or []:
+        try:
+            english[int(item.get("index"))] = (item.get("english") or "").strip()
+        except (TypeError, ValueError):
+            continue
+    out = []
+    for turn in turns:
+        out.append(bold_para(" ".join(part for part in (turn["when"], f'{turn["who"]}:')
+                                      if part)))
+        body = english.get(turn["index"]) or turn["body"]
+        out += [para(chunk.strip()) for chunk in body.split("\n\n") if chunk.strip()]
+    return out
 
 
 def verbatim(text):
@@ -732,6 +787,58 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
                     drop_tags=[TAG_QUEUED, TAG_ERROR])
 
 
+def run_explain(session, subdomain, model, ticket, comments, command, dry_run):
+    """Say what we already know about this kind of ticket, without writing a reply.
+
+    The house answer, the steps, and — the reason this verb exists — what was
+    actually DONE before: fixes confirmed shipped, bugs filed, escalations. Those are
+    the things `draft` deliberately refuses to put in a reply, because they were true
+    of another ticket on another day. Here they are shown to a human, who can decide
+    whether one still applies and put it in the brief.
+    """
+    ticket_id = ticket["id"]
+    book = load_house()
+    if not book:
+        say(session, subdomain, ticket_id, command["id"],
+            "No house answers are configured on this relay, so there is nothing to "
+            "look up.", dry_run)
+        return
+    group, platform = tagged_placement(ticket)
+    new_tags = []
+    if not group:
+        group, platform = place_ticket(model, book, ticket, comments)
+        new_tags = ([f"{TAG_GROUP_PREFIX}{group}"] if group else []) + \
+                   ([f"{TAG_PLATFORM_PREFIX}{platform}"] if platform else [])
+    cell, covering = house_cell(book, group, platform)
+    if not cell:
+        say(session, subdomain, ticket_id, command["id"],
+            "This ticket does not match anything in the house answers, so there is "
+            "no precedent to show. Write the brief yourself.", dry_run, error=False)
+        return
+    title = next((g["title"] for g in book["groups"] if g["key"] == group), group)
+    print(f"#{ticket_id}: {group}/{covering}, {cell['n']} solved.")
+    if dry_run:
+        print(f"#{ticket_id}: dry run, nothing written.")
+        return
+    out = [para(f"What we usually reply to: {title} ({covering}) — "
+                f"{cell['n']} solved tickets, {cell['consistency']} consistency."),
+           para(cell["answer"])]
+    if cell.get("steps"):
+        out.append(para("Steps usually given: " + "; ".join(cell["steps"])))
+    if cell.get("actions"):
+        out.append(bold_para("What was actually done on those tickets:"))
+        out += [para(action) for action in cell["actions"]]
+    if (cell.get("caveat") or "").strip():
+        out.append(para("Careful: " + cell["caveat"].strip()))
+    if cell.get("examples"):
+        out.append(para("Verify against " + ", ".join(f"#{i}" for i in cell["examples"])))
+    out.append(para("Nothing was written to the customer. To answer, add a private "
+                    "note — claude: draft <what the answer is>"))
+    out.append(para(done_marker(command["id"])))
+    write_to_ticket(session, subdomain, ticket_id, "".join(out), public=False,
+                    as_html=True, add_tags=new_tags, drop_tags=[TAG_QUEUED, TAG_ERROR])
+
+
 def run_reply(session, subdomain, ticket, comments, command, api_user, dry_run):
     """Publish the chosen option, exactly as it was reviewed.
 
@@ -765,6 +872,30 @@ def run_reply(session, subdomain, ticket, comments, command, api_user, dry_run):
     print(f"#{ticket_id}: reply sent and status -> {REPLIED_STATUS}.")
 
 
+def already_english(turns, translated):
+    """Whether the translation came back as the text it was given.
+
+    Asked after the call rather than guessed before it. A character test looked
+    cheaper, but "Hallo, ich habe ein Problem" is pure ASCII — it would have called
+    every unaccented German ticket English and left the agent unable to read the
+    thing they asked to read. Judging by the output costs one model call and cannot
+    make that mistake.
+
+    Any turn the model did not return, or returned changed, means translating
+    happened — so this fails towards posting the transcript.
+    """
+    english = {}
+    for item in translated or []:
+        try:
+            english[int(item.get("index"))] = (item.get("english") or "").strip()
+        except (TypeError, ValueError):
+            continue
+    squash = lambda text: " ".join((text or "").split()).lower()
+    return all(english.get(turn["index"])
+               and squash(english[turn["index"]]) == squash(turn["body"])
+               for turn in turns)
+
+
 def run_english(session, subdomain, model, ticket, comments, command, dry_run):
     """Put the conversation on the ticket in English, as a private note.
 
@@ -788,24 +919,28 @@ def run_english(session, subdomain, model, ticket, comments, command, dry_run):
         say(session, subdomain, ticket_id, command["id"],
             "There are no public comments on this ticket to translate.", dry_run)
         return
+
     payload = json.dumps([{"index": t["index"], "speaker": t["who"], "text": t["body"]}
                           for t in turns], ensure_ascii=False)
     rendered = triage.claude_cli_json(
         model, "medium", triage.TRANSCRIPT_SYSTEM_PROMPT, triage.TRANSCRIPT_SCHEMA,
         triage.clip(payload, triage.TRANSCRIPT_INPUT_CHARS),
         triage.ENGLISH_TIMEOUT_SECONDS, f"the English transcript of #{ticket_id}")
-    english = triage.clip(triage.render_transcript(turns, rendered.get("turns")),
-                          triage.TRANSCRIPT_CHARS)
+    if already_english(turns, rendered.get("turns")):
+        # A transcript of English text repeats what is already a few comments above
+        # it. Say so rather than posting the same words back.
+        say(session, subdomain, ticket_id, command["id"],
+            "This conversation is already in English, so there is nothing to "
+            "translate.", dry_run, error=False)
+        return
     print(f"#{ticket_id}: rendered {len(turns)} turn(s) in English.")
     if dry_run:
         print(f"#{ticket_id}: dry run, nothing written.")
         return
-    # One paragraph per turn, split on the blank line render_transcript puts between
-    # them, so a long conversation reads as a conversation rather than a wall.
     note = "".join(
         [para(f"This conversation in English — {len(turns)} turn(s), both sides."),
          para("Translated for reading; the customer has not seen this.")]
-        + [verbatim(block) for block in english.split("\n\n") if block.strip()]
+        + transcript_blocks(turns, rendered.get("turns"))
         + [para(f"{done_marker(command['id'])} {english_marker(latest)}")])
     write_to_ticket(session, subdomain, ticket_id, note, public=False, as_html=True,
                     drop_tags=[TAG_QUEUED, TAG_ERROR])
@@ -883,14 +1018,19 @@ def main():
     command = latest_command(comments, api_user, session, subdomain)
     if not command:
         print(f"#{args.ticket}: no command note to act on.")
+        clear_queued(session, subdomain, args.ticket, args.dry_run)
         return
     if reply.already_replied(comments, done_marker(command["id"])):
         print(f"#{args.ticket}: this command was already handled; nothing written.")
+        clear_queued(session, subdomain, args.ticket, args.dry_run)
         return
 
     if command["action"] == "draft":
         run_draft(session, subdomain, args.model, ticket, comments, command,
                   api_user, args.dry_run)
+    elif command["action"] == "explain":
+        run_explain(session, subdomain, args.model, ticket, comments, command,
+                    args.dry_run)
     elif command["action"] == "english":
         run_english(session, subdomain, args.model, ticket, comments, command, args.dry_run)
     else:
