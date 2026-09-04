@@ -234,11 +234,69 @@ class TestWindowQuery(unittest.TestCase):
     def test_query_keeps_unsolved_filter_and_newest_first_ordering(self):
         query = triage.build_window_query(72)
         self.assertIn("type:ticket", query)
-        self.assertIn("status<solved", query)
+        # `status<pending`, not `status<solved`: a pending ticket has already been
+        # replied to and the automation resolves it on its own, so putting it in the
+        # digest asks a human to look at work that is finished.
+        self.assertIn("status<pending", query)
+        self.assertNotIn("status<solved", query)
         # Ordered by the same field the window bounds, so a fetch truncated at
         # --max-tickets drops the least recently touched rather than the oldest.
         self.assertIn("order_by:updated_at", query)
         self.assertIn("sort:desc", query)
+
+    def test_store_reviews_are_never_in_scope(self):
+        """A review takes one developer response, replacing any previous one, and
+        cannot be asked a follow-up. It is not work a digest can queue up."""
+        for query in (triage.build_window_query(72), triage.DEFAULT_QUERY):
+            with self.subTest(query=query):
+                self.assertIn(f"-via:{triage.REVIEW_CHANNEL}", query)
+
+    def test_pending_tickets_are_out_of_scope(self):
+        """A pending ticket is one somebody already answered. It leaves the queue on
+        its own after 72h, so listing it asks for attention that is not needed."""
+        for query in (triage.build_window_query(72), triage.DEFAULT_QUERY,
+                      triage.BACKLOG_QUERY, triage.BACKLOG_NON_REVIEW_QUERY):
+            with self.subTest(query=query):
+                self.assertIn("status<pending", query)
+
+    def test_the_backlog_count_is_scoped_like_the_analysis(self):
+        """The header number and the tickets below it must mean the same thing, or
+        the digest reports a backlog it is not showing. The headline figure is the
+        review-excluded one, which is what the analysis now covers."""
+        analysed = triage.build_window_query(72).split(" updated>")[0]
+        self.assertEqual(sorted(analysed.split()),
+                         sorted(triage.BACKLOG_NON_REVIEW_QUERY.split()))
+
+    def test_a_ticket_only_we_touched_leaves_the_window(self):
+        """The bug this exists for: a `claude: explain` note bumps updated_at, and
+        the window query is on updated_at — so a ticket whose customer last wrote
+        100 days ago was appearing in a 72-hour digest because we touched it."""
+        cutoff = "2026-09-01T00:00:00Z"
+        ours = {"id": 1, "updated_at": "2026-09-03T02:35:00Z",
+                "requester_updated_at": "2026-05-26T06:55:00Z"}
+        theirs = {"id": 2, "updated_at": "2026-09-02T09:00:00Z",
+                  "requester_updated_at": "2026-09-02T09:00:00Z"}
+        fresh, quiet = triage.drop_quiet_tickets([ours, theirs], cutoff)
+        self.assertEqual([t["id"] for t in fresh], [2])
+        self.assertEqual([t["id"] for t in quiet], [1])
+
+    def test_a_missing_requester_stamp_keeps_the_ticket(self):
+        """A failed metric sideload must leave the digest noisy, never silent."""
+        blind = {"id": 1, "updated_at": "2026-09-03T02:35:00Z"}
+        fresh, quiet = triage.drop_quiet_tickets([blind], "2026-09-01T00:00:00Z")
+        self.assertEqual(fresh, [blind])
+        self.assertEqual(quiet, [])
+
+    def test_a_ticket_touched_exactly_at_the_cutoff_is_kept(self):
+        edge = {"id": 1, "requester_updated_at": "2026-09-01T00:00:00Z"}
+        fresh, _ = triage.drop_quiet_tickets([edge], "2026-09-01T00:00:00Z")
+        self.assertEqual(fresh, [edge])
+
+    def test_the_query_and_the_filter_share_one_cutoff(self):
+        """Computed twice they would sit seconds apart, which is enough to drop a
+        ticket that arrived mid-run."""
+        cutoff = triage.window_cutoff(72)
+        self.assertIn(f"updated>{cutoff}", triage.build_window_query(72, cutoff))
 
     def test_a_longer_window_reaches_further_back(self):
         short = triage.build_window_query(48).split("updated>")[1].split(" ")[0]
@@ -518,14 +576,14 @@ class TestHeader(unittest.TestCase):
         of unsolved tickets are AppFollow reviews."""
         text = self.header([finding(1)], {"total_unsolved": 5680,
                                           "total_unsolved_non_review": 428})
-        self.assertIn("Backlog: **428** unsolved excluding app-store reviews", text)
+        self.assertIn("Backlog: **428** awaiting a reply, excluding app-store reviews", text)
         self.assertIn("**5,252** more are reviews", text)
 
     def test_falls_back_to_the_total_when_the_review_count_is_unavailable(self):
         """Both counts are best-effort; losing one must not lose the whole line."""
         text = self.header([finding(1)], {"total_unsolved": 5609,
                                           "total_unsolved_non_review": None})
-        self.assertIn("Backlog: **5,609** unsolved tickets in total", text)
+        self.assertIn("Backlog: **5,609** tickets awaiting a reply", text)
 
     def test_omits_the_backlog_line_when_the_count_is_unavailable(self):
         self.assertNotIn("Backlog", self.header([finding(1)], {"total_unsolved": None}))
@@ -1912,7 +1970,7 @@ def unit_commands(unit="zendesk-digest.service"):
 
 class TestDigestOrdering(unittest.TestCase):
     """The digest is only correct if the positive-review resolver ran first: solved
-    reviews leave the triage's `status<solved` query, so running second would have
+    reviews leave the triage's `status<pending` query, so running second would have
     the digest re-count reviews the other script had just closed.
 
     This used to be two chained GitHub jobs; it is now two ExecStart lines. The

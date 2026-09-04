@@ -82,13 +82,28 @@ from functools import partial
 
 import requests
 
-# Open, pending, new, and on-hold tickets, newest first. Broad on purpose: we
-# want bug reports AND low-star reviews, legal requests, security/legislation
-# questions, and non-English tickets — Claude does the categorising, so we don't
-# filter to a single tag here.
-DEFAULT_QUERY = "type:ticket status<solved order_by:created_at sort:desc"
-# Whole unsolved backlog, for context in the digest. Not analyzed — just counted.
-BACKLOG_QUERY = "type:ticket status<solved"
+# The channel AppFollow imports app-store reviews on. Identified reviews with no
+# false positives in a 3,662-ticket sample; tags did not (only 287 carried one).
+REVIEW_CHANNEL = "any_channel"
+# Never analyzed. A store review cannot be answered the way a ticket can: it takes
+# one developer response, replacing any previous one, with no way to ask a follow-up
+# question — so it is not work a digest can queue up for someone. The volume stays
+# visible in the header's review count.
+NO_REVIEWS = f"-via:{REVIEW_CHANNEL}"
+
+# New and open tickets, newest first. Broad on purpose within that: we want bug
+# reports AND low-star reviews, legal requests, security/legislation questions, and
+# non-English tickets — Claude does the categorising, so we don't filter to a single
+# tag here.
+#
+# `status<pending`, not `status<solved`: pending means somebody already replied and
+# the ball is with the customer. The "Pending to Solved" automation resolves those on
+# its own after 72h, so putting them in a digest asks a human to look at work that is
+# already done. On-hold is included in neither — this account has never used it.
+DEFAULT_QUERY = f"type:ticket status<pending {NO_REVIEWS} order_by:created_at sort:desc"
+# The queue awaiting a human, for context in the digest. Not analyzed — just counted,
+# and scoped the same way as the analysis so the header and the body agree.
+BACKLOG_QUERY = "type:ticket status<pending"
 # The Search API hard-caps a query at 1000 results and returns 422 for any page past
 # it (at per_page=100 that is page 11), so pagination stops here rather than walking
 # into that error. Above the cap the digest reports truncation — which it already does
@@ -98,7 +113,7 @@ SEARCH_RESULT_LIMIT = 1000
 STATE_VERSION = 2
 
 
-def build_window_query(hours):
+def build_window_query(hours, cutoff=None):
     """Query for unsolved tickets touched in the last `hours`, most recent first.
 
     `updated>`, not `created>`: a ticket the requester adds detail to days after
@@ -110,10 +125,43 @@ def build_window_query(hours):
     The cutoff is an explicit UTC timestamp rather than Zendesk's relative
     `updated>72hours` form, so the exact window lands in the run log.
     """
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
-    return f"type:ticket status<solved updated>{cutoff} order_by:updated_at sort:desc"
+    return (f"type:ticket status<pending {NO_REVIEWS} "
+            f"updated>{cutoff or window_cutoff(hours)} order_by:updated_at sort:desc")
+
+
+def window_cutoff(hours):
+    """The UTC timestamp bounding a window, as Zendesk search formats it.
+
+    Separate from build_window_query so the run computes it once and both the query
+    and the requester-activity filter judge against the same instant. Computing it
+    twice would put seconds between them, which is enough to drop a ticket that
+    arrived mid-run.
+    """
+    return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+
+
+def drop_quiet_tickets(tickets, cutoff):
+    """Split off tickets the requester has not touched inside the window.
+
+    The window query is on `updated_at`, which moves on ANY change — a tag edit, the
+    hourly automation that bumps tickets at :01, and our own private notes. So a
+    `claude: explain` on a ticket whose customer last wrote 100 days ago drags it
+    into today's digest, and the noise grows in proportion to how much the reply
+    tooling is used, which is backwards.
+
+    Zendesk search has no `requester_updated>`, so the narrowing happens here, over
+    the value hydrate_requester_activity has already fetched. Timestamps are Zendesk's
+    fixed-width UTC form, so a string compare is a chronological one.
+
+    A ticket whose requester_updated_at is missing is KEPT: a failed sideload should
+    leave the digest noisy, never silent.
+    """
+    fresh, quiet = [], []
+    for ticket in tickets:
+        stamp = ticket.get("requester_updated_at")
+        (quiet if stamp and stamp < cutoff else fresh).append(ticket)
+    return fresh, quiet
 
 
 def window_label(hours):
@@ -659,7 +707,6 @@ def save_state(path, state, reported, retention_days):
 # whereas the `app-store` tag was present on only 287 of them — so filter on the
 # channel, not on tags. 4-5 star reviews were 59% of *all* tickets and are never
 # actionable, so counting them beats paying tokens to classify them.
-REVIEW_CHANNEL = "any_channel"
 # The same backlog minus store reviews. 92% of unsolved tickets are AppFollow
 # reviews, so the unqualified number reads as ~13x the queue that needs a human.
 BACKLOG_NON_REVIEW_QUERY = f"{BACKLOG_QUERY} -via:{REVIEW_CHANNEL}"
@@ -1473,10 +1520,10 @@ def build_header(findings, highlights, stats=None):
 
     non_review = stats.get("total_unsolved_non_review")
     if backlog is not None and non_review is not None:
-        lines.append(f"Backlog: **{non_review:,}** unsolved excluding app-store reviews "
+        lines.append(f"Backlog: **{non_review:,}** awaiting a reply, excluding app-store reviews "
                      f"(**{backlog - non_review:,}** more are reviews, not triaged).")
     elif backlog is not None:
-        lines.append(f"Backlog: **{backlog:,}** unsolved tickets in total (not triaged).")
+        lines.append(f"Backlog: **{backlog:,}** tickets awaiting a reply (not triaged).")
 
     serious = by_severity.get("crash", 0) + by_severity.get("data_loss", 0)
     tail = f"**{len(highlights)}** worth looking into"
@@ -1754,13 +1801,15 @@ def main():
         api_token = get_env("ZENDESK_API_TOKEN", args.api_token)
 
         # An explicit query wins over --window-hours; warn rather than silently drop it.
+        window_start = None
         explicit_query = args.query or os.environ.get("ZENDESK_QUERY")
         if explicit_query:
             if args.window_hours:
                 print("Note: --window-hours ignored because an explicit query was given.")
             query = explicit_query
         elif args.window_hours:
-            query = build_window_query(args.window_hours)
+            window_start = window_cutoff(args.window_hours)
+            query = build_window_query(args.window_hours, window_start)
             stats["scope"] = window_label(args.window_hours)
         else:
             query = DEFAULT_QUERY
@@ -1798,11 +1847,23 @@ def main():
                 print("Only positive reviews in this window; nothing to report.")
                 return
 
-        if args.state:
-            # Before partition_by_state, which compares on requester_updated_at, and
-            # after the review filter, so the sideload only covers what can be
-            # reported. One request per 100 tickets.
+        # One sideload serves both the window filter and the dedup, so it runs
+        # whenever either needs it. After the review filter, so it only covers
+        # tickets that can still be reported. One request per 100 tickets.
+        if window_start or args.state:
             hydrate_requester_activity(zd, subdomain, tickets)
+
+        if window_start:
+            tickets, quiet = drop_quiet_tickets(tickets, window_start)
+            if quiet:
+                stats["skipped_quiet"] = len(quiet)
+                print(f"Skipped {len(quiet)} ticket(s) that only we touched in this "
+                      f"window; {len(tickets)} remain.")
+            if not tickets:
+                print("Nothing the requester touched in this window; nothing to report.")
+                return
+
+        if args.state:
             state = load_state(args.state)
             new, changed, unchanged = partition_by_state(tickets, state)
             print(f"{len(new)} new, {len(changed)} changed since last reported, "

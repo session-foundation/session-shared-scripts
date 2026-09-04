@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-Discord interactions endpoint for replying to Zendesk tickets.
+Webhook endpoints for replying to Zendesk tickets.
 
-Serves POST /discord/interactions — vendor-namespaced so the same host and
-certificate can carry other integrations later.
+Two routes, vendor-namespaced so the same host and certificate carry both:
+
+  POST /discord/interactions  a Comment button on a digest card, handed to reply.py
+  POST /zendesk/notes         a `claude:` private note on a ticket, handed to
+                              note_reply.py
 
 Discord pushes every interaction to one HTTPS endpoint and wants an answer inside
 three seconds. This is that endpoint: it verifies the signature, decides who is
@@ -36,8 +39,11 @@ Config (env vars):
     ZENDESK_SUBDOMAIN     e.g. "mycompany"
     ZENDESK_EMAIL         agent email for API token auth
     ZENDESK_API_TOKEN     Zendesk API token
-    RELAY_DRY_RUN         (optional) "1" passes --dry-run to reply.py, so the whole
-                          path runs and nothing is written to Zendesk
+    ZENDESK_WEBHOOK_SECRET  shared secret Zendesk signs its webhooks with, for the
+                          /zendesk/notes route. Unset refuses every note webhook
+    RELAY_DRY_RUN         (optional) "1" passes --dry-run to reply.py and
+                          note_reply.py, so the whole path runs and nothing is
+                          written to Zendesk
 
 Requests are rejected unless their signature is valid and their timestamp is within
 MAX_SIGNATURE_AGE_SECONDS, so a captured request cannot be replayed later. A timestamp
@@ -48,6 +54,10 @@ Usage:
     uvicorn relay:app --host 127.0.0.1 --port 8080
 """
 import asyncio
+import base64
+import datetime
+import hashlib
+import hmac
 import json
 import os
 import subprocess
@@ -64,6 +74,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import triage  # noqa: E402  (needs the path insert above)
 
 REPLY_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reply.py")
+NOTE_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "note_reply.py")
 
 # Bounds the reply so its translation and back-translation still fit Discord's
 # 6,000-character budget across the preview's embeds. reply.py refuses anything that
@@ -93,6 +104,14 @@ MAX_CLOCK_SKEW_SECONDS = 60
 # apiece, so a legitimate run can outlast this — which is why overrunning it reports
 # to the agent rather than only to the journal. See tell_discord.
 REPLY_TIMEOUT_SECONDS = 300
+# How long one note_reply.py run may take. Longer than the Discord path's need for a
+# 15-minute interaction token allows, because nothing is waiting on it: Zendesk gets
+# its 200 immediately and the outcome is written to the ticket whenever it lands.
+NOTE_TIMEOUT_SECONDS = 420
+# Zendesk signs a webhook over the timestamp followed by the raw body. Its clock is
+# not ours, so the same skew allowance as the Discord path applies.
+ZENDESK_SIGNATURE_HEADER = "x-zendesk-webhook-signature"
+ZENDESK_TIMESTAMP_HEADER = "x-zendesk-webhook-signature-timestamp"
 
 INTERACTION_PING = 1
 INTERACTION_COMPONENT = 3
@@ -489,6 +508,57 @@ def dry_run_requested():
     return bool(value) and value.split()[0] not in ("0", "false", "no", "off")
 
 
+def run_note_reply(ticket_id):
+    """Run note_reply.py over one ticket. Never raises.
+
+    A subprocess for the same reason reply.py is one: its error paths are sys.exit
+    calls, and SystemExit would otherwise escape into a long-running service.
+
+    There is nobody to report a failure to here — the agent is looking at a Zendesk
+    ticket, not at an open dialog — so the outcome goes to the journal and, where
+    note_reply.py got far enough to write one, to the ticket itself.
+    """
+    command = [sys.executable, NOTE_SCRIPT, "--ticket", str(ticket_id)]
+    if dry_run_requested():
+        command.append("--dry-run")
+    try:
+        done = subprocess.run(command, check=False, timeout=NOTE_TIMEOUT_SECONDS,
+                              capture_output=True, text=True)
+    except subprocess.TimeoutExpired:
+        print(f"note_reply.py timed out on #{ticket_id}", flush=True)
+        return
+    for line in (done.stdout or "").splitlines():
+        print(line, flush=True)
+    if done.returncode != 0:
+        print(f"note_reply.py exited {done.returncode} on #{ticket_id}: "
+              f"{(done.stderr or '').strip()[:300]}", flush=True)
+
+
+def zendesk_signature_ok(raw, signature, timestamp, secret):
+    """Whether Zendesk signed this body, recently.
+
+    HMAC-SHA256 over the timestamp followed by the raw body, base64 encoded. The
+    timestamp is ISO 8601 rather than the epoch seconds the Discord path uses, and it
+    is covered by the signature — so the age check bounds replay of a genuinely
+    signed request, exactly as it does there.
+    """
+    if not (signature and timestamp and secret):
+        return False
+    try:
+        when = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError):
+        return False
+    age = time.time() - when.timestamp()
+    if age < -MAX_CLOCK_SKEW_SECONDS or age > MAX_SIGNATURE_AGE_SECONDS:
+        return False
+    expected = hmac.new(secret.encode(), timestamp.encode() + raw, hashlib.sha256).digest()
+    try:
+        given = base64.b64decode(signature, validate=True)
+    except (ValueError, TypeError):
+        return False
+    return hmac.compare_digest(expected, given)
+
+
 def interaction_payload(interaction, action, **extra):
     return {
         "action": action,
@@ -575,6 +645,36 @@ async def handle_modal_submit(interaction, background):
 @app.get("/healthz")
 def healthz():
     """For the reverse proxy and for `systemctl status` to have something to say."""
+    return {"ok": True}
+
+
+@app.post("/zendesk/notes")
+async def zendesk_notes(request: Request, background: BackgroundTasks):
+    """A private note on a ticket asked Claude to do something.
+
+    The Zendesk trigger that calls this is the first gate — it fires only on private
+    comments, and must exclude the API user so a draft cannot trigger another draft.
+    This is the second: without ZENDESK_WEBHOOK_SECRET set, nothing is accepted, so
+    an unconfigured relay refuses rather than trusting anything that reaches the URL.
+    Which Zendesk user may command it is note_reply.py's decision, on the note.
+
+    Answers immediately and works in the background. Zendesk retries a webhook that
+    does not answer quickly, and a retry that arrives mid-run would be a second reply
+    to the customer — note_reply.py's done marker covers that, but not needing the
+    cover is better.
+    """
+    raw = await request.body()
+    if not zendesk_signature_ok(raw, request.headers.get(ZENDESK_SIGNATURE_HEADER),
+                                request.headers.get(ZENDESK_TIMESTAMP_HEADER),
+                                env("ZENDESK_WEBHOOK_SECRET")):
+        return Response("bad signature", status_code=401)
+    try:
+        ticket_id = ticket_number((json.loads(raw) or {}).get("ticket_id"))
+    except (ValueError, TypeError):
+        ticket_id = None
+    if not ticket_id:
+        return Response("no ticket id", status_code=400)
+    background.add_task(run_in_threadpool, run_note_reply, ticket_id)
     return {"ok": True}
 
 
