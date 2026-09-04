@@ -234,11 +234,29 @@ class TestWindowQuery(unittest.TestCase):
     def test_query_keeps_unsolved_filter_and_newest_first_ordering(self):
         query = triage.build_window_query(72)
         self.assertIn("type:ticket", query)
-        self.assertIn("status<solved", query)
+        # `status<pending`, not `status<solved`: a pending ticket has already been
+        # replied to and the automation resolves it on its own, so putting it in the
+        # digest asks a human to look at work that is finished.
+        self.assertIn("status<pending", query)
+        self.assertNotIn("status<solved", query)
         # Ordered by the same field the window bounds, so a fetch truncated at
         # --max-tickets drops the least recently touched rather than the oldest.
         self.assertIn("order_by:updated_at", query)
         self.assertIn("sort:desc", query)
+
+    def test_pending_tickets_are_out_of_scope(self):
+        """A pending ticket is one somebody already answered. It leaves the queue on
+        its own after 72h, so listing it asks for attention that is not needed."""
+        for query in (triage.build_window_query(72), triage.DEFAULT_QUERY,
+                      triage.BACKLOG_QUERY, triage.BACKLOG_NON_REVIEW_QUERY):
+            with self.subTest(query=query):
+                self.assertIn("status<pending", query)
+
+    def test_the_backlog_count_is_scoped_like_the_analysis(self):
+        """The header number and the tickets below it must mean the same thing, or
+        the digest reports a backlog it is not showing."""
+        analysed = triage.build_window_query(72).split(" updated>")[0]
+        self.assertTrue(triage.BACKLOG_QUERY.startswith(analysed))
 
     def test_a_longer_window_reaches_further_back(self):
         short = triage.build_window_query(48).split("updated>")[1].split(" ")[0]
@@ -518,14 +536,14 @@ class TestHeader(unittest.TestCase):
         of unsolved tickets are AppFollow reviews."""
         text = self.header([finding(1)], {"total_unsolved": 5680,
                                           "total_unsolved_non_review": 428})
-        self.assertIn("Backlog: **428** unsolved excluding app-store reviews", text)
+        self.assertIn("Backlog: **428** awaiting a reply, excluding app-store reviews", text)
         self.assertIn("**5,252** more are reviews", text)
 
     def test_falls_back_to_the_total_when_the_review_count_is_unavailable(self):
         """Both counts are best-effort; losing one must not lose the whole line."""
         text = self.header([finding(1)], {"total_unsolved": 5609,
                                           "total_unsolved_non_review": None})
-        self.assertIn("Backlog: **5,609** unsolved tickets in total", text)
+        self.assertIn("Backlog: **5,609** tickets awaiting a reply", text)
 
     def test_omits_the_backlog_line_when_the_count_is_unavailable(self):
         self.assertNotIn("Backlog", self.header([finding(1)], {"total_unsolved": None}))
@@ -1912,7 +1930,7 @@ def unit_commands(unit="zendesk-digest.service"):
 
 class TestDigestOrdering(unittest.TestCase):
     """The digest is only correct if the positive-review resolver ran first: solved
-    reviews leave the triage's `status<solved` query, so running second would have
+    reviews leave the triage's `status<pending` query, so running second would have
     the digest re-count reviews the other script had just closed.
 
     This used to be two chained GitHub jobs; it is now two ExecStart lines. The

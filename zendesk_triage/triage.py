@@ -82,13 +82,19 @@ from functools import partial
 
 import requests
 
-# Open, pending, new, and on-hold tickets, newest first. Broad on purpose: we
-# want bug reports AND low-star reviews, legal requests, security/legislation
-# questions, and non-English tickets — Claude does the categorising, so we don't
-# filter to a single tag here.
-DEFAULT_QUERY = "type:ticket status<solved order_by:created_at sort:desc"
-# Whole unsolved backlog, for context in the digest. Not analyzed — just counted.
-BACKLOG_QUERY = "type:ticket status<solved"
+# New and open tickets, newest first. Broad on purpose within that: we want bug
+# reports AND low-star reviews, legal requests, security/legislation questions, and
+# non-English tickets — Claude does the categorising, so we don't filter to a single
+# tag here.
+#
+# `status<pending`, not `status<solved`: pending means somebody already replied and
+# the ball is with the customer. The "Pending to Solved" automation resolves those on
+# its own after 72h, so putting them in a digest asks a human to look at work that is
+# already done. On-hold is included in neither — this account has never used it.
+DEFAULT_QUERY = "type:ticket status<pending order_by:created_at sort:desc"
+# The queue awaiting a human, for context in the digest. Not analyzed — just counted,
+# and scoped the same way as the analysis so the header and the body agree.
+BACKLOG_QUERY = "type:ticket status<pending"
 # The Search API hard-caps a query at 1000 results and returns 422 for any page past
 # it (at per_page=100 that is page 11), so pagination stops here rather than walking
 # into that error. Above the cap the digest reports truncation — which it already does
@@ -113,7 +119,8 @@ def build_window_query(hours):
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
-    return f"type:ticket status<solved updated>{cutoff} order_by:updated_at sort:desc"
+    return (f"type:ticket status<pending updated>{cutoff} "
+            f"order_by:updated_at sort:desc")
 
 
 def window_label(hours):
@@ -1473,10 +1480,10 @@ def build_header(findings, highlights, stats=None):
 
     non_review = stats.get("total_unsolved_non_review")
     if backlog is not None and non_review is not None:
-        lines.append(f"Backlog: **{non_review:,}** unsolved excluding app-store reviews "
+        lines.append(f"Backlog: **{non_review:,}** awaiting a reply, excluding app-store reviews "
                      f"(**{backlog - non_review:,}** more are reviews, not triaged).")
     elif backlog is not None:
-        lines.append(f"Backlog: **{backlog:,}** unsolved tickets in total (not triaged).")
+        lines.append(f"Backlog: **{backlog:,}** tickets awaiting a reply (not triaged).")
 
     serious = by_severity.get("crash", 0) + by_severity.get("data_loss", 0)
     tail = f"**{len(highlights)}** worth looking into"
