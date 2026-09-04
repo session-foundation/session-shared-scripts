@@ -244,6 +244,13 @@ class TestWindowQuery(unittest.TestCase):
         self.assertIn("order_by:updated_at", query)
         self.assertIn("sort:desc", query)
 
+    def test_store_reviews_are_never_in_scope(self):
+        """A review takes one developer response, replacing any previous one, and
+        cannot be asked a follow-up. It is not work a digest can queue up."""
+        for query in (triage.build_window_query(72), triage.DEFAULT_QUERY):
+            with self.subTest(query=query):
+                self.assertIn(f"-via:{triage.REVIEW_CHANNEL}", query)
+
     def test_pending_tickets_are_out_of_scope(self):
         """A pending ticket is one somebody already answered. It leaves the queue on
         its own after 72h, so listing it asks for attention that is not needed."""
@@ -254,9 +261,11 @@ class TestWindowQuery(unittest.TestCase):
 
     def test_the_backlog_count_is_scoped_like_the_analysis(self):
         """The header number and the tickets below it must mean the same thing, or
-        the digest reports a backlog it is not showing."""
+        the digest reports a backlog it is not showing. The headline figure is the
+        review-excluded one, which is what the analysis now covers."""
         analysed = triage.build_window_query(72).split(" updated>")[0]
-        self.assertTrue(triage.BACKLOG_QUERY.startswith(analysed))
+        self.assertEqual(sorted(analysed.split()),
+                         sorted(triage.BACKLOG_NON_REVIEW_QUERY.split()))
 
     def test_a_ticket_only_we_touched_leaves_the_window(self):
         """The bug this exists for: a `claude: explain` note bumps updated_at, and

@@ -82,6 +82,15 @@ from functools import partial
 
 import requests
 
+# The channel AppFollow imports app-store reviews on. Identified reviews with no
+# false positives in a 3,662-ticket sample; tags did not (only 287 carried one).
+REVIEW_CHANNEL = "any_channel"
+# Never analyzed. A store review cannot be answered the way a ticket can: it takes
+# one developer response, replacing any previous one, with no way to ask a follow-up
+# question — so it is not work a digest can queue up for someone. The volume stays
+# visible in the header's review count.
+NO_REVIEWS = f"-via:{REVIEW_CHANNEL}"
+
 # New and open tickets, newest first. Broad on purpose within that: we want bug
 # reports AND low-star reviews, legal requests, security/legislation questions, and
 # non-English tickets — Claude does the categorising, so we don't filter to a single
@@ -91,7 +100,7 @@ import requests
 # the ball is with the customer. The "Pending to Solved" automation resolves those on
 # its own after 72h, so putting them in a digest asks a human to look at work that is
 # already done. On-hold is included in neither — this account has never used it.
-DEFAULT_QUERY = "type:ticket status<pending order_by:created_at sort:desc"
+DEFAULT_QUERY = f"type:ticket status<pending {NO_REVIEWS} order_by:created_at sort:desc"
 # The queue awaiting a human, for context in the digest. Not analyzed — just counted,
 # and scoped the same way as the analysis so the header and the body agree.
 BACKLOG_QUERY = "type:ticket status<pending"
@@ -116,8 +125,8 @@ def build_window_query(hours, cutoff=None):
     The cutoff is an explicit UTC timestamp rather than Zendesk's relative
     `updated>72hours` form, so the exact window lands in the run log.
     """
-    return (f"type:ticket status<pending updated>{cutoff or window_cutoff(hours)} "
-            f"order_by:updated_at sort:desc")
+    return (f"type:ticket status<pending {NO_REVIEWS} "
+            f"updated>{cutoff or window_cutoff(hours)} order_by:updated_at sort:desc")
 
 
 def window_cutoff(hours):
@@ -698,7 +707,6 @@ def save_state(path, state, reported, retention_days):
 # whereas the `app-store` tag was present on only 287 of them — so filter on the
 # channel, not on tags. 4-5 star reviews were 59% of *all* tickets and are never
 # actionable, so counting them beats paying tokens to classify them.
-REVIEW_CHANNEL = "any_channel"
 # The same backlog minus store reviews. 92% of unsolved tickets are AppFollow
 # reviews, so the unqualified number reads as ~13x the queue that needs a human.
 BACKLOG_NON_REVIEW_QUERY = f"{BACKLOG_QUERY} -via:{REVIEW_CHANNEL}"
