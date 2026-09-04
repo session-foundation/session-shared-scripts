@@ -714,6 +714,25 @@ STAR_SUBJECT = re.compile(r"^\s*([★☆]{1,10})")
 DEFAULT_REVIEW_STAR_FLOOR = 3
 
 
+# A long dash is the clearest tell that text was machine-written, and no reply this
+# team has sent uses one. The prompts that write for customers forbid it; this is what
+# makes it true, because a prompt rule is advisory and the text reaches a real person.
+# The spaced form is punctuation and becomes a comma; anything left is joining two
+# things, like a range, and becomes the hyphen a person would have typed.
+PUNCTUATING_DASH = re.compile(r"(?:\s+[—–]\s*|\s*[—–]\s+)")
+ANY_LONG_DASH = re.compile(r"[—–]")
+
+
+def undash(text):
+    """Replace every em and en dash: punctuation with a comma, the rest with a hyphen.
+
+    Never applied to text a human typed. reply.py sends the agent's own English
+    verbatim, and rewriting someone's punctuation for them would be wrong; this is
+    only for text a model wrote.
+    """
+    return ANY_LONG_DASH.sub("-", PUNCTUATING_DASH.sub(", ", text or ""))
+
+
 def squash(value):
     """Collapse whitespace so subject/description can be compared meaningfully."""
     return re.sub(r"\s+", " ", value or "").strip()

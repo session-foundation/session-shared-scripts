@@ -576,6 +576,11 @@ COMPOSE_SYSTEM = textwrap.dedent(
     real customers literally, and it is the single most visible way a reply looks
     machine-made.
 
+    NEVER use an em dash (—) or an en dash (–) in anything the customer reads. It is
+    the other clear tell that a reply was machine-written, and no reply this team has
+    sent uses one. Write a comma, a full stop, or brackets instead. Hyphens inside
+    words are fine.
+
     `language` and `language_code` describe the language the CUSTOMER writes in,
     judged from their words alone, never the agent's brief.
 
@@ -662,6 +667,9 @@ def validate_composition(result):
                if isinstance(o, dict) and (o.get("translated") or "").strip()]
     if not options:
         sys.exit("Claude returned no usable reply option.")
+    for option in options:
+        for field in ("reply_en", "translated", "back_translation"):
+            option[field] = triage.undash(option.get(field))
     result["options"] = options[:MAX_OPTIONS]
     return result
 

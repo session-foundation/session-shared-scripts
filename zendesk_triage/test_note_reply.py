@@ -875,6 +875,43 @@ class Composition(unittest.TestCase):
         """The other half: a reply that is correct and cold is a worse reply."""
         self.assertIn("correct and cold is a worse reply", self.prompt())
 
+    def test_em_dashes_never_reach_the_customer(self):
+        """The clearest tell that a reply was machine-written. The prompt forbids it;
+        this is what makes it true, because a prompt rule is advisory."""
+        result = note_reply.validate_composition(dict(GERMAN, options=[
+            option("Die Anhänge sind weg — leider dauerhaft.")]))
+        sent = result["options"][0]["translated"]
+        self.assertNotIn("—", sent)
+        self.assertEqual(sent, "Die Anhänge sind weg, leider dauerhaft.")
+
+    def test_a_range_becomes_a_plain_hyphen(self):
+        """Not left alone: an unspaced long dash is still a long dash, and "14-21
+        days" is what a person would have typed."""
+        self.assertEqual(triage.undash("kept 14—21 days"), "kept 14-21 days")
+        self.assertEqual(triage.undash("versions 2.14–2.15"), "versions 2.14-2.15")
+
+    def test_no_long_dash_survives_anywhere(self):
+        for text in ("a — b", "a—b", "a – b", "a–b", "— leading", "trailing —"):
+            with self.subTest(text=text):
+                self.assertNotIn("—", triage.undash(text))
+                self.assertNotIn("–", triage.undash(text))
+
+    def test_hyphens_in_words_survive(self):
+        self.assertEqual(triage.undash("end-to-end encrypted"),
+                         "end-to-end encrypted")
+
+    def test_en_dashes_go_too(self):
+        self.assertEqual(triage.undash("gone – sorry"), "gone, sorry")
+
+    def test_every_option_is_cleaned_not_just_the_first(self):
+        result = note_reply.validate_composition(dict(GERMAN, options=[
+            option("eins — zwei"), option("drei — vier")]))
+        self.assertTrue(all("—" not in o["translated"] for o in result["options"]))
+
+    def test_the_prompt_forbids_the_dash_as_well(self):
+        prompt = " ".join(note_reply.COMPOSE_SYSTEM.lower().split())
+        self.assertIn("never use an em dash", prompt)
+
     def test_the_brief_is_bounded(self):
         action, brief = note_reply.parse_command("claude: draft - " + "x" * 5000)
         self.assertLessEqual(len(brief), note_reply.BRIEF_CHARS)

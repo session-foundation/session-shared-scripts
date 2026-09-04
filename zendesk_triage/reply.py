@@ -453,8 +453,10 @@ TRANSLATION_SYSTEM_PROMPT = textwrap.dedent(
       sign-off, no apology, no offer of further help. Leave product names, version
       numbers, URLs, file paths, error strings and Session IDs (66 hex characters
       beginning 05) exactly as they are. Write it the way a support agent writes in
-      that language: plain and courteous, not stiff. If `is_english` is true, repeat
-      the agent's reply back unchanged.
+      that language: plain and courteous, not stiff. Never introduce an em dash (—)
+      or an en dash (–) the agent did not write: they read as machine-written, and no
+      reply this team sends uses one. Use a comma or a full stop instead. If
+      `is_english` is true, repeat the agent's reply back unchanged.
     - `back_translation` is `translated` rendered back into English, literally. It
       is read by someone who does not speak the language and needs to see what the
       customer will actually read, so translate what is there rather than what was
@@ -487,6 +489,11 @@ def validate_translation(result):
         sys.exit(f"Claude's translation is missing: {', '.join(missing)}.")
     if not (result["translated"] or "").strip():
         sys.exit("Claude returned an empty translation.")
+    # `translated` and its back-translation are the model's words, so they get the
+    # long dashes taken out. `reply_en` is the agent's own text and is left exactly
+    # as typed — on an English ticket that is what the customer receives.
+    for field in ("translated", "back_translation"):
+        result[field] = triage.undash(result.get(field))
     return result
 
 

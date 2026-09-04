@@ -455,6 +455,43 @@ class TestPayload(unittest.TestCase):
 # ---- Wiring ----------------------------------------------------------------
 
 
+class TestLongDashes(unittest.TestCase):
+    """A long dash reads as machine-written. The prompt forbids it; this is the
+    guarantee, because a prompt rule is advisory and this text emails a customer."""
+
+    def payload(self, **over):
+        row = dict(GERMAN)
+        row.update(translated="Weg — dauerhaft.",
+                   back_translation="Gone — permanently.")
+        row.update(over)
+        return row
+
+    def test_the_model_s_translation_is_cleaned(self):
+        result = reply.validate_translation(self.payload())
+        self.assertEqual(result["translated"], "Weg, dauerhaft.")
+        self.assertEqual(result["back_translation"], "Gone, permanently.")
+
+    def test_a_range_becomes_a_hyphen_not_a_comma(self):
+        result = reply.validate_translation(self.payload(translated="14—21 Tage"))
+        self.assertEqual(result["translated"], "14-21 Tage")
+
+    def test_nothing_else_in_the_payload_is_rewritten(self):
+        result = reply.validate_translation(self.payload())
+        self.assertEqual(result["language"], GERMAN["language"])
+        self.assertEqual(result["language_code"], GERMAN["language_code"])
+
+    def test_an_empty_translation_still_exits(self):
+        with self.assertRaises(SystemExit):
+            reply.validate_translation(self.payload(translated="  "))
+
+    def test_the_agent_s_typed_english_never_passes_through_here(self):
+        """The agent's own words reach the customer from run_draft, not from this
+        payload — which is why cleaning it cannot rewrite someone's punctuation.
+        The verbatim path itself is covered by
+        test_an_english_ticket_is_answered_without_a_confirmation_step."""
+        self.assertNotIn("reply_en", reply.TRANSLATION_PROPERTIES)
+
+
 class TestRelayWiring(unittest.TestCase):
     """The digest, the relay and the deployment agree on things nothing checks at
     runtime. Each of these was a real break once, or would be a silent one.
