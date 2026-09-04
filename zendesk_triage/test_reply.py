@@ -265,7 +265,7 @@ class TestLanguageSample(unittest.TestCase):
         """An agent's earlier English reply is still text on the ticket, and would
         drag detection towards English on exactly the tickets this exists for."""
         sample = reply.customer_text(
-            ticket(),
+            FakeSession([]), "acme", ticket(),
             [comment("Thanks for reaching out!", author_id=7),
              comment("Immer noch kaputt.", author_id=42)])
         self.assertIn("Es geht nicht mehr.", sample)
@@ -273,11 +273,12 @@ class TestLanguageSample(unittest.TestCase):
         self.assertNotIn("Thanks for reaching out", sample)
 
     def test_a_ticket_with_no_text_still_yields_a_sample(self):
-        sample = reply.customer_text(ticket(description=""), [])
+        sample = reply.customer_text(FakeSession([]), "acme", ticket(description=""), [])
         self.assertTrue(sample.strip())
 
     def test_the_sample_is_bounded(self):
-        sample = reply.customer_text(ticket(description="ä" * 9000), [])
+        sample = reply.customer_text(FakeSession([]), "acme",
+                                     ticket(description="ä" * 9000), [])
         self.assertLessEqual(len(sample), reply.CUSTOMER_SAMPLE_CHARS)
 
 

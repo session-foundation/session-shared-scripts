@@ -141,12 +141,12 @@ def done_marker(comment_id):
     emailed twice. Keyed on the commanding comment because that is what is unique
     per instruction; the ticket id is not.
     """
-    return f"[claude:done:{comment_id}]"
+    return triage.marker("claude:done", comment_id)
 
 
 def draft_marker(comment_id):
     """Marks a note as carrying a sendable draft, and says which brief produced it."""
-    return f"[claude:draft:{comment_id}]"
+    return triage.marker("claude:draft", comment_id)
 
 
 def english_marker(latest_public_id):
@@ -156,7 +156,7 @@ def english_marker(latest_public_id):
     twice with nothing said in between should cost nothing, and asking again after
     the customer writes back should produce a fresh transcript.
     """
-    return f"[claude:english:{latest_public_id}]"
+    return triage.marker("claude:english", latest_public_id)
 
 
 # Anchored to the start of a line so that prose mentioning the command in passing —
@@ -209,47 +209,6 @@ def api_user_id(session, subdomain):
     if resp.status_code >= 400:
         sys.exit(f"Zendesk refused to identify the API user ({resp.status_code}).")
     return ((resp.json() or {}).get("user") or {}).get("id")
-
-
-def fetch_user(session, subdomain, user_id):
-    url = f"https://{subdomain}.zendesk.com/api/v2/users/{user_id}.json"
-    resp = triage.request_with_retry(session, "GET", url)
-    if resp.status_code >= 400:
-        return {}
-    return (resp.json() or {}).get("user") or {}
-
-
-def customer_sample(session, subdomain, ticket, comments):
-    """The customer's own words, for deciding which language to reply in.
-
-    reply.customer_text takes only comments the REQUESTER authored, which is right
-    for email and web tickets. On a Twitter or Sunshine DM the integration authors
-    the customer's message under its own id, so that filter drops everything they
-    wrote and leaves the ticket's "Conversation with <handle>" description — and the
-    reply goes out in English to somebody writing Chinese.
-
-    So: the requester's own words when the ticket carries any, and otherwise every
-    public comment written by someone who is not an agent on this account. Roles are
-    looked up rather than guessed from the id, because the integration's id is an
-    account detail and an unknown author is a customer, not an agent.
-    """
-    if not triage.is_content_free(ticket):
-        return reply.customer_text(ticket, comments)
-    roles, parts = {}, []
-    subject = triage.squash(ticket.get("subject"))
-    for comment in reversed(comments):          # oldest first, so it reads in order
-        if not comment.get("public"):
-            continue
-        author = comment.get("author_id")
-        if author not in roles:
-            roles[author] = (fetch_user(session, subdomain, author) or {}).get("role")
-        if roles[author] in ("agent", "admin"):
-            continue
-        body = triage.squash(comment.get("body"))
-        if body and body != subject:
-            parts.append(body)
-    return triage.clip("\n\n".join(parts),
-                       CUSTOMER_SAMPLE_CHARS) or reply.customer_text(ticket, comments)
 
 
 def may_command(user):
@@ -815,7 +774,8 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
     shown = find_draft(comments, api_user)
     previous = "\n\n".join(f"Option {n}:\n{shown[n]}" for n in sorted(shown)) or None
 
-    sample = customer_sample(session, subdomain, ticket, comments)
+    sample = triage.customer_text(session, subdomain, ticket, comments,
+                                     CUSTOMER_SAMPLE_CHARS)
     book = load_house()
     group, platform = tagged_placement(ticket)
     new_tags = []
@@ -865,7 +825,7 @@ def run_solve(session, subdomain, ticket, command, dry_run):
         say(session, subdomain, ticket_id, command["id"],
             "This ticket is already solved.", dry_run, error=False)
         return
-    author = fetch_user(session, subdomain, command["author"])
+    author = triage.fetch_user(session, subdomain, command["author"])
     who = author.get("name") or f"user {command['author']}"
     if dry_run:
         print(f"#{ticket_id}: dry run, would solve on behalf of {who}.")
@@ -901,7 +861,8 @@ def run_explain(session, subdomain, model, ticket, comments, command, dry_run):
     new_tags = []
     if not group:
         group, platform = place_ticket(
-            model, book, ticket, customer_sample(session, subdomain, ticket, comments))
+            model, book, ticket, triage.customer_text(session, subdomain, ticket, comments,
+                                     CUSTOMER_SAMPLE_CHARS))
         new_tags = ([f"{TAG_GROUP_PREFIX}{group}"] if group else []) + \
                    ([f"{TAG_PLATFORM_PREFIX}{platform}"] if platform else [])
     cell, covering = house_cell(book, group, platform)
@@ -953,7 +914,7 @@ def run_reply(session, subdomain, ticket, comments, command, api_user, dry_run):
     if complaint:
         say(session, subdomain, ticket_id, comment_id, complaint, dry_run, error=False)
         return
-    author = fetch_user(session, subdomain, command["author"])
+    author = triage.fetch_user(session, subdomain, command["author"])
     who = author.get("name") or f"user {command['author']}"
     if dry_run:
         print(f"#{ticket_id}: dry run, would send an option on behalf of {who}.")
@@ -1004,7 +965,7 @@ def run_english(session, subdomain, model, ticket, comments, command, dry_run):
     """
     ticket_id = ticket["id"]
     latest = next((c.get("id") for c in comments if c.get("public")), None)
-    if latest is not None and reply.already_replied(comments, english_marker(latest)):
+    if latest is not None and triage.has_marker(comments, english_marker(latest)):
         say(session, subdomain, ticket_id, command["id"],
             "The English transcript on this ticket is already up to date — nothing "
             "has been said since it was written.", dry_run, error=False)
@@ -1080,7 +1041,7 @@ def latest_command(comments, api_user, session, subdomain):
         parsed = parse_command(comment_text(comment))
         if not parsed:
             continue
-        user = fetch_user(session, subdomain, comment.get("author_id"))
+        user = triage.fetch_user(session, subdomain, comment.get("author_id"))
         if not may_command(user):
             print(f"Ignoring a command from {user.get('role') or 'an unknown user'}.")
             return None
@@ -1115,7 +1076,7 @@ def main():
         print(f"#{args.ticket}: no command note to act on.")
         clear_queued(session, subdomain, args.ticket, args.dry_run)
         return
-    if reply.already_replied(comments, done_marker(command["id"])):
+    if triage.has_marker(comments, done_marker(command["id"])):
         print(f"#{args.ticket}: this command was already handled; nothing written.")
         clear_queued(session, subdomain, args.ticket, args.dry_run)
         return

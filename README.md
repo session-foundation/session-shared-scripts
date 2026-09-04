@@ -63,7 +63,7 @@ Runs automatically every Monday at 00:00 UTC.
 
 ## Zendesk Ticket Triage
 
-Claude reviews recently-created unsolved Zendesk tickets fetched from the Zendesk API and posts a summary to Discord that links back to each original ticket and highlights the ones worth looking into. For each ticket it assigns a category, infers severity, guesses a likely root cause, identifies platform and app version, groups likely duplicates into clusters, and ranks by priority.
+Claude reviews the Zendesk tickets awaiting a reply — `new` and `open`, no app-store reviews and posts a summary to Discord that links back to each original ticket and highlights the ones worth looking into. For each ticket it assigns a category, infers severity, guesses a likely root cause, identifies platform and app version, groups likely duplicates into clusters, and ranks by priority.
 
 ### Categories
 
@@ -85,11 +85,20 @@ The first two are **urgent categories**: they are not bugs, so the model rates t
 
 `abuse_report` sits at the other end. **Session is metadata-free by design: there is no action available on a reported Session ID**, not for Session and not for the support team. At ~11% of non-review tickets they were crowding out the tickets that can actually be acted on, so they are the one category the digest collapses — a single 🔇 line at the very bottom carrying the count and the ticket links, emitted whatever the model flagged, never spending a highlight slot. The volume stays visible; the false alarm goes away.
 
-### App-store review filtering
+### App-store reviews are not triaged
 
-73% of tickets are AppFollow-imported app-store reviews, and 71% of those are 5★ — 59% of *all* tickets are 4-5★ reviews that are never actionable. Those are counted, not classified, cutting the batch roughly 60% (a real run: 48 fetched → 20 classified).
+73% of tickets are AppFollow-imported app-store reviews. **The digest excludes them entirely** — the query carries `-via:any_channel`.
 
-Detection uses the Zendesk `via.channel`, which identified reviews with no false positives in a 3,662-ticket sample (2,656/2,656). **Not** tags — only 287 of those reviews carried the `app-store` tag. Reviews whose star rating can't be parsed are kept rather than dropped. Use `--include-positive-reviews` to disable, or `--review-star-floor` to move the threshold.
+Not because they carry nothing: 1,022 of the unsolved ones are ≤3★ and many are bug reports in disguise. Because a review is not work a digest can queue up for someone. It takes **one** developer response, which replaces any previous one, and there is no way to ask a follow-up question — so "assign it to a human tomorrow" is not a thing you can do with it. The volume stays visible in the header's review count, and [Zendesk Resolve Positive Reviews](#zendesk-resolve-positive-reviews) still clears the 4-5★ ones.
+
+Detection uses the Zendesk `via.channel`, which identified reviews with no false positives in a 3,662-ticket sample (2,656/2,656). **Not** tags — only 287 of those reviews carried the `app-store` tag.
+
+The star-floor machinery (`partition_reviews`, `--review-star-floor`, `--include-positive-reviews`) is still in the code and still runs, but only bites when `--query`/`ZENDESK_QUERY` overrides the default and pulls reviews back in. On a normal run it sees none.
+
+### What else is out of scope
+
+- **`pending` tickets.** Somebody already replied and the ball is with the customer; the "Pending to Solved" automation resolves them after 72h. The query is `status<pending`, so `new` and `open` only.
+- **Tickets only we touched.** The window is on `updated>`, and `updated_at` moves on any change — a tag edit, the hourly automation, and every private note the `claude:` commands write. So the run drops anything whose `requester_updated_at` falls outside the window. Measured on a real 72h window: 79 fetched, 23 the requester had actually touched.
 
 ### Content-free tickets
 
@@ -101,7 +110,7 @@ Each line leads with a severity marker, a category emoji and a platform icon, li
 
 ```
 🗂️ **Zendesk triage** — analyzed **16** of **46** tickets in the window (updated in the past 3 days). Skipped **30** positive app-store review(s).
-Backlog: **428** unsolved excluding app-store reviews (**5,252** more are reviews, not triaged).
+Backlog: **428** awaiting a reply, excluding app-store reviews (**5,252** more are reviews, not triaged).
 **9** worth looking into.
 ⭐ **6** · 🐛 **3** · ❓ **2** · 🔇 **2** · 🔑 **1** · ⚖️ **1** · 🔒 **1**
 Likely duplicates: **push-notifications-not-delivered** ×5 (#27637, #27610, #27606, #27605)
@@ -118,7 +127,7 @@ Likely duplicates: **push-notifications-not-delivered** ×5 (#27637, #27610, #27
 | Category | The emoji from `CATEGORY_SPECS`, so it matches the tally line |
 | Platform | 🤖 Android · 🍎 iOS · 🖥️ desktop (all three) · 🌐 multiple · ❔ unknown |
 
-The header accounts for the batch in full, so nothing is dropped silently. The backlog line deliberately **excludes app-store reviews**: 92% of unsolved tickets are AppFollow reviews, so the unqualified number reads as roughly 13× the queue that actually needs a human (5,680 against 428). Both counts come from Zendesk's count-only search endpoint, one request each and both best-effort — if the review-excluded count fails, the line falls back to the plain total rather than disappearing. The category tally counts abuse reports like anything else, so the numbers still sum to what was analyzed; the collapsed line at the bottom is where they are listed, and its links stop at a character budget (the remainder counted as `+N more`) so a heavy day cannot push a message past 2,000.
+The header accounts for the batch in full, so nothing is dropped silently. The backlog line is scoped exactly like the analysis — `status<pending`, **excluding app-store reviews** — so the number and the tickets under it mean the same thing. That matters because 92% of unsolved tickets are AppFollow reviews, so the unqualified number reads as roughly 13× the queue that actually needs a human (5,680 against 428). Both counts come from Zendesk's count-only search endpoint, one request each and both best-effort — if the review-excluded count fails, the line falls back to the plain total rather than disappearing. The category tally counts abuse reports like anything else, so the numbers still sum to what was analyzed; the collapsed line at the bottom is where they are listed, and its links stop at a character budget (the remainder counted as `+N more`) so a heavy day cannot push a message past 2,000.
 
 **One card per ticket, each with its own Comment button.** The lines still carry their own structure — the digest is read by skimming — but each now sits in a Components V2 Section whose accessory is a button, because that is the only Discord primitive where a button belongs to one item. Embeds cannot do it: components attach to the message, so ten embeds would sit above ten anonymous buttons. Two limits bound a message and whichever binds first splits it — 40 components, of which a card costs three (`MAX_SECTIONS_PER_MESSAGE` = 10), and `MAX_COMPONENT_CHARS` across all its text. Lines are still clipped (`SUMMARY_CHARS`, `ROOT_CAUSE_CHARS`), and each message records which ticket ids it accounts for, which is what makes a partial post failure recoverable.
 
@@ -163,7 +172,7 @@ The trade is process startup, a few seconds per call, against holding an API cre
 
 | Setting                | Where            | Default                                                 | Description |
 | ---------------------- | ---------------- | ------------------------------------------------------- | ----------- |
-| `--window-hours`       | flag             | *(unset)*                                               | Analyze unsolved tickets updated in the last N hours. There is no parser default: absent, the run uses `DEFAULT_QUERY` and no window at all. The `72` the digest runs with is passed by [`zendesk-digest.service`](deploy/zendesk-digest.service) |
+| `--window-hours`       | flag             | *(unset)*                                               | Analyze tickets the requester touched in the last N hours. There is no parser default: absent, the run uses `DEFAULT_QUERY` and no window at all. The `72` the digest runs with is passed by [`zendesk-digest.service`](deploy/zendesk-digest.service) |
 | `--state`              | flag             | *(unset)*                                               | Dedup state file. The unit points this at `/var/lib/zendesk/seen.json` |
 | `--state-retention-days` | flag           | `30`                                                    | Forget state entries older than N days |
 | `ZENDESK_QUERY`        | env / `--query`  | *(unset)*                                               | Explicit Zendesk search query. Overrides `--window-hours` entirely |
@@ -171,8 +180,8 @@ The trade is process startup, a few seconds per call, against holding an API cre
 | `--findings`           | flag             | *(unset)*                                               | Render a findings JSON classified elsewhere, skipping Zendesk and Claude entirely. Pairs with `--dump-batch` |
 | `--max-tickets`        | flag             | `100`                                                   | Runaway guard on tickets analyzed per run, **not** a batch size. Zendesk's search API caps a query at 1000 results, so higher values don't fetch more |
 | `--batch-size`         | flag             | `400`                                                   | Split batches larger than this across multiple requests |
-| `--review-star-floor`  | flag             | `3`                                                     | Classify app-store reviews at or below N stars; count the rest |
-| `--include-positive-reviews` | flag       | off                                                     | Classify every review, including 4-5★ ones |
+| `--review-star-floor`  | flag             | `3`                                                     | Classify app-store reviews at or below N stars; count the rest. Only reachable via an explicit `--query` — the default excludes reviews |
+| `--include-positive-reviews` | flag       | off                                                     | Classify every review, including 4-5★ ones. Same caveat |
 | `--no-hydrate`         | flag             | off                                                     | Skip fetching comments for content-free tickets |
 | `--no-discord`         | flag             | off                                                     | Analyze but post nothing, printing counts only. Records no state, so the next run still reports those tickets. Unlike `--dry-run` it prints no ticket content |
 | `--effort`             | flag             | `medium`                                                | Claude reasoning effort (`low`–`max`) |

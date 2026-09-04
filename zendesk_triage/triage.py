@@ -733,6 +733,102 @@ def undash(text):
     return ANY_LONG_DASH.sub("-", PUNCTUATING_DASH.sub(", ", text or ""))
 
 
+def marker(kind, value):
+    """A machine-readable marker for a ticket comment.
+
+    One shape for all of them: `[kind:value]`, matched by has_marker. What it is for
+    is idempotency — a marker on the ticket says the work behind it is already done,
+    so a replayed webhook or a re-run writes nothing a second time.
+
+    The kind carries its own namespace (`discord`, `claude:done`) so the strings are
+    byte-identical to the four hand-rolled versions this replaces. That matters:
+    markers are already written into real tickets, and a changed format would stop
+    matching them and let a replay send twice.
+    """
+    return f"[{kind}:{value}]"
+
+
+def has_marker(comments, wanted):
+    """Whether any comment already carries this marker."""
+    return any(wanted in (comment.get("body") or "") for comment in comments)
+
+
+AGENT_ROLES = ("agent", "admin")
+
+
+def fetch_user(session, subdomain, user_id):
+    """One Zendesk user, or {} when it cannot be read.
+
+    An author we cannot resolve is treated as a customer by customer_authors, so a
+    failed lookup widens the sample rather than silencing it.
+    """
+    url = f"https://{subdomain}.zendesk.com/api/v2/users/{user_id}.json"
+    resp = request_with_retry(session, "GET", url, attempts=2)
+    if resp.status_code >= 400:
+        return {}
+    return (resp.json() or {}).get("user") or {}
+
+
+def customer_authors(session, subdomain, ticket, comments):
+    """The author ids on the customer's side of this ticket.
+
+    Deciding by `requester_id` alone is right for email and web tickets and wrong for
+    every channel integration: on a Twitter or Sunshine DM the integration authors the
+    customer's own message under its id, so the requester appears to have written
+    nothing. That dropped every word a Chinese reviewer wrote and had them answered in
+    English, and it labelled their message "Support" in the English transcript.
+
+    So: the requester when they wrote anything, and otherwise everyone who is not an
+    agent here. Roles are looked up rather than inferred from the id, because the
+    integration's id is an account detail and an author we cannot resolve is a
+    customer, not an agent.
+
+    Ordinary tickets cost no extra API calls at all — the requester wrote something,
+    and the lookup never happens.
+    """
+    requester = ticket.get("requester_id")
+    if any(c.get("author_id") == requester for c in comments):
+        return {requester}
+    roles, customers = {}, set()
+    for comment in comments:
+        author = comment.get("author_id")
+        if author not in roles:
+            roles[author] = (fetch_user(session, subdomain, author) or {}).get("role")
+        if roles[author] not in AGENT_ROLES:
+            customers.add(author)
+    return customers or {requester}
+
+
+def customer_text(session, subdomain, ticket, comments, limit):
+    """What the customer wrote, as the signal for which language to reply in.
+
+    Their words only. An agent's earlier English reply is still text on the ticket,
+    and including it would drag detection towards English on exactly the tickets this
+    exists for.
+    """
+    # Public only. A private note is internal annotation — including the `claude:`
+    # commands and the drafts this tool writes — and never the customer speaking.
+    comments = [c for c in comments if c.get("public")]
+    authors = customer_authors(session, subdomain, ticket, comments)
+    subject = squash(ticket.get("subject"))
+    parts = []
+    description = (ticket.get("description") or "").strip()
+    # A channel integration puts "Conversation with <handle>" here, which is the
+    # ticket's own boilerplate rather than anything the customer typed.
+    if description and squash(description) != subject:
+        parts.append(description)
+    for comment in reversed(comments):          # oldest first, so it reads in order
+        if comment.get("author_id") not in authors:
+            continue
+        body = (comment.get("body") or "").strip()
+        if body and squash(body) != subject and body not in parts:
+            parts.append(body)
+    # A ticket can carry no text at all — an attachment, or an import that lost its
+    # body. Say so rather than sending an empty sample, which reads as a blank
+    # question the model has to answer anyway.
+    return clip("\n\n".join(parts), limit) or "(no text)"
+
+
 def squash(value):
     """Collapse whitespace so subject/description can be compared meaningfully."""
     return re.sub(r"\s+", " ", value or "").strip()
@@ -942,10 +1038,11 @@ def conversation_turns(session, subdomain, ticket):
     answer to a reply, and dropping the reply leaves "still broken" sitting under the
     original complaint with nothing visible for it to be answering.
 
-    Who spoke is decided by `requester_id` — the same question relay.py asks of the
-    same ticket. Without it there is no way to label a turn, and a transcript that
-    guesses is worse than none: it would present the agent's own replies as the
-    customer's words, with no heading to disclaim them the way the dialog has.
+    Who spoke is decided by customer_authors, not by `requester_id` alone: on a
+    Twitter or Sunshine DM the integration authors the customer's message under its
+    own id, and comparing against the requester labelled their words "Support" in the
+    transcript an agent then read. A transcript that mislabels who spoke is worse than
+    none.
     """
     requester = ticket.get("requester_id")
     if requester is None:
@@ -966,16 +1063,16 @@ def conversation_turns(session, subdomain, ticket):
     except ValueError as exc:
         print(f"Note: unreadable comments payload for #{ticket['id']} ({exc}).")
         return None
+    public = [c for c in comments if c.get("public")]
+    authors = customer_authors(session, subdomain, ticket, public)
     turns = []
-    for comment in comments:
-        if not comment.get("public"):
-            continue
+    for comment in public:
         body = (comment.get("body") or "").strip()
         if not body:
             continue
         turns.append({
             "index": len(turns),
-            "who": (CUSTOMER_TURN if comment.get("author_id") == requester
+            "who": (CUSTOMER_TURN if comment.get("author_id") in authors
                     else SUPPORT_TURN),
             "when": stamp_minutes(comment.get("created_at")),
             "body": body,

@@ -144,7 +144,7 @@ def sent_marker(interaction_id):
     cannot get this far — and this covers the case that guard cannot: the same
     interaction being replayed after it already wrote.
     """
-    return f"[discord:{interaction_id}]"
+    return triage.marker("discord", interaction_id)
 
 
 def preview_language(result):
@@ -362,32 +362,19 @@ def fetch_comments(session, subdomain, ticket_id):
     return (resp.json() or {}).get("comments") or []
 
 
-def customer_text(ticket, comments):
-    """What the requester wrote, as the signal for which language to reply in.
+def customer_text(session, subdomain, ticket, comments):
+    """What the customer wrote, for language detection. See triage.customer_text.
 
-    The requester's own comments only. An agent's earlier English reply on the same
-    ticket is still text on the ticket, and including it would drag detection towards
-    English on exactly the tickets this feature exists for.
+    Thin on purpose: note_reply needs the same answer, and the two drifted once
+    already — this one dropped every word a Twitter DM customer wrote, because a
+    channel integration authors their message under its own id.
     """
-    requester_id = ticket.get("requester_id")
-    parts = []
-    description = (ticket.get("description") or "").strip()
-    if description:
-        parts.append(description)
-    for comment in comments:
-        if comment.get("author_id") != requester_id:
-            continue
-        body = (comment.get("body") or "").strip()
-        if body and body not in parts:
-            parts.append(body)
-    # A ticket can carry no text at all — an attachment, or an import that lost its
-    # body. Say so rather than sending an empty sample, which reads as a blank
-    # question the model has to answer anyway.
-    return triage.clip("\n\n".join(parts), CUSTOMER_SAMPLE_CHARS) or "(no text)"
+    return triage.customer_text(session, subdomain, ticket, comments,
+                                CUSTOMER_SAMPLE_CHARS)
 
 
-def already_replied(comments, marker):
-    return any(marker in (comment.get("body") or "") for comment in comments)
+def already_replied(comments, wanted):
+    return triage.has_marker(comments, wanted)
 
 
 def post_comment(session, subdomain, ticket_id, body, public, status=None):
@@ -566,7 +553,8 @@ def run_draft(session, subdomain, model, payload, dry_run):
         return
     comments = fetch_comments(session, subdomain, ticket_id)
 
-    result = translate(model, customer_text(ticket, comments), reply_en)
+    result = translate(model, customer_text(session, subdomain, ticket, comments),
+                       reply_en)
     print(f"#{ticket_id}: requester writes {result['language']!r} "
           f"({result['language_code']}).")
 

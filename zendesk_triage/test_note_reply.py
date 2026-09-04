@@ -377,53 +377,6 @@ class FindDraft(unittest.TestCase):
         self.assertIn("a &amp; b &lt;c&gt;", note["body"])
 
 
-class CustomerSample(unittest.TestCase):
-    """Which text decides the language the customer is answered in."""
-
-    TWEET = {"id": 1, "subject": "Conversation with 我命由我不由天",
-             "description": "Conversation with 我命由我不由天", "requester_id": 999}
-    EMAIL = {"id": 2, "subject": "Cannot log in",
-             "description": "Ich kann mich nicht anmelden.", "requester_id": 999}
-
-    def test_an_ordinary_ticket_uses_the_requester_s_own_words(self):
-        session = fake_session()
-        got = note_reply.customer_sample(session, "sub", self.EMAIL, [])
-        self.assertIn("Ich kann mich nicht anmelden", got)
-        self.assertEqual(session.calls, [], "no lookups needed for a normal ticket")
-
-    def test_a_dm_falls_back_to_the_integration_authored_message(self):
-        """The bug this exists for: on a Twitter DM the integration authors the
-        customer's message under its own id, so filtering on requester_id drops
-        every word they wrote and the reply goes out in English to a Chinese
-        speaker."""
-        comments = [
-            {"id": 20, "author_id": 901790886886, "public": True,
-             "body": "Thanks for getting in touch."},
-            {"id": 10, "author_id": -1, "public": True,
-             "body": "(10:36:27) 我命由我不由天: 中国大陆可以使用吗？"},
-        ]
-        # oldest comment first, so the integration author is resolved before the agent
-        session = fake_session(FakeResponse({"user": {}}),
-                               FakeResponse({"user": {"id": 901790886886, "role": "admin"}}))
-        got = note_reply.customer_sample(session, "sub", self.TWEET, comments)
-        self.assertIn("中国大陆可以使用吗", got)
-        self.assertNotIn("Thanks for getting in touch", got,
-                         "an agent's English reply must not skew the detection")
-
-    def test_an_unknown_author_counts_as_the_customer(self):
-        """The integration's id is an account detail; a user we cannot resolve is a
-        customer, not an agent."""
-        comments = [{"id": 10, "author_id": -1, "public": True, "body": "中国大陆可以使用吗？"}]
-        session = fake_session(FakeResponse({}, status_code=404))
-        self.assertIn("中国大陆", note_reply.customer_sample(session, "sub", self.TWEET, comments))
-
-    def test_private_notes_never_reach_the_detector(self):
-        comments = [{"id": 10, "author_id": -1, "public": False, "body": "claude: draft - x"}]
-        session = fake_session(FakeResponse({"user": {}}))
-        got = note_reply.customer_sample(session, "sub", self.TWEET, comments)
-        self.assertNotIn("claude: draft", got)
-
-
 class ChoosingAnOption(unittest.TestCase):
     """Which of the offered replies actually reaches the customer."""
 

@@ -2283,3 +2283,70 @@ class TestEnglishTranscript(unittest.TestCase):
                                       [{"id": 99, "language": "German"}],
                                       "claude-sonnet-5", field_id=42),
                 0)
+
+
+class TestCustomerSide(unittest.TestCase):
+    """Which comments are the customer's. Decided by requester_id alone this was
+    wrong on every channel integration: a Twitter DM authors the customer's own
+    message under the integration's id, so their words were dropped from the language
+    sample and labelled "Support" in the transcript."""
+
+    TWEET = {"id": 1, "subject": "Conversation with 我命由我不由天",
+             "description": "Conversation with 我命由我不由天", "requester_id": 999}
+    EMAIL = {"id": 2, "subject": "Cannot log in",
+             "description": "Ich kann mich nicht anmelden.", "requester_id": 999}
+
+    @staticmethod
+    def said(body, author, public=True, cid=1):
+        return {"id": cid, "author_id": author, "public": public, "body": body}
+
+    def test_an_ordinary_ticket_costs_no_lookups(self):
+        session = FakeSession([])
+        authors = triage.customer_authors(
+            session, "acme", self.EMAIL, [self.said("Hallo", 999)])
+        self.assertEqual(authors, {999})
+        self.assertEqual(session.calls, [], "the requester wrote, so no role lookup")
+
+    def test_a_dm_falls_back_to_whoever_is_not_an_agent(self):
+        session = FakeSession([FakeResponse({"user": {}}),
+                               FakeResponse({"user": {"id": 7, "role": "admin"}})])
+        authors = triage.customer_authors(session, "acme", self.TWEET, [
+            self.said("中国大陆可以使用吗？", -1),
+            self.said("Thanks for getting in touch.", 7)])
+        self.assertEqual(authors, {-1})
+
+    def test_an_unresolvable_author_counts_as_the_customer(self):
+        session = FakeSession([FakeResponse({}, status_code=404)])
+        self.assertEqual(
+            triage.customer_authors(session, "acme", self.TWEET,
+                                    [self.said("中国大陆", -1)]), {-1})
+
+    def test_the_sample_keeps_their_words_and_drops_the_agent_s(self):
+        session = FakeSession([FakeResponse({"user": {}}),
+                               FakeResponse({"user": {"id": 7, "role": "admin"}})])
+        sample = triage.customer_text(session, "acme", self.TWEET, [
+            self.said("中国大陆可以使用吗？", -1),
+            self.said("Thanks for getting in touch.", 7)], 2000)
+        self.assertIn("中国大陆可以使用吗", sample)
+        self.assertNotIn("Thanks for getting in touch", sample)
+
+    def test_channel_boilerplate_is_not_the_customer_writing(self):
+        """"Conversation with <handle>" is the ticket's own description, not words
+        anybody typed, and it was what the language detector saw."""
+        session = FakeSession([FakeResponse({"user": {}})])
+        sample = triage.customer_text(session, "acme", self.TWEET,
+                                      [self.said("中国大陆", -1)], 2000)
+        self.assertNotIn("Conversation with", sample)
+
+    def test_private_notes_never_reach_the_sample(self):
+        session = FakeSession([])
+        sample = triage.customer_text(session, "acme", self.EMAIL,
+                                      [self.said("claude: draft - x", 999, public=False)],
+                                      2000)
+        self.assertNotIn("claude: draft", sample)
+
+    def test_a_ticket_with_no_text_still_yields_a_sample(self):
+        session = FakeSession([])
+        self.assertTrue(triage.customer_text(
+            session, "acme", dict(self.EMAIL, description=""), [], 2000).strip())
+

@@ -95,6 +95,18 @@ certbot --nginx --redirect -d webhooks.session.codes
 nginx -t && systemctl reload nginx                # validate what certbot wrote
 ```
 
+> **This `cp` is first-install only.** certbot rewrites that file in place to add the
+> TLS directives, so copying the repo's copy over it a second time silently reverts
+> the site to HTTP-only. To pick up a change to `nginx-webhooks.conf` on a host that
+> is already serving — a new `location`, say — diff the two and edit the live file:
+>
+> ```bash
+> diff /opt/zendesk/deploy/nginx-webhooks.conf \
+>      /etc/nginx/sites-available/webhooks.session.codes
+> "${EDITOR:-nano}" /etc/nginx/sites-available/webhooks.session.codes
+> nginx -t && systemctl reload nginx
+> ```
+
 ## Secrets
 
 `/etc/zendesk/env`, mode `640`, `root:zendesk` — readable by the service, not by
