@@ -258,6 +258,37 @@ class TestWindowQuery(unittest.TestCase):
         analysed = triage.build_window_query(72).split(" updated>")[0]
         self.assertTrue(triage.BACKLOG_QUERY.startswith(analysed))
 
+    def test_a_ticket_only_we_touched_leaves_the_window(self):
+        """The bug this exists for: a `claude: explain` note bumps updated_at, and
+        the window query is on updated_at — so a ticket whose customer last wrote
+        100 days ago was appearing in a 72-hour digest because we touched it."""
+        cutoff = "2026-09-01T00:00:00Z"
+        ours = {"id": 1, "updated_at": "2026-09-03T02:35:00Z",
+                "requester_updated_at": "2026-05-26T06:55:00Z"}
+        theirs = {"id": 2, "updated_at": "2026-09-02T09:00:00Z",
+                  "requester_updated_at": "2026-09-02T09:00:00Z"}
+        fresh, quiet = triage.drop_quiet_tickets([ours, theirs], cutoff)
+        self.assertEqual([t["id"] for t in fresh], [2])
+        self.assertEqual([t["id"] for t in quiet], [1])
+
+    def test_a_missing_requester_stamp_keeps_the_ticket(self):
+        """A failed metric sideload must leave the digest noisy, never silent."""
+        blind = {"id": 1, "updated_at": "2026-09-03T02:35:00Z"}
+        fresh, quiet = triage.drop_quiet_tickets([blind], "2026-09-01T00:00:00Z")
+        self.assertEqual(fresh, [blind])
+        self.assertEqual(quiet, [])
+
+    def test_a_ticket_touched_exactly_at_the_cutoff_is_kept(self):
+        edge = {"id": 1, "requester_updated_at": "2026-09-01T00:00:00Z"}
+        fresh, _ = triage.drop_quiet_tickets([edge], "2026-09-01T00:00:00Z")
+        self.assertEqual(fresh, [edge])
+
+    def test_the_query_and_the_filter_share_one_cutoff(self):
+        """Computed twice they would sit seconds apart, which is enough to drop a
+        ticket that arrived mid-run."""
+        cutoff = triage.window_cutoff(72)
+        self.assertIn(f"updated>{cutoff}", triage.build_window_query(72, cutoff))
+
     def test_a_longer_window_reaches_further_back(self):
         short = triage.build_window_query(48).split("updated>")[1].split(" ")[0]
         long = triage.build_window_query(168).split("updated>")[1].split(" ")[0]

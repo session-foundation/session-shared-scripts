@@ -104,7 +104,7 @@ SEARCH_RESULT_LIMIT = 1000
 STATE_VERSION = 2
 
 
-def build_window_query(hours):
+def build_window_query(hours, cutoff=None):
     """Query for unsolved tickets touched in the last `hours`, most recent first.
 
     `updated>`, not `created>`: a ticket the requester adds detail to days after
@@ -116,11 +116,43 @@ def build_window_query(hours):
     The cutoff is an explicit UTC timestamp rather than Zendesk's relative
     `updated>72hours` form, so the exact window lands in the run log.
     """
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
-    return (f"type:ticket status<pending updated>{cutoff} "
+    return (f"type:ticket status<pending updated>{cutoff or window_cutoff(hours)} "
             f"order_by:updated_at sort:desc")
+
+
+def window_cutoff(hours):
+    """The UTC timestamp bounding a window, as Zendesk search formats it.
+
+    Separate from build_window_query so the run computes it once and both the query
+    and the requester-activity filter judge against the same instant. Computing it
+    twice would put seconds between them, which is enough to drop a ticket that
+    arrived mid-run.
+    """
+    return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+
+
+def drop_quiet_tickets(tickets, cutoff):
+    """Split off tickets the requester has not touched inside the window.
+
+    The window query is on `updated_at`, which moves on ANY change — a tag edit, the
+    hourly automation that bumps tickets at :01, and our own private notes. So a
+    `claude: explain` on a ticket whose customer last wrote 100 days ago drags it
+    into today's digest, and the noise grows in proportion to how much the reply
+    tooling is used, which is backwards.
+
+    Zendesk search has no `requester_updated>`, so the narrowing happens here, over
+    the value hydrate_requester_activity has already fetched. Timestamps are Zendesk's
+    fixed-width UTC form, so a string compare is a chronological one.
+
+    A ticket whose requester_updated_at is missing is KEPT: a failed sideload should
+    leave the digest noisy, never silent.
+    """
+    fresh, quiet = [], []
+    for ticket in tickets:
+        stamp = ticket.get("requester_updated_at")
+        (quiet if stamp and stamp < cutoff else fresh).append(ticket)
+    return fresh, quiet
 
 
 def window_label(hours):
@@ -1761,13 +1793,15 @@ def main():
         api_token = get_env("ZENDESK_API_TOKEN", args.api_token)
 
         # An explicit query wins over --window-hours; warn rather than silently drop it.
+        window_start = None
         explicit_query = args.query or os.environ.get("ZENDESK_QUERY")
         if explicit_query:
             if args.window_hours:
                 print("Note: --window-hours ignored because an explicit query was given.")
             query = explicit_query
         elif args.window_hours:
-            query = build_window_query(args.window_hours)
+            window_start = window_cutoff(args.window_hours)
+            query = build_window_query(args.window_hours, window_start)
             stats["scope"] = window_label(args.window_hours)
         else:
             query = DEFAULT_QUERY
@@ -1805,11 +1839,23 @@ def main():
                 print("Only positive reviews in this window; nothing to report.")
                 return
 
-        if args.state:
-            # Before partition_by_state, which compares on requester_updated_at, and
-            # after the review filter, so the sideload only covers what can be
-            # reported. One request per 100 tickets.
+        # One sideload serves both the window filter and the dedup, so it runs
+        # whenever either needs it. After the review filter, so it only covers
+        # tickets that can still be reported. One request per 100 tickets.
+        if window_start or args.state:
             hydrate_requester_activity(zd, subdomain, tickets)
+
+        if window_start:
+            tickets, quiet = drop_quiet_tickets(tickets, window_start)
+            if quiet:
+                stats["skipped_quiet"] = len(quiet)
+                print(f"Skipped {len(quiet)} ticket(s) that only we touched in this "
+                      f"window; {len(tickets)} remain.")
+            if not tickets:
+                print("Nothing the requester touched in this window; nothing to report.")
+                return
+
+        if args.state:
             state = load_state(args.state)
             new, changed, unchanged = partition_by_state(tickets, state)
             print(f"{len(new)} new, {len(changed)} changed since last reported, "
