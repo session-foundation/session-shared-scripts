@@ -146,6 +146,13 @@ ZENDESK_WEBHOOK_SECRET=
 # Empty means any agent or admin, which is already everybody who can write a
 # private note. The agent/admin role check applies either way.
 #ZENDESK_NOTE_AUTHORS=
+# Optional. Path to the house-answer file: what support actually replied to each
+# kind of problem, per platform. It grounds `claude: draft` and is the whole of
+# `claude: explain`; unset, drafting works as it does without it and explain says
+# there is nothing to look up. NOT in the repo — it carries ticket ids and customer
+# text and the repo is public — so copy it here by hand:
+#     install -o zendesk -g zendesk -m 640 house_answers.json /var/lib/zendesk/
+#ZENDESK_HOUSE_ANSWERS=/var/lib/zendesk/house_answers.json
 
 # Optional. The numeric id of a multi-line text ticket field in Zendesk; the digest
 # renders every non-English ticket it is about to post into English there — both
@@ -220,6 +227,11 @@ if you change `OnCalendar=`, check it with
 [README](../README.md)), write `claude: english` as a private note on a throwaway
 ticket and watch `journalctl -fu zendesk-relay`. `english` is the read-only verb, so
 nothing can reach a customer if the wiring is wrong.
+
+The ticket needs at least one **public** comment, ideally not in English. `english`
+translates the conversation, and a ticket carrying only private notes has nothing to
+work on — it answers "there are no public comments on this ticket to translate",
+which proves the wiring but exercises none of the model path.
 
 The one thing only this step can prove is that the relay's HMAC matches Zendesk's. If
 it does not, every note logs a 401 and nothing happens.

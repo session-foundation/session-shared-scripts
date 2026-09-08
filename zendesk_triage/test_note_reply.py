@@ -414,7 +414,8 @@ class ChoosingAnOption(unittest.TestCase):
                              {"id": 3, "author": AGENT, "action": "reply", "brief": "2"},
                              API_USER, dry_run=False)
         puts = [c for c in session.calls if c[0] == "PUT" and "/tags.json" not in c[1]]
-        self.assertEqual(puts[0][2]["json"]["ticket"]["comment"],
+        # the audit note is written first; the public reply is the second PUT
+        self.assertEqual(puts[1][2]["json"]["ticket"]["comment"],
                          {"body": "zweite", "public": True})
 
     def test_an_ambiguous_reply_writes_no_public_comment(self):
@@ -653,10 +654,15 @@ class Writes(unittest.TestCase):
                              API_USER, dry_run=False)
         puts = [c for c in session.calls if c[0] == "PUT" and "/tags.json" not in c[1]]
         self.assertEqual(len(puts), 2)
-        public = puts[0][2]["json"]["ticket"]
+        # The note carrying the done marker is written BEFORE the public reply: sent
+        # the other way round, a failure between them leaves the customer emailed and
+        # the command unclaimed, and the next run emails them again.
+        note = puts[0][2]["json"]["ticket"]
+        self.assertIs(note["comment"]["public"], False)
+        self.assertIn(note_reply.done_marker(3), note["comment"]["html_body"])
+        public = puts[1][2]["json"]["ticket"]
         self.assertEqual(public["comment"], {"body": "Hallo Welt", "public": True})
         self.assertEqual(public["status"], note_reply.REPLIED_STATUS)
-        self.assertIs(puts[1][2]["json"]["ticket"]["comment"]["public"], False)
 
     def test_reply_without_a_draft_writes_no_public_comment(self):
         session = fake_session(*[FakeResponse({"ticket": {}})])

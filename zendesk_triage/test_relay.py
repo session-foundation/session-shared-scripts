@@ -113,6 +113,28 @@ class TestZendeskWebhook(unittest.TestCase):
         self.assertEqual(self.run_with().status_code, 401)
         self.assertEqual(self.ran, [])
 
+    def test_a_webhook_from_the_future_is_refused(self):
+        """The skew allowance is bounded in both directions: a timestamp far ahead of
+        now is as much a replay signal as one far behind."""
+        self.kwargs = {"age": -(relay.MAX_CLOCK_SKEW_SECONDS + 60)}
+        self.assertEqual(self.run_with().status_code, 401)
+        self.assertEqual(self.ran, [])
+
+    def test_a_small_clock_skew_is_tolerated(self):
+        """Without the allowance a host a second behind Zendesk refuses everything."""
+        self.kwargs = {"age": -(relay.MAX_CLOCK_SKEW_SECONDS // 2)}
+        self.assertEqual(self.run_with().status_code, 200)
+
+    def test_a_json_scalar_body_is_a_400_not_a_500(self):
+        """Valid JSON that is not an object has no .get, and the AttributeError that
+        followed surfaced as a 500 rather than the 400 malformed input earns."""
+        # not None: that is zendesk_post's "use the default body" sentinel
+        for body in (5, "just a string", ["a", "list"], True):
+            with self.subTest(body=body):
+                self.kwargs = {"body": body}
+                self.assertEqual(self.run_with().status_code, 400)
+        self.assertEqual(self.ran, [])
+
     def test_an_unconfigured_relay_refuses_everything(self):
         """No secret must mean no, not yes. This URL writes to customers."""
         self.kwargs = {}
@@ -145,6 +167,34 @@ class TestZendeskWebhook(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(self.ran, [])
 
+
+
+class TestSignatureTimestamps(unittest.TestCase):
+    """The age check is only meaningful if the timestamp is read in the zone it was
+    written in."""
+
+    def signed(self, stamp, raw=b"{}"):
+        digest = hmac.new(ZENDESK_SECRET.encode(), stamp.encode() + raw,
+                          hashlib.sha256).digest()
+        return relay.zendesk_signature_ok(
+            raw, base64.b64encode(digest).decode(), stamp, ZENDESK_SECRET)
+
+    def test_an_offsetless_timestamp_is_read_as_utc(self):
+        """Left naive, .timestamp() reads it as this host's local time, so the age is
+        wrong by the UTC offset — accepting a stale request, or refusing every fresh
+        one, on any box not set to UTC."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        self.assertTrue(self.signed(now.strftime("%Y-%m-%dT%H:%M:%S")))
+
+    def test_a_stale_offsetless_timestamp_is_still_refused(self):
+        old = (datetime.datetime.now(datetime.timezone.utc)
+               - datetime.timedelta(seconds=relay.MAX_SIGNATURE_AGE_SECONDS + 60))
+        self.assertFalse(self.signed(old.strftime("%Y-%m-%dT%H:%M:%S")))
+
+    def test_an_unparseable_timestamp_is_refused(self):
+        for stamp in ("yesterday", "", "2026-13-45T99:99:99Z"):
+            with self.subTest(stamp=stamp):
+                self.assertFalse(self.signed(stamp))
 
 
 class TestTicketNumber(unittest.TestCase):

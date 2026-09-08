@@ -1633,6 +1633,14 @@ def build_header(findings, highlights, stats=None):
     reviews = stats.get("skipped_reviews") or 0
     if reviews:
         window += f" Skipped **{reviews}** positive app-store review(s)."
+    # Usually the largest of the three, and the least obvious: the window is on
+    # updated_at, so our own private notes drag old tickets in and drop_quiet_tickets
+    # takes them back out. Measured on a real 72h window: 56 of 79. Unreported, the
+    # digest looks like it analyzed a fraction of what it fetched for no stated reason.
+    quiet = stats.get("skipped_quiet") or 0
+    if quiet:
+        window += (f" Skipped **{quiet}** the requester has not touched in this "
+                   f"window.")
     lines = [window]
 
     non_review = stats.get("total_unsolved_non_review")

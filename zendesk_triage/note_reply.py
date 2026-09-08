@@ -317,10 +317,12 @@ def verbatim(text):
 
 def write_to_ticket(session, subdomain, ticket_id, body, public,
                     status=None, add_tags=(), drop_tags=(), as_html=False):
-    """One PUT carrying a comment and any tag or status change.
+    """One PUT carrying a comment and any status change, then the tags.
 
-    `additional_tags`/`remove_tags` rather than writing the whole tag list: two runs
-    on one ticket would otherwise race and one would drop the other's tag.
+    Tags do NOT ride on this PUT: `additional_tags`/`remove_tags` are update_many
+    fields that a single-ticket update accepts with a 200 and silently ignores, so
+    they go through change_tags instead. `test_tags_go_through_the_sub_resource_not_
+    the_ticket_update` is what keeps that from regressing.
 
     The response body is never printed. Zendesk echoes the submitted comment back in
     a 422, and that comment is the reply — which this repo's public logs must not
@@ -359,10 +361,26 @@ def load_house(path=None):
         print(f"Note: could not read the house answers at {path} ({exc}); "
               f"drafting without them.")
         return None
-    if not isinstance(book, dict) or not book.get("cells"):
+    if not isinstance(book, dict) or not book.get("cells") or not book.get("groups"):
+        # Both halves are dereferenced unguarded downstream — place_ticket and
+        # run_explain read book["groups"], house_cell reads book["cells"] — so a
+        # half-written file has to be refused here rather than raising there.
         print(f"Note: {path} carries no house answers; drafting without them.")
         return None
-    return book
+    # render_precedent and build_draft_note read these three off every cell, and a
+    # cell missing one would raise mid-draft. Drop the unusable ones rather than the
+    # whole file: a truncated cell should cost its own group's grounding, not all of it.
+    usable = {key: cell for key, cell in book["cells"].items()
+              if isinstance(cell, dict)
+              and all(cell.get(field) is not None
+                      for field in ("answer", "n", "consistency"))}
+    if not usable:
+        print(f"Note: no cell in {path} is complete; drafting without them.")
+        return None
+    if len(usable) != len(book["cells"]):
+        print(f"Note: {len(book['cells']) - len(usable)} incomplete cell(s) in {path} "
+              f"ignored.")
+    return {**book, "cells": usable}
 
 
 def tagged_placement(ticket):
@@ -926,12 +944,18 @@ def run_reply(session, subdomain, ticket, comments, command, api_user, dry_run):
     if dry_run:
         print(f"#{ticket_id}: dry run, would send an option on behalf of {who}.")
         return
-    write_to_ticket(session, subdomain, ticket_id, sending, public=True,
-                    status=REPLIED_STATUS)
+    # The note carrying the done marker goes FIRST, before the irreversible act.
+    # Sent second, a failure between the two would leave the customer emailed and the
+    # command unclaimed, and the next run would email them again — the one thing the
+    # marker exists to prevent. The cost of this order is the opposite and much
+    # smaller: if the public comment then fails, the ticket carries a note saying a
+    # reply was sent when none was, and the run exits non-zero saying so.
     write_to_ticket(session, subdomain, ticket_id,
                     build_sent_note(who, comment_id, sending), public=False,
                     as_html=True, add_tags=[TAG_SENT],
                     drop_tags=[TAG_QUEUED, TAG_DRAFTED, TAG_ERROR])
+    write_to_ticket(session, subdomain, ticket_id, sending, public=True,
+                    status=REPLIED_STATUS)
     print(f"#{ticket_id}: reply sent and status -> {REPLIED_STATUS}.")
 
 
@@ -980,7 +1004,8 @@ def run_english(session, subdomain, model, ticket, comments, command, dry_run):
     turns = triage.conversation_turns(session, subdomain, ticket)
     if not turns:
         say(session, subdomain, ticket_id, command["id"],
-            "There are no public comments on this ticket to translate.", dry_run)
+            "There are no public comments on this ticket to translate.", dry_run,
+            error=False)
         return
 
     payload = json.dumps([{"index": t["index"], "speaker": t["who"], "text": t["body"]}

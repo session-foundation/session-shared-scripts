@@ -545,6 +545,19 @@ class TestHeader(unittest.TestCase):
     def test_omits_the_skip_line_when_nothing_was_skipped(self):
         self.assertNotIn("Skipped", self.header([finding(1)], {"skipped_unchanged": 0}))
 
+    def test_it_accounts_for_the_tickets_only_we_touched(self):
+        """The largest skip category on a real window, and the least obvious one:
+        our own private notes bump updated_at and drag old tickets in. Unreported,
+        the digest looks like it analyzed a fraction of its fetch for no reason."""
+        header = triage.build_header([finding(1)], [finding(1)],
+                                     {"matched": 79, "skipped_quiet": 56})
+        self.assertIn("**56**", header)
+        self.assertIn("not touched in this window", header)
+
+    def test_no_quiet_tickets_adds_no_line(self):
+        header = triage.build_header([finding(1)], [finding(1)], {"matched": 1})
+        self.assertNotIn("not touched in this window", header)
+
     def test_reports_the_backlog_excluding_store_reviews(self):
         """The unqualified number is ~13x the queue that needs a human, because 92%
         of unsolved tickets are AppFollow reviews."""

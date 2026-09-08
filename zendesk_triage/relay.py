@@ -138,9 +138,13 @@ def zendesk_signature_ok(raw, signature, timestamp, secret):
     """Whether Zendesk signed this body, recently.
 
     HMAC-SHA256 over the timestamp followed by the raw body, base64 encoded. The
-    timestamp is ISO 8601 rather than the epoch seconds the Discord path uses, and it
-    is covered by the signature — so the age check bounds replay of a genuinely
-    signed request, exactly as it does there.
+    timestamp is ISO 8601, and it is covered by the signature — so the age check
+    bounds replay of a request that was genuinely signed.
+
+    A timestamp carrying no offset is read as UTC, which is what Zendesk sends.
+    Left naive, `.timestamp()` would read it as this host's local time, so the age
+    would be wrong by the UTC offset — quietly accepting a stale request, or refusing
+    every fresh one, on any box not set to UTC.
     """
     if not (signature and timestamp and secret):
         return False
@@ -148,6 +152,8 @@ def zendesk_signature_ok(raw, signature, timestamp, secret):
         when = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
     except (AttributeError, TypeError, ValueError):
         return False
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=datetime.timezone.utc)
     age = time.time() - when.timestamp()
     if age < -MAX_CLOCK_SKEW_SECONDS or age > MAX_SIGNATURE_AGE_SECONDS:
         return False
@@ -185,10 +191,15 @@ async def zendesk_notes(request: Request, background: BackgroundTasks):
                                 request.headers.get(ZENDESK_TIMESTAMP_HEADER),
                                 env("ZENDESK_WEBHOOK_SECRET")):
         return Response("bad signature", status_code=401)
+    # A body that is valid JSON but not an object — a bare number, a string, a list —
+    # has no .get, and the AttributeError that follows would surface as a 500 rather
+    # than the 400 malformed input earns.
     try:
-        ticket_id = ticket_number((json.loads(raw) or {}).get("ticket_id"))
-    except (ValueError, TypeError):
-        ticket_id = None
+        body = json.loads(raw)
+    except ValueError:
+        body = None
+    ticket_id = (ticket_number(body.get("ticket_id"))
+                 if isinstance(body, dict) else None)
     if not ticket_id:
         return Response("no ticket id", status_code=400)
     background.add_task(run_in_threadpool, run_note_reply, ticket_id)

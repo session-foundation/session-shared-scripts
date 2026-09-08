@@ -351,10 +351,10 @@ Its `ExecStart` is wrapped in a `||` that reports the failure to the triage chan
 > `DISCORD_PUBLIC_KEY` / `ALLOWED_USER_IDS` / `ALLOWED_ROLE_IDS` / `DISCORD_GUILD_ID`
 > settings — one reply path instead of two, with one set of semantics.
 
-The Discord path answers one ticket from the digest. This one answers a ticket from
-inside Zendesk, where the queue is actually worked: an agent writes a private note
-saying what the answer is, Claude writes it properly in the requester's language, and
-the agent sends it with a second note.
+The Discord path answered one ticket from the digest, and no longer exists. This one
+answers a ticket from inside Zendesk, where the queue is actually worked: an agent
+writes a private note saying what the answer is, Claude writes it properly in the
+requester's language, and the agent sends it with a second note.
 
 ```
 claude: draft - attachments are only kept on the server for 14 days. A second
@@ -444,13 +444,16 @@ command that cannot be satisfied is still a command that was answered.
 | `claude-queued` | the Zendesk trigger, when the note lands | a successful run |
 | `claude-drafted` | a draft being posted | the reply going out |
 | `claude-sent` | the reply going out | — |
+| `claude-solved` | `claude: solve`, on every solve | — |
 | `claude-error` | a refusal, with the reason in the note | the next successful run |
 
 The tag is the durable queue and the webhook is only a latency optimisation. A relay
 that is down leaves `claude-queued` on the ticket, so `tags:claude-queued` older than
 a few minutes is the list of dropped jobs — a webhook-only design would lose them
 silently. Two views are worth making: `tags:claude-queued` for what did not run, and
-`tags:claude-drafted` for what is waiting on a human.
+`tags:claude-drafted` for what is waiting on a human. `claude-sent` and
+`claude-solved` are never cleared: they are the record of what this tool did, and
+`tags:claude-solved` is how a bulk solve is found again and reopened.
 
 ### Zendesk setup
 
