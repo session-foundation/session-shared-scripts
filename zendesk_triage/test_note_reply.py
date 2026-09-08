@@ -15,6 +15,7 @@ sends the wrong thing to a real person:
   * a replayed webhook must not send twice
   * `reply` must send what was reviewed, byte for byte
 """
+import html
 import os
 import re
 import sys
@@ -637,10 +638,9 @@ class Idempotency(unittest.TestCase):
         self.assertNotEqual(note_reply.done_marker(1), note_reply.done_marker(2))
 
     def test_a_handled_command_is_recognised(self):
-        import reply
         note = note_reply.build_draft_note(GERMAN, "x", 42)
-        self.assertTrue(reply.already_replied([comment(note)], note_reply.done_marker(42)))
-        self.assertFalse(reply.already_replied([comment(note)], note_reply.done_marker(43)))
+        self.assertTrue(triage.has_marker([comment(note)], note_reply.done_marker(42)))
+        self.assertFalse(triage.has_marker([comment(note)], note_reply.done_marker(43)))
 
 
 class Writes(unittest.TestCase):
@@ -860,6 +860,32 @@ class Composition(unittest.TestCase):
         result = note_reply.validate_composition(dict(GERMAN, options=[
             option("eins — zwei"), option("drei — vier")]))
         self.assertTrue(all("—" not in o["translated"] for o in result["options"]))
+
+    def test_no_note_this_tool_writes_carries_a_long_dash(self):
+        """Not only the reply: the templates, the house answer and its caveat all end
+        up in a note somebody reads, and a dash there reads as machine-written too."""
+        cell = {"n": 4, "consistency": "high", "answer": "We say X — and then Y.",
+                "steps": ["ask — politely"], "actions": ["banned — from communities"],
+                "caveat": "promised — never shipped", "examples": [11]}
+        # through validate_composition, as every real draft is: that is where the
+        # option text is cleaned, and para() covers everything around it
+        composed = note_reply.validate_composition(
+            dict(GERMAN, options=[option("Weg — dauerhaft.")]))
+        note = note_reply.build_draft_note(
+            composed, "brief", 42, False, cell, "Some — title", "android")
+        readable = html.unescape(note)
+        self.assertNotIn("—", readable)
+        self.assertNotIn("–", readable)
+
+    def test_the_agent_s_own_brief_is_echoed_back_untouched(self):
+        """It is their text in a private note, not ours to rewrite, and no customer
+        ever sees it."""
+        note = note_reply.build_draft_note(GERMAN, "the brief — as typed", 42)
+        self.assertIn("the brief — as typed", html.unescape(note))
+
+    def test_paragraphs_are_cleaned_and_verbatim_blocks_are_not(self):
+        self.assertNotIn("—", note_reply.para("a — b"))
+        self.assertIn("—", note_reply.verbatim("a — b"))
 
     def test_the_prompt_forbids_the_dash_as_well(self):
         prompt = " ".join(note_reply.COMPOSE_SYSTEM.lower().split())

@@ -17,9 +17,9 @@ ticket so an agent can read a ticket in a language they do not speak.
     ⚠️  `reply` writes a public comment, which emails the requester. That is not
         reversible. --dry-run does everything except the writes.
 
-Unlike reply.py — where the agent types the exact English text and Claude only
-translates it — here Claude *composes* the reply from a brief. So every draft is
-reviewed before it goes out, English ones included: nobody has read that wording yet.
+Claude *composes* the reply from a brief rather than translating text somebody typed,
+so every draft is reviewed before it goes out, English ones included: nobody has read
+that wording yet.
 
 Two actions, both read from the ticket's own comments:
 
@@ -68,8 +68,7 @@ import sys
 import textwrap
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import reply  # noqa: E402  (needs the path insert above)
-import triage  # noqa: E402
+import triage  # noqa: E402  (needs the path insert above)
 
 DEFAULT_MODEL = "claude-sonnet-5"
 COMPOSE_TIMEOUT_SECONDS = 240
@@ -78,12 +77,13 @@ PLACEMENT_TIMEOUT_SECONDS = 120
 # What Claude is given of the customer's own words, to answer in the right language
 # and at the right level of detail.
 CUSTOMER_SAMPLE_CHARS = 2000
-# A brief is a sentence or two. Anything longer is a pasted reply, which is
-# reply.py's job, not this one.
+# A brief is a sentence or two. Anything much longer is a reply somebody has already
+# written, which does not need composing.
 BRIEF_CHARS = 2000
 
-# Status the ticket moves to once the reply is out: the ball is with the customer.
-# Same convention as reply.py, so `open` keeps meaning "ours".
+# Status the ticket moves to once the reply is out: the ball is with the customer,
+# and the "Pending to Solved" automation resolves it 72h later. This is what keeps
+# `open` meaning "ours".
 REPLIED_STATUS = "pending"
 # `claude: solve` sets this. Not "closed": Zendesk refuses closed over the API, and
 # the account's own automation closes a solved ticket four days later anyway.
@@ -265,13 +265,20 @@ def clear_queued(session, subdomain, ticket_id, dry_run=False):
 
 
 def para(text):
-    """One paragraph of the note, escaped."""
-    return f"<p>{html.escape(text)}</p>"
+    """One paragraph of the note, escaped and stripped of long dashes.
+
+    Everything this tool writes onto a ticket goes through here or bold_para, so this
+    is the one place that guarantees no em or en dash reaches a note — whether it came
+    from a template below, from the model, or from the house-answer file. verbatim()
+    is deliberately exempt: it carries the agent's own brief and the exact reply text,
+    neither of which is ours to rewrite.
+    """
+    return f"<p>{html.escape(triage.undash(text))}</p>"
 
 
 def bold_para(text):
-    """A paragraph that leads a section — a speaker line in a transcript."""
-    return f"<p><strong>{html.escape(text)}</strong></p>"
+    """A paragraph that leads a section, such as a speaker line in a transcript."""
+    return f"<p><strong>{html.escape(triage.undash(text))}</strong></p>"
 
 
 def transcript_blocks(turns, translated):
@@ -320,7 +327,7 @@ def write_to_ticket(session, subdomain, ticket_id, body, public,
     carry.
     """
     # Notes go as html_body so their structure survives; the public reply goes as
-    # plain body, the way reply.py has always sent one — it is prose, not a document.
+    # plain body. A reply is prose, not a document, and Zendesk renders it fine.
     fields = {"comment": {("html_body" if as_html else "body"): body, "public": public}}
     if status:
         fields["status"] = status
@@ -658,11 +665,11 @@ def build_draft_note(result, brief, comment_id, amended=False,
     options = result["options"]
     what = "revised the reply" if amended else "drafted a reply"
     lead = (f"Claude {what}. It will be sent in {result['language']}.") if len(options) == 1 \
-        else (f"Claude {what} — {len(options)} options, in {result['language']}. "
+        else (f"Claude {what}: {len(options)} options, in {result['language']}. "
               f"Pick one with a private note reading claude: reply 2.")
     out = [para(lead)]
     for number, option in enumerate(options, 1):
-        out.append(para(f"Option {number} — {option.get('approach') or 'reply'}"))
+        out.append(para(f"Option {number}: {option.get('approach') or 'reply'}"))
         out += [para(begin_marker(number)), verbatim(option["translated"].strip()),
                 para(end_marker(number))]
         if not result["is_english"] and (option.get("back_translation") or "").strip():
@@ -672,16 +679,16 @@ def build_draft_note(result, brief, comment_id, amended=False,
                  else "Change this revision was asked for:"),
             verbatim(brief.strip())]
     if cell:
-        out.append(para(f"Shaped by what we usually reply to: {title} ({covering}) — "
+        out.append(para(f"Shaped by what we usually reply to: {title} ({covering}), "
                         f"{cell['n']} solved tickets, {cell['consistency']} consistency."))
         if cell.get("examples"):
             out.append(para("Past tickets: " + ", ".join(f"#{i}" for i in cell["examples"])))
         if (cell.get("caveat") or "").strip():
             out.append(para("Careful, from those past replies: " + cell["caveat"].strip()))
-    send = "add a private note — claude: reply" if len(options) == 1 \
-        else "add a private note — claude: reply <the option number>"
+    send = "add a private note reading claude: reply" if len(options) == 1 \
+        else "add a private note reading claude: reply <the option number>"
     out += [para(f"To send it exactly as above, {send}"),
-            para("To change it, add a private note — claude: draft <a new brief>"),
+            para("To change it, add a private note reading claude: draft <a new brief>"),
             para(f"{done_marker(comment_id)} {draft_marker(comment_id)}")]
     return "".join(out)
 
@@ -694,7 +701,7 @@ def find_draft(comments, api_user):
     so a human pasting the delimiters into a note of their own cannot smuggle text
     past the review.
 
-    reply.fetch_comments returns newest first, so this walks the list as it comes.
+    triage.fetch_comments returns newest first, so this walks the list as it comes.
     """
     for comment in comments:
         if comment.get("public") or comment.get("author_id") != api_user:
@@ -720,7 +727,7 @@ def choose_option(options, asked):
             return options[numbers[0]], None
         return None, ("This draft offers " + str(len(numbers)) + " options ("
                       + ", ".join(str(n) for n in numbers) + "). Say which one, "
-                      "like — claude: reply " + str(numbers[0]))
+                      "like this: claude: reply " + str(numbers[0]))
     if asked not in options:
         return None, (f"There is no option {asked} on this draft. It offers "
                       + ", ".join(str(n) for n in numbers) + ".")
@@ -769,7 +776,7 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
     if not brief:
         say(session, subdomain, ticket_id, comment_id,
             "The brief was empty, so there was nothing to write. Add a private note "
-            "like — claude: draft <what the answer is>", dry_run)
+            "reading claude: draft <what the answer is>", dry_run)
         return
     shown = find_draft(comments, api_user)
     previous = "\n\n".join(f"Option {n}:\n{shown[n]}" for n in sorted(shown)) or None
@@ -889,7 +896,7 @@ def run_explain(session, subdomain, model, ticket, comments, command, dry_run):
     if cell.get("examples"):
         out.append(para("Verify against " + ", ".join(f"#{i}" for i in cell["examples"])))
     out.append(para("Nothing was written to the customer. To answer, add a private "
-                    "note — claude: draft <what the answer is>"))
+                    "note reading claude: draft <what the answer is>"))
     out.append(para(done_marker(command["id"])))
     write_to_ticket(session, subdomain, ticket_id, "".join(out), public=False,
                     as_html=True, add_tags=new_tags, drop_tags=[TAG_QUEUED, TAG_ERROR])
@@ -907,7 +914,7 @@ def run_reply(session, subdomain, ticket, comments, command, api_user, dry_run):
     options = find_draft(comments, api_user)
     if not options:
         say(session, subdomain, ticket_id, comment_id,
-            "There is no draft on this ticket to send. Add a private note like — "
+            "There is no draft on this ticket to send. Add a private note reading "
             "claude: draft <what the answer is>", dry_run)
         return
     sending, complaint = choose_option(options, asked_option(command["brief"]))
@@ -1028,7 +1035,7 @@ def say(session, subdomain, ticket_id, comment_id, text, dry_run, error=True):
 def latest_command(comments, api_user, session, subdomain):
     """The newest private note that is a command from someone allowed to give one.
 
-    reply.fetch_comments returns newest first, so the first match is the newest
+    triage.fetch_comments returns newest first, so the first match is the newest
     command: older ones have already been handled and carry their own done markers.
 
     An unauthorised author stops the search rather than falling through to an older
@@ -1063,13 +1070,13 @@ def main():
                                      triage.get_env("ZENDESK_API_TOKEN"))
     api_user = api_user_id(session, subdomain)
 
-    ticket = reply.fetch_ticket(session, subdomain, args.ticket)
+    ticket = triage.fetch_ticket(session, subdomain, args.ticket)
     if ticket.get("status") == "closed":
         # Closed is irreversible and takes no comments at all, so there is nowhere to
         # even report the refusal. Say it to the journal and stop.
         print(f"#{args.ticket}: closed, so Zendesk takes no comments. Nothing done.")
         return
-    comments = reply.fetch_comments(session, subdomain, args.ticket)
+    comments = triage.fetch_comments(session, subdomain, args.ticket)
 
     command = latest_command(comments, api_user, session, subdomain)
     if not command:

@@ -533,6 +533,34 @@ def fetch_tickets(session, subdomain, query, max_tickets):
     return tickets, total_matched
 
 
+def fetch_ticket(session, subdomain, ticket_id):
+    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}.json"
+    resp = request_with_retry(session, "GET", url)
+    if resp.status_code == 404:
+        sys.exit(f"Ticket #{ticket_id} does not exist.")
+    if resp.status_code >= 400:
+        # A read error's body describes the error, not the ticket, so it is safe to
+        # print here. The write path deliberately prints no body at all.
+        sys.exit(f"Could not read ticket #{ticket_id} ({resp.status_code}): "
+                 f"{resp.text[:200]}")
+    return (resp.json() or {}).get("ticket") or {}
+
+
+def fetch_comments(session, subdomain, ticket_id):
+    """The ticket's comments, newest first.
+
+    Newest first because the marker that stops a re-run from writing twice will be on
+    the most recent comment, and one page of a busy ticket would otherwise be all
+    opening back-and-forth.
+    """
+    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}/comments.json"
+    resp = request_with_retry(
+        session, "GET", url, params={"per_page": 100, "sort_order": "desc"})
+    if resp.status_code >= 400:
+        sys.exit(f"Could not read the comments on #{ticket_id} ({resp.status_code}).")
+    return (resp.json() or {}).get("comments") or []
+
+
 def fetch_total_unsolved(session, subdomain, query=BACKLOG_QUERY):
     """Count an unsolved backlog. Best effort: returns None on failure.
 
@@ -726,9 +754,8 @@ ANY_LONG_DASH = re.compile(r"[—–]")
 def undash(text):
     """Replace every em and en dash: punctuation with a comma, the rest with a hyphen.
 
-    Never applied to text a human typed. reply.py sends the agent's own English
-    verbatim, and rewriting someone's punctuation for them would be wrong; this is
-    only for text a model wrote.
+    Only for text a model wrote. Rewriting punctuation somebody typed themselves
+    would be wrong.
     """
     return ANY_LONG_DASH.sub("-", PUNCTUATING_DASH.sub(", ", text or ""))
 
@@ -972,7 +999,7 @@ ENGLISH_TIMEOUT_SECONDS = 180
 TRANSCRIPT_INPUT_CHARS = 8000
 TRANSCRIPT_CHARS = 12000
 # Private notes are left out. They are internal annotation rather than conversation,
-# they are already English — reply.py's own attribution notes among them — and
+# they are already English — note_reply.py's own attribution notes among them — and
 # translating its `[discord:…]` markers back would put bookkeeping in front of an
 # agent as if the customer had said it.
 CUSTOMER_TURN = "Customer"
@@ -1321,7 +1348,7 @@ def analyze_in_chunks(analyzer, compact_tickets, batch_size):
 def claude_cli_json(model, effort, system_prompt, schema, prompt, timeout, label):
     """Run one schema-enforced Claude Code request. Returns the parsed payload.
 
-    Shared by the digest's classification and reply.py's translation: same flags,
+    Shared by the digest's classification and note_reply.py's composing: same flags,
     same error semantics, one place to keep them right.
 
     `--json-schema` enforces the schema the way the API's structured outputs did.
@@ -1467,35 +1494,29 @@ COLLAPSED_LINKS_CHARS = 900
 
 # ---- Components V2 ---------------------------------------------------------
 #
-# The digest is posted by the app rather than through an incoming webhook, because a
-# plain webhook cannot carry interactive components at all, and each ticket needs its
-# own Comment button. Embeds cannot do this either: components attach to the message,
-# not to an embed, so ten embeds would sit above ten anonymous buttons. A Section
-# owns its accessory, which is what makes "this button, that ticket" unambiguous.
+# The digest is a Container of Text Displays: one block per ticket, so a reader skims
+# lines rather than a wall, and each message records which ticket ids it accounts for.
+#
+# It is posted by the app rather than through an incoming webhook. That was originally
+# because each card carried a Comment button and a plain webhook cannot send
+# interactive components; the buttons are gone now — replies are written on the ticket
+# itself, see note_reply.py — and the transport is simply left as it is.
 #
 # https://docs.discord.com/developers/components/reference
 COMPONENTS_V2_FLAG = 1 << 15
 CONTAINER = 17
-SECTION = 9
 TEXT_DISPLAY = 10
 SEPARATOR = 14
-BUTTON = 2
-BUTTON_SECONDARY = 2
 
-# Discord allows 40 components in one message. A ticket costs three — its Section,
-# the Text Display inside it, and the button hanging off it — and the header block
-# costs two more, so the ceiling is twelve. Ten leaves room for the accounting lines
-# the header grows on a busy day.
-MAX_SECTIONS_PER_MESSAGE = 10
-COMMENT_BUTTON_LABEL = "Comment"
-# Discord's ceiling on all the text in one Components V2 message.
+# Discord allows 40 components in one message, and a ticket now costs one Text
+# Display, so that ceiling no longer binds — the character budget below does. Ten is
+# kept because it is a readable message, not because it is the limit.
+MAX_ENTRIES_PER_MESSAGE = 10
+# Discord's ceiling on all the text in one Components V2 message, and the constraint
+# that actually binds. Ten clipped ticket lines plus a header come to roughly 3,500,
+# so this is a guard rather than a routine constraint.
 MAX_MESSAGE_TEXT_CHARS = 4000
-# What the ticket lines and the header may spend of it. The accessory labels are text
-# in the message as much as the lines are, so they come off the budget rather than
-# being left to a margin nobody wrote down. Ten sections of clipped ticket text come
-# to roughly 3,500, so this is a guard rather than a routine constraint.
-MAX_COMPONENT_CHARS = (MAX_MESSAGE_TEXT_CHARS
-                       - MAX_SECTIONS_PER_MESSAGE * len(COMMENT_BUTTON_LABEL))
+MAX_COMPONENT_CHARS = MAX_MESSAGE_TEXT_CHARS
 
 
 def ticket_url(subdomain, ticket_id):
@@ -1551,26 +1572,6 @@ def build_ticket_line(finding, subdomain, is_update=False):
     if reported:
         parts.append(f"Reported: `{reported}`")
     return " | ".join(parts)
-
-
-def build_ticket_section(text, ticket_id):
-    """One ticket as a card carrying its own Comment button.
-
-    A Section owns its accessory, and that ownership is the whole point: components
-    attach to a message rather than to an embed, so ten embeds would sit above ten
-    buttons the reader has to match back to tickets by eye.
-    """
-    return {
-        "type": SECTION,
-        "components": [{"type": TEXT_DISPLAY, "content": text}],
-        "accessory": {
-            "type": BUTTON,
-            "style": BUTTON_SECONDARY,
-            "label": COMMENT_BUTTON_LABEL,
-            # Parsed by relay.py, which answers it with the compose dialog.
-            "custom_id": f"comment:{ticket_id}",
-        },
-    }
 
 
 def build_collapsed_line(collapsed, subdomain):
@@ -1665,7 +1666,7 @@ def build_header(findings, highlights, stats=None):
     return "\n".join(lines)
 
 
-def chunk_entries(entries, max_items=MAX_SECTIONS_PER_MESSAGE,
+def chunk_entries(entries, max_items=MAX_ENTRIES_PER_MESSAGE,
                   max_chars=MAX_COMPONENT_CHARS, first_used=0):
     """Group (line, ticket_ids) pairs into messages within Discord's budgets.
 
@@ -1747,10 +1748,8 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
         for f in shown
     ]
     # Last, under the individual tickets: lowest position for the lowest priority.
-    collapsed_entry = None
     if collapsed:
-        collapsed_entry = (build_collapsed_line(collapsed, subdomain), collapsed_ids)
-        entries.append(collapsed_entry)
+        entries.append((build_collapsed_line(collapsed, subdomain), collapsed_ids))
 
     messages, coverage = [], []
     # A quiet day still owes the channel the header — chunk_entries has nothing to
@@ -1768,20 +1767,8 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
             # The header accounts for every classified ticket except the highlights
             # that didn't fit; those are covered by no message and stay eligible.
             covered |= header_ids
-        for entry in chunk:
-            text, ids = entry
-            # The collapsed line stands for every abuse report at once, so there is no
-            # single ticket to comment on — and a group nobody can act on is the last
-            # thing that should offer a reply button. Plain text, no accessory.
-            #
-            # Asked by identity rather than by comparing id sets: matching on the ids
-            # happened to work only because a collapsed ticket never also appears as
-            # its own line, which is a fact about build_messages and not about what
-            # this branch is trying to decide.
-            if entry is collapsed_entry:
-                blocks.append({"type": TEXT_DISPLAY, "content": text})
-            else:
-                blocks.append(build_ticket_section(text, next(iter(ids))))
+        for text, ids in chunk:
+            blocks.append({"type": TEXT_DISPLAY, "content": text})
             covered |= ids
         messages.append({
             "flags": COMPONENTS_V2_FLAG,

@@ -92,36 +92,10 @@ def digest_text(messages):
 def all_text(message):
     """Every character Discord counts towards a Components V2 message's ceiling.
 
-    The button labels as well as the Text Displays: an accessory's label is text in
-    the message the same way a ticket line is.
+    Text Displays are all there is now: the digest carries no accessories, so there
+    are no button labels to add.
     """
-    total = sum(len(t) for t in text_displays(message["components"]))
-
-    def labels(node):
-        if isinstance(node, list):
-            return sum(labels(item) for item in node)
-        if not isinstance(node, dict):
-            return 0
-        own = len(node.get("label") or "") if node.get("type") == triage.BUTTON else 0
-        return own + labels(node.get("components")) + labels(node.get("accessory"))
-
-    return total + labels(message["components"])
-
-
-def buttons(message):
-    """Every button custom_id in a message, in order."""
-    found = []
-    def walk(node):
-        if isinstance(node, list):
-            for item in node:
-                walk(item)
-        elif isinstance(node, dict):
-            if node.get("type") == triage.BUTTON:
-                found.append(node["custom_id"])
-            walk(node.get("components"))
-            walk(node.get("accessory"))
-    walk(message["components"])
-    return found
+    return sum(len(t) for t in text_displays(message["components"]))
 
 
 class FakeResponse:
@@ -704,19 +678,24 @@ class TestBuildMessages(unittest.TestCase):
             self.assertNotIn("embeds", message)
             self.assertEqual(message["components"][0]["type"], triage.CONTAINER)
 
-    def test_every_ticket_card_carries_its_own_comment_button(self):
-        """The button is a Section accessory rather than a loose row, so which
-        ticket it belongs to is unambiguous."""
-        findings = [finding(1), finding(2)]
-        message, = build_messages(findings, "acme")
-        self.assertEqual(buttons(message), ["comment:1", "comment:2"])
+    def test_each_ticket_gets_its_own_block(self):
+        """One Text Display per ticket, so a reader skims lines rather than a wall."""
+        message, = build_messages([finding(1), finding(2)], "acme")
+        lines = [t for t in text_displays(message["components"]) if "#" in t]
+        self.assertEqual(len(lines), 2)
+
+    def test_the_digest_carries_no_interactive_components(self):
+        """Replies are written on the ticket now, see note_reply.py. A button here
+        would open a compose flow that no longer exists."""
+        messages, _ = triage.build_messages([finding(1), finding(2)], "acme")
+        self.assertNotIn("accessory", json.dumps(messages))
+        self.assertNotIn("custom_id", json.dumps(messages))
 
     def test_a_quiet_day_still_posts_the_header(self):
         """Nothing worth looking into is a result, not a reason to say nothing."""
         messages = build_messages([finding(1, worth_looking_into=False)], "acme")
         self.assertEqual(len(messages), 1)
         self.assertIn("Zendesk triage", digest_text(messages))
-        self.assertEqual(buttons(messages[0]), [])
 
 
 class TestCollapsedAbuseReports(unittest.TestCase):
@@ -1151,7 +1130,7 @@ class TestMessageCharLimit(unittest.TestCase):
                             summary="s" * triage.SUMMARY_CHARS,
                             likely_root_cause="r" * triage.ROOT_CAUSE_CHARS,
                             cluster=f"cluster-{i % 3}")
-                    for i in range(triage.MAX_SECTIONS_PER_MESSAGE)]
+                    for i in range(triage.MAX_ENTRIES_PER_MESSAGE)]
         messages = build_messages(findings, "acme", stats)
         for message in messages:
             rendered = text_displays(message["components"])
@@ -1180,10 +1159,9 @@ class TestMessageCharLimit(unittest.TestCase):
         findings = [finding(i, summary="s", likely_root_cause="") for i in range(5)]
         self.assertEqual(len(build_messages(findings, "acme")), 1)
 
-    def test_the_button_labels_are_counted_too(self):
-        """Every Comment label is text in the message as much as the lines are. The
-        budget used to be the ceiling less a 100-character margin nobody wrote down,
-        which ten labels came within thirty characters of spending."""
+    def test_a_full_message_stays_inside_the_character_ceiling(self):
+        """The character budget is the limit that binds now that a ticket costs one
+        component rather than three."""
         findings = [self.fat(i) for i in range(triage.MAX_HIGHLIGHTS)]
         for message in build_messages(findings, "acme"):
             self.assertLessEqual(all_text(message), triage.MAX_MESSAGE_TEXT_CHARS)
@@ -1196,13 +1174,16 @@ class TestMessageCharLimit(unittest.TestCase):
         messages = build_messages(findings, "acme")
         self.assertGreater(len(messages), 1)
         for message in messages:
-            self.assertLessEqual(len(buttons(message)),
-                                 triage.MAX_SECTIONS_PER_MESSAGE)
+            # header included, so one more than the entry cap
+            self.assertLessEqual(len(text_displays(message["components"])),
+                                 triage.MAX_ENTRIES_PER_MESSAGE + 1)
 
     def test_chunking_splits_on_whichever_limit_binds_first(self):
-        entries = [("x" * 2000, {1}), ("y" * 2000, {2})]
+        # Together these overrun MAX_COMPONENT_CHARS, so characters bind before the
+        # entry count does.
+        entries = [("x" * 2100, {1}), ("y" * 2100, {2})]
         self.assertEqual(len(triage.chunk_entries(entries)), 2)   # characters
-        lean = [("x", {i}) for i in range(triage.MAX_SECTIONS_PER_MESSAGE + 1)]
+        lean = [("x", {i}) for i in range(triage.MAX_ENTRIES_PER_MESSAGE + 1)]
         self.assertEqual(len(triage.chunk_entries(lean)), 2)      # card count
 
     def test_an_oversized_entry_still_gets_a_message(self):
@@ -1254,21 +1235,17 @@ class TestCoverage(unittest.TestCase):
         flat = [tid for ids in coverage for tid in ids]
         self.assertEqual(len(flat), len(set(flat)))
 
-    def test_the_collapsed_line_carries_no_comment_button(self):
-        """It stands for every abuse report at once, so there is no single ticket a
-        reply could go to — and the merge that brought the collapsed line onto the
-        Components V2 digest wrapped it in a Section like any ticket, giving it a
-        button whose custom_id was an arbitrary member of the set."""
+    def test_the_collapsed_line_is_rendered_like_any_other(self):
+        """It stands for every abuse report at once. It used to need a special case
+        so it would not get a Comment button pointing at an arbitrary member of the
+        set; with no buttons anywhere, that special case is gone."""
         findings = [finding(i, category="abuse_report") for i in range(10, 18)]
         messages, _ = triage.build_messages(findings, "acme")
         collapsed = [m for m in messages
                      if any("abuse report" in text
                             for text in text_displays(m["components"]))]
         self.assertTrue(collapsed)
-        for message in collapsed:
-            for custom_id in buttons(message):
-                self.assertNotIn(custom_id.removeprefix("comment:"),
-                                 {str(i) for i in range(10, 18)})
+        self.assertNotIn("accessory", json.dumps(collapsed))
 
     def test_the_collapsed_line_covers_the_abuse_reports_it_accounts_for(self):
         """Covered by the message carrying that line — not by the header, which no
@@ -2087,7 +2064,7 @@ class TestEnglishTranscript(unittest.TestCase):
         self.assertEqual([t["index"] for t in turns], [0, 1, 2])
 
     def test_private_notes_are_left_out(self):
-        """Internal annotation, not conversation — and reply.py's own attribution
+        """Internal annotation, not conversation — and note_reply.py's own attribution
         notes are among them, so their `[discord:…]` markers would reach the agent as
         if the customer had written them."""
         turns = self.turns([

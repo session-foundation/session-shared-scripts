@@ -129,7 +129,9 @@ Likely duplicates: **push-notifications-not-delivered** ×5 (#27637, #27610, #27
 
 The header accounts for the batch in full, so nothing is dropped silently. The backlog line is scoped exactly like the analysis — `status<pending`, **excluding app-store reviews** — so the number and the tickets under it mean the same thing. That matters because 92% of unsolved tickets are AppFollow reviews, so the unqualified number reads as roughly 13× the queue that actually needs a human (5,680 against 428). Both counts come from Zendesk's count-only search endpoint, one request each and both best-effort — if the review-excluded count fails, the line falls back to the plain total rather than disappearing. The category tally counts abuse reports like anything else, so the numbers still sum to what was analyzed; the collapsed line at the bottom is where they are listed, and its links stop at a character budget (the remainder counted as `+N more`) so a heavy day cannot push a message past 2,000.
 
-**One card per ticket, each with its own Comment button.** The lines still carry their own structure — the digest is read by skimming — but each now sits in a Components V2 Section whose accessory is a button, because that is the only Discord primitive where a button belongs to one item. Embeds cannot do it: components attach to the message, so ten embeds would sit above ten anonymous buttons. Two limits bound a message and whichever binds first splits it — 40 components, of which a card costs three (`MAX_SECTIONS_PER_MESSAGE` = 10), and `MAX_COMPONENT_CHARS` across all its text. Lines are still clipped (`SUMMARY_CHARS`, `ROOT_CAUSE_CHARS`), and each message records which ticket ids it accounts for, which is what makes a partial post failure recoverable.
+**One block per ticket, and the digest is read-only.** Each line is its own Components V2 Text Display inside one Container, so the digest is skimmed rather than read as a wall. Nothing in it is interactive: replies are written on the ticket itself (see [Zendesk Reply from a Private Note](#zendesk-reply-from-a-private-note)), and a button here would open a compose flow that no longer exists.
+
+Two limits bound a message and whichever binds first splits it — 40 components, which no longer binds now that a ticket costs one, and `MAX_MESSAGE_TEXT_CHARS` across all its text, which does. `MAX_ENTRIES_PER_MESSAGE` stays at 10 because that is a readable message, not because it is the ceiling. Lines are clipped (`SUMMARY_CHARS`, `ROOT_CAUSE_CHARS`), and each message records which ticket ids it accounts for, which is what makes a partial post failure recoverable.
 
 **This is why the digest posts as the app rather than through a webhook.** A plain incoming webhook silently drops interactive components, so the digest needs `DISCORD_BOT_TOKEN` and `ZENDESK_DISCORD_CHANNEL_ID` where it used to need `ZENDESK_DISCORD_WEBHOOK_URL`. That webhook still exists — the positive-review tally and the failure alerts use it, and neither needs a button.
 
@@ -159,7 +161,7 @@ Two caveats worth knowing:
 | `ZENDESK_SUBDOMAIN`   | Zendesk subdomain (`mycompany` → `mycompany.zendesk.com`) |
 | `ZENDESK_EMAIL`       | Agent email used for Zendesk API-token auth             |
 | `ZENDESK_API_TOKEN`   | Zendesk API token                                       |
-| `DISCORD_BOT_TOKEN` | Bot token for the app that owns the digest's Comment buttons. An incoming webhook cannot send interactive components, so the digest posts as the app |
+| `DISCORD_BOT_TOKEN` | Bot token for the app the digest posts as. It carried interactive components when the cards had buttons; the buttons are gone and the transport is simply left as it is |
 | `ZENDESK_DISCORD_CHANNEL_ID` | Channel the digest posts into. The bot needs Send Messages there |
 
 ### Claude Authentication
@@ -340,167 +342,14 @@ No timer of its own: it is the first `ExecStart` of [`zendesk-digest.service`](d
 
 Its `ExecStart` is wrapped in a `||` that reports the failure to the triage channel and then lets the digest proceed — resolving is an optimisation for the digest, not a precondition. A bare `-` prefix would also unblock the digest, but it would mark the unit successful, so `OnFailure=` would never fire and a resolver broken for weeks would look like one with nothing to do.
 
-## Zendesk Reply from Discord
-
-Every ticket in the digest carries a **Comment** button. Pressing it opens a dialog
-showing the ticket's own words and its attachments, you write the reply in English,
-Claude translates it into the language the requester writes in, and it lands on the
-ticket as a public comment.
-
-> ⚠️ **This writes public comments, which email the requester.** Nothing it does is
-> reversible. Read the warning at the top of [reply.py](zendesk_triage/reply.py), and
-> note that both allowlists empty refuses everybody — deliberately.
-
-Nothing in the channel triggers it. Discord only sends the app interactions somebody
-deliberately pressed, so a conversation about a ticket — even one quoting a digest
-line verbatim — cannot start a reply. The dialog and the preview are both ephemeral,
-so drafting stays private to whoever pressed the button.
-
-### Where it runs
-
-On one machine, not in CI. [relay.py](zendesk_triage/relay.py) is the HTTPS endpoint
-Discord posts interactions to, and it hands anything that writes to Zendesk off to
-[reply.py](zendesk_triage/reply.py). See [deploy/README.md](deploy/README.md) for the
-systemd units, the nginx server block and the install order.
-
-`reply.py` is a subprocess rather than an import, and that is deliberate: it is a CLI
-with twenty `sys.exit()` calls, and `SystemExit` derives from `BaseException`, so
-importing it would mean one bad Zendesk response could take the endpoint down. A
-subprocess turns each of those into an exit code and keeps its own test suite testing
-exactly what production runs.
-
-### What the dialog shows
-
-Two Zendesk calls, run concurrently so they cost about what one costs — the budget is
-the three seconds a modal cannot be deferred past:
-
-- a link to open the ticket in Zendesk
-- what the requester actually wrote, clipped to `BODY_CHARS`
-- attachments as links — filename and size
-
-The second call is for `requester_id`, which is a field on the ticket and nothing on
-its comments. Taking the requester to be whoever wrote the first comment is wrong on
-every ticket somebody else opened — an agent taking a phone call, the review importer
-— and `reply.py` reads the field, so the dialog would show one person's words while
-the translation was chosen from another's. Reading the ticket also means a **closed**
-one is refused before the box opens rather than after a whole reply has been typed
-into it.
-
-Attachments are **linked, never copied**. Zendesk's `content_url` is a capability URL
-that resolves without authentication, so there is nothing to download, nothing stored
-on the host, and nothing uploaded to Discord's CDN — which copying files there would
-have done, and which would have been worse egress than the local storage it was meant
-to avoid. It is a bearer URL, which is why it only ever appears in an ephemeral
-dialog and never in a channel message or a log.
-
-If those calls are slow or fail, the dialog still opens carrying the digest card's own
-summary line, which the interaction hands over for free. Degrading is never failing
-to open. Either half can fail on its own: without the ticket, the comments are shown
-under a heading that does not claim whose words they are, and an unreachable Zendesk
-is never mistaken for a closed ticket.
-
-### Reading a ticket you cannot read
-
-Set `ZENDESK_ENGLISH_FIELD_ID` to the id of a multi-line text ticket field and the
-dialog shows the conversation in English instead of the language it happened in:
-
-```
-2026-08-28 00:22 UTC Customer:
-Since the last update I no longer receive notifications on Session Desktop…
-
-2026-08-28 01:31 UTC Support:
-Have you checked the notification settings under…
-```
-
-The digest is what fills that field: before it posts, it renders every non-English
-ticket it is about to show into English and writes it to the ticket. The ordering is
-the design rather than a convenience — the Comment button exists only on a digest
-card, so a ticket that can reach the dialog has necessarily been through that step,
-and the dialog needs no Claude call of its own. It has no room for one: a modal
-cannot be deferred, so it answers within the three seconds Discord allows, and a
-translation takes several.
-
-**Both sides, not just the customer's.** A customer's second message is usually an
-answer to a reply, and dropping the reply leaves "still broken" sitting under the
-original complaint with nothing visible for it to be answering. A turn already in
-English is passed through word for word rather than paraphrased.
-
-Private notes are left out. They are internal annotation rather than conversation,
-they are already English, and reply.py's own attribution notes are among them — their
-`[discord:…]` markers would reach the agent as if the customer had written them.
-
-The timestamps and the speaker labels are assembled in Python, and only the
-translating is asked of the model. Asked to format the transcript itself a model can
-drop a turn, merge two, or date one it was never given, and each of those is
-invisible in the output. A turn it fails to return keeps its original text: an
-untranslated turn is a degraded transcript, a missing one is a conversation that
-reads as if it never happened.
-
-The field is overwritten on each run, so a ticket carries one current English version
-rather than a chain of partial ones. Tickets the classifier reports as English are
-left alone, and a ticket with no `requester_id` is skipped rather than guessed at —
-there would be no way to label a turn, and a transcript that guesses would present an
-agent's own replies as the customer's words.
-
-Unset, none of this happens and the dialog shows the original, which is what it did
-before the field existed.
-
-### What lands on the ticket
-
-- a **public comment** carrying the reply, and `status` → `pending`
-- a **private note** naming the Discord author, plus the English original when it
-  differs from what the customer received
-
-Both are authored by `ZENDESK_EMAIL` — an API token authenticates as exactly one
-agent, so who sent the reply is recorded in the note rather than in the byline. On an
-English ticket the original *is* the public comment, so the note there is the
-attribution line alone rather than the same text twice. What goes out on that path is
-the agent's own words and never the model's echo of them.
-
-### The confirmation step
-
-An English reply has no translation to review, so it goes straight out. Anything else
-gets a preview:
-
-> Reply to [#27603](#) in **German**. Check the back-translation before sending — this
-> emails the requester and cannot be taken back.
->
-> **Will be sent, in German** — Wir haben das in Version 1.2.3 behoben.
-> **…which says, back in English** — We have fixed that in version 1.2.3.
-> **You wrote** — We fixed this in 1.2.3.
->
-> `[ Send ]` `[ Cancel ]`
-
-The middle block is the point: it is how somebody who does not speak the language can
-tell whether the translation drifted. It is asked for as a literal rendering rather
-than a polished one — an error the translation introduced has to survive into the
-back-translation or the check is worthless.
-
-Send answers with the buttons already removed, in the same response that acknowledges
-the click, so a second click has nothing left to press. A replay of the same
-interaction is caught separately, by a `[discord:<interaction id>]` marker in the
-private note.
-
-Replies are bounded at 1,200 characters: the reply, its translation and the
-back-translation all have to fit Discord's 6,000-character budget across one
-message's embeds, and a draft that would overshoot is refused rather than clipped — a
-truncated embed would mean sending a customer less than what was reviewed.
-
-### Tests
-
-```bash
-pip install -r zendesk_triage/requirements-dev.txt
-python -m unittest discover -s zendesk_triage -v
-```
-
-Offline, like the others: Zendesk runs against a stub session, and Claude, Discord
-and `reply.py` are all patched out. The guards are what is covered — an unsigned or
-tampered request refused, an unlisted person refused, a dialog that still opens when
-Zendesk is unreachable, a draft that survives the round trip byte for byte, an
-English reply that reaches the customer as typed, a re-run that cannot write twice,
-and an attachment URL that never reaches a channel-visible message.
-
 ## Zendesk Reply from a Private Note
+
+> Replying used to be possible from the digest, behind a **Comment** button on each
+> card that opened a compose dialog in Discord. That is gone: the digest is read-only
+> now and the ticket is the only place a reply is written. Removing it took with it
+> `reply.py`, the `/discord/interactions` route, the Ed25519 signature check, and the
+> `DISCORD_PUBLIC_KEY` / `ALLOWED_USER_IDS` / `ALLOWED_ROLE_IDS` / `DISCORD_GUILD_ID`
+> settings — one reply path instead of two, with one set of semantics.
 
 The Discord path answers one ticket from the digest. This one answers a ticket from
 inside Zendesk, where the queue is actually worked: an agent writes a private note
@@ -536,9 +385,9 @@ there are several.
 
 ### Why a draft is always reviewed
 
-[reply.py](zendesk_triage/reply.py) sends an English ticket immediately, because the
-agent typed the exact words and there is nothing to check. Here Claude *composes* the
-reply from a brief, so nobody has read that wording yet — every draft is reviewed,
+The reply flow this replaced sent an English ticket immediately, because the agent had
+typed the exact words and there was nothing to check. Here Claude *composes* the reply
+from a brief, so nobody has read that wording yet — every draft is reviewed,
 English included. `reply` never re-composes: what was reviewed is what goes out, or
 the review means nothing. To change a draft, write a new brief.
 

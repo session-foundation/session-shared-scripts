@@ -1,13 +1,13 @@
 # Self-hosted deployment
 
-The Zendesk triage digest and the reply-from-Discord flow, both running on one
+The Zendesk triage digest and the `claude:` note webhook, both running on one
 machine.
 
 Two things run here:
 
 | Unit | What it is |
 | --- | --- |
-| `zendesk-relay.service` | Always on. The HTTPS endpoint Discord posts interactions to. |
+| `zendesk-relay.service` | Always on. The HTTPS endpoint Zendesk posts note webhooks to. |
 | `zendesk-digest.timer` → `.service` | Weekday mornings. Resolves positive reviews, then posts the digest. |
 
 `zendesk-alert@.service` is pulled in by `OnFailure=` on both, and reports the failed
@@ -131,21 +131,12 @@ ZENDESK_SUBDOMAIN=
 ZENDESK_EMAIL=
 ZENDESK_API_TOKEN=
 
-# The digest posts as the app, because its Comment buttons need an application.
+# The digest posts as the app rather than through the webhook below.
 DISCORD_BOT_TOKEN=
 # Where the digest lands. The real triage channel, not a test server.
 ZENDESK_DISCORD_CHANNEL_ID=
 # The review tally and the failure alerts. Same channel, addressed as a webhook.
 ZENDESK_DISCORD_WEBHOOK_URL=
-
-# Verifies Discord's request signatures.
-DISCORD_PUBLIC_KEY=
-# Interactions from any other server are refused — so this must name the same
-# server as the channel and webhook above.
-DISCORD_GUILD_ID=
-# Comma-separated. Either list grants; both empty refuses everybody.
-ALLOWED_USER_IDS=
-ALLOWED_ROLE_IDS=
 
 # Verifies Zendesk's webhook signatures, for the `claude:` private-note route.
 # Empty refuses every note webhook: a URL that writes public comments must not
@@ -156,16 +147,14 @@ ZENDESK_WEBHOOK_SECRET=
 # private note. The agent/admin role check applies either way.
 #ZENDESK_NOTE_AUTHORS=
 
-# Optional, and read by both units. The numeric id of a multi-line text ticket
-# field in Zendesk; the digest renders every non-English ticket it is about to post
-# into English there — both sides of the conversation, timestamped — and the compose
-# dialog shows that instead of the original. Until this is set, neither half does
-# anything and the dialog shows the ticket's own comments. Settings -> Ticket Fields
-# -> Multi-line text, not customer-visible, then read the id off the field's URL.
+# Optional. The numeric id of a multi-line text ticket field in Zendesk; the digest
+# renders every non-English ticket it is about to post into English there — both
+# sides of the conversation, timestamped — so an agent opening the ticket can read
+# it. Until this is set the step does nothing. Settings -> Ticket Fields ->
+# Multi-line text, not customer-visible, then read the id off the field's URL.
 #ZENDESK_ENGLISH_FIELD_ID=
 
-# Uncomment to run the whole path and write nothing to Zendesk. Covers both the
-# Discord reply flow and the `claude:` note flow.
+# Uncomment to run the whole `claude:` note path and write nothing to Zendesk.
 #RELAY_DRY_RUN=1
 ```
 
@@ -175,19 +164,22 @@ Check what systemd actually loaded, rather than what you think you wrote:
 systemctl show zendesk-digest.service -p Environment | tr ' ' '\n' | grep -vi token
 ```
 
-Set `RELAY_DRY_RUN=1` for the first deployment. Everything works — dialog,
-translation, preview, Send — and the two Zendesk writes are skipped.
+Set `RELAY_DRY_RUN=1` for the first deployment. The whole `claude:` note path runs —
+webhook, command parsing, composing, translation — and the Zendesk writes are
+skipped.
 
 ## Verifying, in order
 
-**1. Locally, before Discord knows the address.** An unsigned request must be refused:
+**1. Locally, before Zendesk knows the address.** An unsigned request must be refused:
 
 ```bash
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
-  127.0.0.1:8080/discord/interactions \
-  -H 'Content-Type: application/json' -d '{"type":1}'      # expect 401
-curl -sS 127.0.0.1:8080/healthz                            # expect {"ok":true}
+  127.0.0.1:8080/zendesk/notes \
+  -H 'Content-Type: application/json' -d '{"ticket_id":"1"}'   # expect 401
+curl -sS 127.0.0.1:8080/healthz                                # expect {"ok":true}
 ```
+
+401 rather than 404 is the thing to check: 404 means the route is not deployed.
 
 **1b. The Claude CLI, as the service user.** Both Claude calls shell out to it, and
 this is the step most likely to be wrong after a fresh install — a login that landed
@@ -224,13 +216,13 @@ if you change `OnCalendar=`, check it with
 `systemd-analyze calendar "Mon..Fri 10:00 Australia/Melbourne"`. There is no
 `Timezone=` key and systemd ignores one silently.
 
-**4. Through Discord.** Point the app's **Interactions Endpoint URL** at
-`https://webhooks.session.codes/discord/interactions`. Discord sends its own signed
-`PING` and refuses the
-URL if verification is wrong, so saving it *is* the smoke test. Then press **Comment**
-on a digest card for a throwaway ticket whose requester is an address you own — the
-card's button is the only way in, so this is also the check that the digest and the
-relay agree on the `comment:` prefix.
+**4. Through Zendesk.** With the webhook and the trigger in place (see the main
+[README](../README.md)), write `claude: english` as a private note on a throwaway
+ticket and watch `journalctl -fu zendesk-relay`. `english` is the read-only verb, so
+nothing can reach a customer if the wiring is wrong.
+
+The one thing only this step can prove is that the relay's HMAC matches Zendesk's. If
+it does not, every note logs a 401 and nothing happens.
 
 **5. The failure path.** `systemctl start zendesk-alert@test.service` should put
 a line in the triage channel.
@@ -257,52 +249,43 @@ systemctl restart zendesk-relay
 Manual on purpose. Automating this would mean giving CI an SSH key to the box, which
 is the coupling self-hosting was meant to remove.
 
-## Pointing it at another Discord server
+## Pointing the digest at another Discord server
 
-The Zendesk half does not move. What does is everything that identifies a Discord
-application, server and channel — and the application is the awkward one: it owns the
-interactions endpoint *and* the bot, so a server you do not administer needs an
-application owned by someone who does. `DISCORD_PUBLIC_KEY` and `DISCORD_BOT_TOKEN`
-change with it. DNS, nginx and the endpoint URL itself stay exactly as they are.
+The Zendesk half does not move — replies are written on the ticket, not from Discord,
+so nothing about the reply flow is involved. What moves is everything that identifies
+the server and channel the digest posts into, plus the bot that posts it.
+`DISCORD_BOT_TOKEN` changes with the application. DNS and nginx stay exactly as they
+are.
 
 What the server's admins have to do:
 
 1. **Create an application** (Developer Portal → New Application) and add a bot to it.
-   You need its **Application ID**, **Public Key**, and **bot token** — the token sent
-   privately, since it can post as the app.
-2. **Set the Interactions Endpoint URL** to
-   `https://webhooks.session.codes/discord/interactions`. Do this *after* the new
-   public key is in `/etc/zendesk/env` and the relay has been restarted: Discord signs
-   its own `PING` and refuses the URL unless the relay verifies it, so saving it is
-   both the last step and the smoke test.
-3. **Invite the bot**:
+   You need its **Application ID** and **bot token** — the token sent privately, since
+   it can post as the app. No Interactions Endpoint URL: the digest is read-only and
+   the app receives nothing.
+2. **Invite the bot**:
    `https://discord.com/oauth2/authorize?client_id=<APP_ID>&scope=bot&permissions=19456`
    — View Channel, Send Messages, Embed Links, and nothing else. No slash commands, no
    message-content intent, no reading the channel. A private target channel also needs
    View Channel and Send Messages granted to the bot's role on the channel itself.
-4. **Create a webhook in that channel** (Channel Settings → Integrations → Webhooks)
+3. **Create a webhook in that channel** (Channel Settings → Integrations → Webhooks)
    and send the URL privately. A webhook is bound to the channel it was created in, so
    the old one cannot reach the new one.
-5. **Name the role** allowed to send replies, unless you allowlist individual users.
 
-Server and channel ids need no admin: enable Developer Mode (User Settings →
-Advanced), then right-click → Copy Server ID / Copy Channel ID. A role id comes from
-typing `\@RoleName` into a message box and not sending it.
+Channel ids need no admin: enable Developer Mode (User Settings → Advanced), then
+right-click → Copy Channel ID.
 
 Then, on the host:
 
 ```bash
-"${EDITOR:-nano}" /etc/zendesk/env   # DISCORD_PUBLIC_KEY, DISCORD_BOT_TOKEN,
-                                     # DISCORD_GUILD_ID, ZENDESK_DISCORD_CHANNEL_ID,
-                                     # ZENDESK_DISCORD_WEBHOOK_URL, ALLOWED_ROLE_IDS,
-                                     # and RELAY_DRY_RUN=1 for the first press
+"${EDITOR:-nano}" /etc/zendesk/env   # DISCORD_BOT_TOKEN, ZENDESK_DISCORD_CHANNEL_ID,
+                                     # ZENDESK_DISCORD_WEBHOOK_URL,
+                                     # ZENDESK_WEBHOOK_SECRET, and RELAY_DRY_RUN=1
+                                     # for the first run
 mv /var/lib/zendesk/seen.json /var/lib/zendesk/seen.json.old
 systemctl restart zendesk-relay
 systemctl start zendesk-digest.service
 ```
-
-`ALLOWED_USER_IDS` survives the move untouched: Discord user ids are global, role ids
-are per-server.
 
 Move `seen.json` aside or the first digest in the new channel says almost nothing —
 dedup state is per ticket, not per channel, so everything already reported to the old
@@ -311,15 +294,16 @@ correct outcome the state file is built around.
 
 ## If this host goes down
 
-Nothing else runs any of this — the scheduled jobs and the interactions endpoint both
-live here only, so recovery means fixing the host rather than failing over.
+Nothing else runs any of this — the scheduled jobs and the note webhook both live here
+only, so recovery means fixing the host rather than failing over.
 
 What that costs, in order of how much it matters:
 
-- **Replies stop.** A Comment button on a digest card gets no answer at all. The
-  worst a half-run leaves is an orphan private note and no reply: `reply.py` posts
-  the note first because it carries the marker, so a re-run of the same interaction
-  refuses rather than emailing the customer twice.
+- **Replies stop.** A `claude:` note gets no answer at all, and the ticket keeps the
+  `claude-queued` tag the trigger added — so `tags:claude-queued` is the list of work
+  the outage swallowed, and nothing is lost silently. A half-run cannot email a
+  customer twice either: every outcome note carries a marker keyed on the commanding
+  comment, and a re-run finds it and stops.
 - **The digest is late, not lost.** `Persistent=yes` on the timer means a host that
   was down at 10:00 runs the digest once when it comes back, and the 72-hour window
   covers the gap.
