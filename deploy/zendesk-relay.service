@@ -1,5 +1,5 @@
 [Unit]
-Description=Zendesk reply relay (Discord interactions endpoint)
+Description=Zendesk reply relay (claude: note webhook endpoint)
 Documentation=https://github.com/session-foundation/session-shared-scripts
 After=network-online.target
 Wants=network-online.target
@@ -15,7 +15,7 @@ WorkingDirectory=/opt/zendesk/zendesk_triage
 EnvironmentFile=/etc/zendesk/env
 # Bound to loopback: nginx terminates TLS and is the only thing that should be able
 # to reach this. Exposing it directly would put an unauthenticated port on the box —
-# the Ed25519 check is the only gate, and it should not be the only barrier too.
+# the HMAC check is the only gate, and it should not be the only barrier too.
 ExecStart=/opt/zendesk/venv/bin/uvicorn relay:app --host 127.0.0.1 --port 8080 \
     --no-access-log --proxy-headers --forwarded-allow-ips 127.0.0.1
 Restart=always
