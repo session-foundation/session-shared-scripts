@@ -743,19 +743,29 @@ DEFAULT_REVIEW_STAR_FLOOR = 3
 
 
 # A long dash is the clearest tell that text was machine-written, and no reply this
-# team has sent uses one. The prompts that write for customers forbid it; this is what
-# makes it true, because a prompt rule is advisory and the text reaches a real person.
+# team has sent uses one. The prompts that write for customers forbid it; this is the
+# failsafe, because a prompt rule is advisory and the text reaches a real person.
 # The spaced form is punctuation and becomes a comma; anything left is joining two
 # things, like a range, and becomes the hyphen a person would have typed.
 PUNCTUATING_DASH = re.compile(r"(?:\s+[—–]\s*|\s*[—–]\s+)")
 ANY_LONG_DASH = re.compile(r"[—–]")
 
 
-def undash(text):
+def undash_english(text):
     """Replace every em and en dash: punctuation with a comma, the rest with a hyphen.
 
-    Only for text a model wrote. Rewriting punctuation somebody typed themselves
-    would be wrong.
+    ENGLISH ONLY, and the name says so because passing anything else corrupts it. In
+    Russian and the other East Slavic languages the long dash carries the present-tense
+    copula that the grammar omits: "Москва — столица России" IS the verb, and the comma
+    this produces leaves a subject with no predicate. Spanish, French, Polish and
+    Chinese give it dialogue and parenthetical duty that a comma does not carry either.
+
+    Only for text a model wrote. Rewriting punctuation somebody typed themselves would
+    be wrong even in English.
+
+    A failsafe, not a style pass: the substitution is blunt enough to turn a legitimate
+    strong break into a comma splice ("I checked the logs — nothing was uploaded"), so
+    the prompt is what should keep dashes out and this is what catches the misses.
     """
     return ANY_LONG_DASH.sub("-", PUNCTUATING_DASH.sub(", ", text or ""))
 

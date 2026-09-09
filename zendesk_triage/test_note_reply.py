@@ -35,6 +35,10 @@ def option(text="Anhänge werden 14 Tage lang gespeichert.", approach="explain a
 
 GERMAN = {"language": "German", "language_code": "de", "is_english": False,
           "options": [option()]}
+ENGLISH = {"language": "English", "language_code": "en", "is_english": True,
+           "options": [option("Attachments are kept for 14 days.")]}
+RUSSIAN = {"language": "Russian", "language_code": "ru", "is_english": False,
+           "options": [option("Вложения хранятся 14 дней.")]}
 GERMAN_THREE = {"language": "German", "language_code": "de", "is_english": False,
                 "options": [option("Erste Antwort", "explain and close"),
                             option("Zweite Antwort", "ask which device was online"),
@@ -208,6 +212,15 @@ class EnglishTranscript(unittest.TestCase):
         self.assertEqual(sum(1 for b in blocks if "<strong>" in b), 1,
                          "one speaker line per turn, not one per paragraph")
         self.assertEqual(len(blocks), 4)  # speaker line + three paragraphs
+
+    def test_the_customers_own_words_are_quoted_not_rewritten(self):
+        """The transcript is a record of what they said. undash_english exists for
+        text a model wrote, and a Russian message loses its verb to it — in the note
+        an agent reads to understand the person."""
+        turns = [{"index": 0, "who": "Customer", "when": "t",
+                  "body": "Session — это мессенджер, и он — сломан."}]
+        joined = "".join(note_reply.transcript_blocks(turns, []))
+        self.assertIn("Session — это мессенджер, и он — сломан.", html.unescape(joined))
 
     def test_the_transcript_is_prose_not_code_blocks(self):
         """<pre> is for text that gets extracted and sent byte for byte. Nothing
@@ -834,40 +847,71 @@ class Composition(unittest.TestCase):
         """The other half: a reply that is correct and cold is a worse reply."""
         self.assertIn("correct and cold is a worse reply", self.prompt())
 
-    def test_em_dashes_never_reach_the_customer(self):
+    def test_em_dashes_never_reach_an_english_customer(self):
         """The clearest tell that a reply was machine-written. The prompt forbids it;
         this is what makes it true, because a prompt rule is advisory."""
-        result = note_reply.validate_composition(dict(GERMAN, options=[
-            option("Die Anhänge sind weg — leider dauerhaft.")]))
+        result = note_reply.validate_composition(dict(ENGLISH, options=[
+            option("The attachments are gone — permanently.")]))
         sent = result["options"][0]["translated"]
         self.assertNotIn("—", sent)
-        self.assertEqual(sent, "Die Anhänge sind weg, leider dauerhaft.")
+        self.assertEqual(sent, "The attachments are gone, permanently.")
+
+    def test_a_russian_reply_keeps_the_dash_that_carries_its_verb(self):
+        """Russian omits the present-tense copula and the dash stands in for it, so
+        the comma this used to produce left a subject with no predicate. The reply
+        the customer receives is not ours to make ungrammatical."""
+        result = note_reply.validate_composition(dict(RUSSIAN, options=[
+            option("Session — это мессенджер.")]))
+        self.assertEqual(result["options"][0]["translated"], "Session — это мессенджер.")
+
+    def test_no_translation_is_repunctuated_whatever_the_language(self):
+        for code, language, text in (("es", "Spanish", "Las fotos — ya no están."),
+                                     ("fr", "French", "Les photos — elles sont parties."),
+                                     ("zh", "Chinese", "附件已删除——无法恢复。"),
+                                     ("de", "German", "Die Anhänge sind weg — dauerhaft.")):
+            with self.subTest(language=language):
+                result = note_reply.validate_composition(
+                    {"language": language, "language_code": code, "is_english": False,
+                     "options": [option(text)]})
+                self.assertEqual(result["options"][0]["translated"], text)
+
+    def test_the_english_fields_are_cleaned_on_a_foreign_ticket_too(self):
+        """`reply_en` and `back_translation` are English whatever the customer writes,
+        and an agent reads both. Only `translated` is exempt."""
+        russian = dict(RUSSIAN, options=[dict(
+            option("Session — это мессенджер."),
+            reply_en="Session is a messenger — a private one.",
+            back_translation="Session is a messenger — literally.")])
+        result = note_reply.validate_composition(russian)
+        self.assertNotIn("—", result["options"][0]["reply_en"])
+        self.assertNotIn("—", result["options"][0]["back_translation"])
+        self.assertIn("—", result["options"][0]["translated"])
 
     def test_a_range_becomes_a_plain_hyphen(self):
         """Not left alone: an unspaced long dash is still a long dash, and "14-21
         days" is what a person would have typed."""
-        self.assertEqual(triage.undash("kept 14—21 days"), "kept 14-21 days")
-        self.assertEqual(triage.undash("versions 2.14–2.15"), "versions 2.14-2.15")
+        self.assertEqual(triage.undash_english("kept 14—21 days"), "kept 14-21 days")
+        self.assertEqual(triage.undash_english("versions 2.14–2.15"), "versions 2.14-2.15")
 
     def test_no_long_dash_survives_anywhere(self):
         for text in ("a — b", "a—b", "a – b", "a–b", "— leading", "trailing —"):
             with self.subTest(text=text):
-                self.assertNotIn("—", triage.undash(text))
-                self.assertNotIn("–", triage.undash(text))
+                self.assertNotIn("—", triage.undash_english(text))
+                self.assertNotIn("–", triage.undash_english(text))
 
     def test_hyphens_in_words_survive(self):
-        self.assertEqual(triage.undash("end-to-end encrypted"),
+        self.assertEqual(triage.undash_english("end-to-end encrypted"),
                          "end-to-end encrypted")
 
     def test_en_dashes_go_too(self):
-        self.assertEqual(triage.undash("gone – sorry"), "gone, sorry")
+        self.assertEqual(triage.undash_english("gone – sorry"), "gone, sorry")
 
     def test_every_option_is_cleaned_not_just_the_first(self):
-        result = note_reply.validate_composition(dict(GERMAN, options=[
+        result = note_reply.validate_composition(dict(ENGLISH, options=[
             option("eins — zwei"), option("drei — vier")]))
         self.assertTrue(all("—" not in o["translated"] for o in result["options"]))
 
-    def test_no_note_this_tool_writes_carries_a_long_dash(self):
+    def test_no_prose_this_tool_writes_carries_a_long_dash(self):
         """Not only the reply: the templates, the house answer and its caveat all end
         up in a note somebody reads, and a dash there reads as machine-written too."""
         cell = {"n": 4, "consistency": "high", "answer": "We say X — and then Y.",
@@ -876,12 +920,20 @@ class Composition(unittest.TestCase):
         # through validate_composition, as every real draft is: that is where the
         # option text is cleaned, and para() covers everything around it
         composed = note_reply.validate_composition(
-            dict(GERMAN, options=[option("Weg — dauerhaft.")]))
+            dict(ENGLISH, options=[option("Gone — permanently.")]))
         note = note_reply.build_draft_note(
             composed, "brief", 42, False, cell, "Some — title", "android")
         readable = html.unescape(note)
         self.assertNotIn("—", readable)
         self.assertNotIn("–", readable)
+
+    def test_a_foreign_reply_reaches_the_note_with_its_dash_intact(self):
+        """The note is what `reply` publishes verbatim, so a dash cleaned out of the
+        prose around it must not be cleaned out of the reply itself."""
+        composed = note_reply.validate_composition(
+            dict(RUSSIAN, options=[option("Session — это мессенджер.")]))
+        note = note_reply.build_draft_note(composed, "brief — as typed", 42)
+        self.assertIn("Session — это мессенджер.", html.unescape(note))
 
     def test_the_agent_s_own_brief_is_echoed_back_untouched(self):
         """It is their text in a private note, not ours to rewrite, and no customer
@@ -893,9 +945,13 @@ class Composition(unittest.TestCase):
         self.assertNotIn("—", note_reply.para("a — b"))
         self.assertIn("—", note_reply.verbatim("a — b"))
 
-    def test_the_prompt_forbids_the_dash_as_well(self):
+    def test_the_prompt_forbids_the_dash_in_english_only(self):
+        """The failsafe cannot reach this half: told to keep dashes out of every
+        language, the model writes the broken Russian itself and there is nothing
+        left to undo."""
         prompt = " ".join(note_reply.COMPOSE_SYSTEM.lower().split())
-        self.assertIn("never use an em dash", prompt)
+        self.assertIn("never use an em dash (—) or an en dash (–) in `reply_en`", prompt)
+        self.assertIn("does not cross into `translated`", prompt)
 
     def test_the_brief_is_bounded(self):
         action, brief = note_reply.parse_command("claude: draft - " + "x" * 5000)

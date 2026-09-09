@@ -265,20 +265,34 @@ def clear_queued(session, subdomain, ticket_id, dry_run=False):
 
 
 def para(text):
-    """One paragraph of the note, escaped and stripped of long dashes.
+    """One paragraph of the note's own English prose, escaped and stripped of dashes.
 
-    Everything this tool writes onto a ticket goes through here or bold_para, so this
-    is the one place that guarantees no em or en dash reaches a note — whether it came
-    from a template below, from the model, or from the house-answer file. verbatim()
-    is deliberately exempt: it carries the agent's own brief and the exact reply text,
-    neither of which is ours to rewrite.
+    Every line this tool writes for itself goes through here or bold_para, so this is
+    the one place that guarantees no em or en dash reaches a note — whether it came
+    from a template below, from the model, or from the house-answer file. All of it is
+    English, which is what makes undash_english safe to apply blindly here.
+
+    Two exemptions, both deliberate. verbatim() carries the agent's own brief and the
+    exact reply text, neither of which is ours to rewrite. quoted_para() carries words
+    somebody else typed, which may not be English at all.
     """
-    return f"<p>{html.escape(triage.undash(text))}</p>"
+    return f"<p>{html.escape(triage.undash_english(text))}</p>"
 
 
 def bold_para(text):
     """A paragraph that leads a section, such as a speaker line in a transcript."""
-    return f"<p><strong>{html.escape(triage.undash(text))}</strong></p>"
+    return f"<p><strong>{html.escape(triage.undash_english(text))}</strong></p>"
+
+
+def quoted_para(text):
+    """One paragraph of somebody else's words, escaped but never rewritten.
+
+    The transcript is a record of what the customer actually said, in whatever
+    language they said it in. undash_english would rewrite their punctuation, and
+    where the long dash is grammar rather than decoration it would rewrite their
+    meaning — in the note an agent reads to understand them.
+    """
+    return f"<p>{html.escape(text or '')}</p>"
 
 
 def transcript_blocks(turns, translated):
@@ -301,7 +315,7 @@ def transcript_blocks(turns, translated):
         out.append(bold_para(" ".join(part for part in (turn["when"], f'{turn["who"]}:')
                                       if part)))
         body = english.get(turn["index"]) or turn["body"]
-        out += [para(chunk.strip()) for chunk in body.split("\n\n") if chunk.strip()]
+        out += [quoted_para(chunk.strip()) for chunk in body.split("\n\n") if chunk.strip()]
     return out
 
 
@@ -560,10 +574,17 @@ COMPOSE_SYSTEM = textwrap.dedent(
     real customers literally, and it is the single most visible way a reply looks
     machine-made.
 
-    NEVER use an em dash (—) or an en dash (–) in anything the customer reads. It is
-    the other clear tell that a reply was machine-written, and no reply this team has
-    sent uses one. Write a comma, a full stop, or brackets instead. Hyphens inside
-    words are fine.
+    NEVER use an em dash (—) or an en dash (–) in `reply_en`. It is the other clear
+    tell that a reply was machine-written, and no reply this team has sent uses one.
+    Write a comma, a full stop, or brackets instead, choosing whichever the sentence
+    actually wants. Hyphens inside words are fine.
+
+    That rule is about English and does not cross into `translated`. Punctuate the
+    translation the way the language does: in Russian and its neighbours the long dash
+    carries the present-tense "to be" that the grammar leaves out, and in Spanish,
+    French, Polish and Chinese it does work a comma cannot. Removing it there does not
+    hide a tell, it writes something a native reader sees as broken. Write correct
+    punctuation for the language and let the dash stand where the language needs it.
 
     `language` and `language_code` describe the language the CUSTOMER writes in,
     judged from their words alone, never the agent's brief.
@@ -651,9 +672,15 @@ def validate_composition(result):
                if isinstance(o, dict) and (o.get("translated") or "").strip()]
     if not options:
         sys.exit("Claude returned no usable reply option.")
+    # `reply_en` and `back_translation` are English by construction, so the failsafe
+    # always applies. `translated` is the customer's language, where a long dash may be
+    # grammar rather than decoration — see triage.undash_english — so it is cleaned only
+    # when that language is English, and left alone otherwise.
     for option in options:
-        for field in ("reply_en", "translated", "back_translation"):
-            option[field] = triage.undash(option.get(field))
+        for field in ("reply_en", "back_translation"):
+            option[field] = triage.undash_english(option.get(field))
+        if result["is_english"]:
+            option["translated"] = triage.undash_english(option.get("translated"))
     result["options"] = options[:MAX_OPTIONS]
     return result
 
