@@ -82,13 +82,28 @@ from functools import partial
 
 import requests
 
-# Open, pending, new, and on-hold tickets, newest first. Broad on purpose: we
-# want bug reports AND low-star reviews, legal requests, security/legislation
-# questions, and non-English tickets — Claude does the categorising, so we don't
-# filter to a single tag here.
-DEFAULT_QUERY = "type:ticket status<solved order_by:created_at sort:desc"
-# Whole unsolved backlog, for context in the digest. Not analyzed — just counted.
-BACKLOG_QUERY = "type:ticket status<solved"
+# The channel AppFollow imports app-store reviews on. Identified reviews with no
+# false positives in a 3,662-ticket sample; tags did not (only 287 carried one).
+REVIEW_CHANNEL = "any_channel"
+# Never analyzed. A store review cannot be answered the way a ticket can: it takes
+# one developer response, replacing any previous one, with no way to ask a follow-up
+# question — so it is not work a digest can queue up for someone. The volume stays
+# visible in the header's review count.
+NO_REVIEWS = f"-via:{REVIEW_CHANNEL}"
+
+# New and open tickets, newest first. Broad on purpose within that: we want bug
+# reports AND low-star reviews, legal requests, security/legislation questions, and
+# non-English tickets — Claude does the categorising, so we don't filter to a single
+# tag here.
+#
+# `status<pending`, not `status<solved`: pending means somebody already replied and
+# the ball is with the customer. The "Pending to Solved" automation resolves those on
+# its own after 72h, so putting them in a digest asks a human to look at work that is
+# already done. On-hold is included in neither — this account has never used it.
+DEFAULT_QUERY = f"type:ticket status<pending {NO_REVIEWS} order_by:created_at sort:desc"
+# The queue awaiting a human, for context in the digest. Not analyzed — just counted,
+# and scoped the same way as the analysis so the header and the body agree.
+BACKLOG_QUERY = "type:ticket status<pending"
 # The Search API hard-caps a query at 1000 results and returns 422 for any page past
 # it (at per_page=100 that is page 11), so pagination stops here rather than walking
 # into that error. Above the cap the digest reports truncation — which it already does
@@ -98,7 +113,7 @@ SEARCH_RESULT_LIMIT = 1000
 STATE_VERSION = 2
 
 
-def build_window_query(hours):
+def build_window_query(hours, cutoff=None):
     """Query for unsolved tickets touched in the last `hours`, most recent first.
 
     `updated>`, not `created>`: a ticket the requester adds detail to days after
@@ -110,10 +125,43 @@ def build_window_query(hours):
     The cutoff is an explicit UTC timestamp rather than Zendesk's relative
     `updated>72hours` form, so the exact window lands in the run log.
     """
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
-    return f"type:ticket status<solved updated>{cutoff} order_by:updated_at sort:desc"
+    return (f"type:ticket status<pending {NO_REVIEWS} "
+            f"updated>{cutoff or window_cutoff(hours)} order_by:updated_at sort:desc")
+
+
+def window_cutoff(hours):
+    """The UTC timestamp bounding a window, as Zendesk search formats it.
+
+    Separate from build_window_query so the run computes it once and both the query
+    and the requester-activity filter judge against the same instant. Computing it
+    twice would put seconds between them, which is enough to drop a ticket that
+    arrived mid-run.
+    """
+    return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+
+
+def drop_quiet_tickets(tickets, cutoff):
+    """Split off tickets the requester has not touched inside the window.
+
+    The window query is on `updated_at`, which moves on ANY change — a tag edit, the
+    hourly automation that bumps tickets at :01, and our own private notes. So a
+    `claude: explain` on a ticket whose customer last wrote 100 days ago drags it
+    into today's digest, and the noise grows in proportion to how much the reply
+    tooling is used, which is backwards.
+
+    Zendesk search has no `requester_updated>`, so the narrowing happens here, over
+    the value hydrate_requester_activity has already fetched. Timestamps are Zendesk's
+    fixed-width UTC form, so a string compare is a chronological one.
+
+    A ticket whose requester_updated_at is missing is KEPT: a failed sideload should
+    leave the digest noisy, never silent.
+    """
+    fresh, quiet = [], []
+    for ticket in tickets:
+        stamp = ticket.get("requester_updated_at")
+        (quiet if stamp and stamp < cutoff else fresh).append(ticket)
+    return fresh, quiet
 
 
 def window_label(hours):
@@ -485,6 +533,34 @@ def fetch_tickets(session, subdomain, query, max_tickets):
     return tickets, total_matched
 
 
+def fetch_ticket(session, subdomain, ticket_id):
+    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}.json"
+    resp = request_with_retry(session, "GET", url)
+    if resp.status_code == 404:
+        sys.exit(f"Ticket #{ticket_id} does not exist.")
+    if resp.status_code >= 400:
+        # A read error's body describes the error, not the ticket, so it is safe to
+        # print here. The write path deliberately prints no body at all.
+        sys.exit(f"Could not read ticket #{ticket_id} ({resp.status_code}): "
+                 f"{resp.text[:200]}")
+    return (resp.json() or {}).get("ticket") or {}
+
+
+def fetch_comments(session, subdomain, ticket_id):
+    """The ticket's comments, newest first.
+
+    Newest first because the marker that stops a re-run from writing twice will be on
+    the most recent comment, and one page of a busy ticket would otherwise be all
+    opening back-and-forth.
+    """
+    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}/comments.json"
+    resp = request_with_retry(
+        session, "GET", url, params={"per_page": 100, "sort_order": "desc"})
+    if resp.status_code >= 400:
+        sys.exit(f"Could not read the comments on #{ticket_id} ({resp.status_code}).")
+    return (resp.json() or {}).get("comments") or []
+
+
 def fetch_total_unsolved(session, subdomain, query=BACKLOG_QUERY):
     """Count an unsolved backlog. Best effort: returns None on failure.
 
@@ -659,12 +735,135 @@ def save_state(path, state, reported, retention_days):
 # whereas the `app-store` tag was present on only 287 of them — so filter on the
 # channel, not on tags. 4-5 star reviews were 59% of *all* tickets and are never
 # actionable, so counting them beats paying tokens to classify them.
-REVIEW_CHANNEL = "any_channel"
 # The same backlog minus store reviews. 92% of unsolved tickets are AppFollow
 # reviews, so the unqualified number reads as ~13x the queue that needs a human.
 BACKLOG_NON_REVIEW_QUERY = f"{BACKLOG_QUERY} -via:{REVIEW_CHANNEL}"
 STAR_SUBJECT = re.compile(r"^\s*([★☆]{1,10})")
 DEFAULT_REVIEW_STAR_FLOOR = 3
+
+
+# A long dash is the clearest tell that text was machine-written, and no reply this
+# team has sent uses one. The prompts that write for customers forbid it; this is the
+# failsafe, because a prompt rule is advisory and the text reaches a real person.
+# The spaced form is punctuation and becomes a comma; anything left is joining two
+# things, like a range, and becomes the hyphen a person would have typed.
+PUNCTUATING_DASH = re.compile(r"(?:\s+[—–]\s*|\s*[—–]\s+)")
+ANY_LONG_DASH = re.compile(r"[—–]")
+
+
+def undash_english(text):
+    """Replace every em and en dash: punctuation with a comma, the rest with a hyphen.
+
+    ENGLISH ONLY, and the name says so because passing anything else corrupts it. In
+    Russian and the other East Slavic languages the long dash carries the present-tense
+    copula that the grammar omits: "Москва — столица России" IS the verb, and the comma
+    this produces leaves a subject with no predicate. Spanish, French, Polish and
+    Chinese give it dialogue and parenthetical duty that a comma does not carry either.
+
+    Only for text a model wrote. Rewriting punctuation somebody typed themselves would
+    be wrong even in English.
+
+    A failsafe, not a style pass: the substitution is blunt enough to turn a legitimate
+    strong break into a comma splice ("I checked the logs — nothing was uploaded"), so
+    the prompt is what should keep dashes out and this is what catches the misses.
+    """
+    return ANY_LONG_DASH.sub("-", PUNCTUATING_DASH.sub(", ", text or ""))
+
+
+def marker(kind, value):
+    """A machine-readable marker for a ticket comment.
+
+    One shape for all of them: `[kind:value]`, matched by has_marker. What it is for
+    is idempotency — a marker on the ticket says the work behind it is already done,
+    so a replayed webhook or a re-run writes nothing a second time.
+
+    The kind carries its own namespace (`discord`, `claude:done`) so the strings are
+    byte-identical to the four hand-rolled versions this replaces. That matters:
+    markers are already written into real tickets, and a changed format would stop
+    matching them and let a replay send twice.
+    """
+    return f"[{kind}:{value}]"
+
+
+def has_marker(comments, wanted):
+    """Whether any comment already carries this marker."""
+    return any(wanted in (comment.get("body") or "") for comment in comments)
+
+
+AGENT_ROLES = ("agent", "admin")
+
+
+def fetch_user(session, subdomain, user_id):
+    """One Zendesk user, or {} when it cannot be read.
+
+    An author we cannot resolve is treated as a customer by customer_authors, so a
+    failed lookup widens the sample rather than silencing it.
+    """
+    url = f"https://{subdomain}.zendesk.com/api/v2/users/{user_id}.json"
+    resp = request_with_retry(session, "GET", url, attempts=2)
+    if resp.status_code >= 400:
+        return {}
+    return (resp.json() or {}).get("user") or {}
+
+
+def customer_authors(session, subdomain, ticket, comments):
+    """The author ids on the customer's side of this ticket.
+
+    Deciding by `requester_id` alone is right for email and web tickets and wrong for
+    every channel integration: on a Twitter or Sunshine DM the integration authors the
+    customer's own message under its id, so the requester appears to have written
+    nothing. That dropped every word a Chinese reviewer wrote and had them answered in
+    English, and it labelled their message "Support" in the English transcript.
+
+    So: the requester when they wrote anything, and otherwise everyone who is not an
+    agent here. Roles are looked up rather than inferred from the id, because the
+    integration's id is an account detail and an author we cannot resolve is a
+    customer, not an agent.
+
+    Ordinary tickets cost no extra API calls at all — the requester wrote something,
+    and the lookup never happens.
+    """
+    requester = ticket.get("requester_id")
+    if any(c.get("author_id") == requester for c in comments):
+        return {requester}
+    roles, customers = {}, set()
+    for comment in comments:
+        author = comment.get("author_id")
+        if author not in roles:
+            roles[author] = (fetch_user(session, subdomain, author) or {}).get("role")
+        if roles[author] not in AGENT_ROLES:
+            customers.add(author)
+    return customers or {requester}
+
+
+def customer_text(session, subdomain, ticket, comments, limit):
+    """What the customer wrote, as the signal for which language to reply in.
+
+    Their words only. An agent's earlier English reply is still text on the ticket,
+    and including it would drag detection towards English on exactly the tickets this
+    exists for.
+    """
+    # Public only. A private note is internal annotation — including the `claude:`
+    # commands and the drafts this tool writes — and never the customer speaking.
+    comments = [c for c in comments if c.get("public")]
+    authors = customer_authors(session, subdomain, ticket, comments)
+    subject = squash(ticket.get("subject"))
+    parts = []
+    description = (ticket.get("description") or "").strip()
+    # A channel integration puts "Conversation with <handle>" here, which is the
+    # ticket's own boilerplate rather than anything the customer typed.
+    if description and squash(description) != subject:
+        parts.append(description)
+    for comment in reversed(comments):          # oldest first, so it reads in order
+        if comment.get("author_id") not in authors:
+            continue
+        body = (comment.get("body") or "").strip()
+        if body and squash(body) != subject and body not in parts:
+            parts.append(body)
+    # A ticket can carry no text at all — an attachment, or an import that lost its
+    # body. Say so rather than sending an empty sample, which reads as a blank
+    # question the model has to answer anyway.
+    return clip("\n\n".join(parts), limit) or "(no text)"
 
 
 def squash(value):
@@ -810,7 +1009,7 @@ ENGLISH_TIMEOUT_SECONDS = 180
 TRANSCRIPT_INPUT_CHARS = 8000
 TRANSCRIPT_CHARS = 12000
 # Private notes are left out. They are internal annotation rather than conversation,
-# they are already English — reply.py's own attribution notes among them — and
+# they are already English — note_reply.py's own attribution notes among them — and
 # translating its `[discord:…]` markers back would put bookkeeping in front of an
 # agent as if the customer had said it.
 CUSTOMER_TURN = "Customer"
@@ -876,10 +1075,11 @@ def conversation_turns(session, subdomain, ticket):
     answer to a reply, and dropping the reply leaves "still broken" sitting under the
     original complaint with nothing visible for it to be answering.
 
-    Who spoke is decided by `requester_id` — the same question relay.py asks of the
-    same ticket. Without it there is no way to label a turn, and a transcript that
-    guesses is worse than none: it would present the agent's own replies as the
-    customer's words, with no heading to disclaim them the way the dialog has.
+    Who spoke is decided by customer_authors, not by `requester_id` alone: on a
+    Twitter or Sunshine DM the integration authors the customer's message under its
+    own id, and comparing against the requester labelled their words "Support" in the
+    transcript an agent then read. A transcript that mislabels who spoke is worse than
+    none.
     """
     requester = ticket.get("requester_id")
     if requester is None:
@@ -900,16 +1100,16 @@ def conversation_turns(session, subdomain, ticket):
     except ValueError as exc:
         print(f"Note: unreadable comments payload for #{ticket['id']} ({exc}).")
         return None
+    public = [c for c in comments if c.get("public")]
+    authors = customer_authors(session, subdomain, ticket, public)
     turns = []
-    for comment in comments:
-        if not comment.get("public"):
-            continue
+    for comment in public:
         body = (comment.get("body") or "").strip()
         if not body:
             continue
         turns.append({
             "index": len(turns),
-            "who": (CUSTOMER_TURN if comment.get("author_id") == requester
+            "who": (CUSTOMER_TURN if comment.get("author_id") in authors
                     else SUPPORT_TURN),
             "when": stamp_minutes(comment.get("created_at")),
             "body": body,
@@ -1158,7 +1358,7 @@ def analyze_in_chunks(analyzer, compact_tickets, batch_size):
 def claude_cli_json(model, effort, system_prompt, schema, prompt, timeout, label):
     """Run one schema-enforced Claude Code request. Returns the parsed payload.
 
-    Shared by the digest's classification and reply.py's translation: same flags,
+    Shared by the digest's classification and note_reply.py's composing: same flags,
     same error semantics, one place to keep them right.
 
     `--json-schema` enforces the schema the way the API's structured outputs did.
@@ -1304,35 +1504,29 @@ COLLAPSED_LINKS_CHARS = 900
 
 # ---- Components V2 ---------------------------------------------------------
 #
-# The digest is posted by the app rather than through an incoming webhook, because a
-# plain webhook cannot carry interactive components at all, and each ticket needs its
-# own Comment button. Embeds cannot do this either: components attach to the message,
-# not to an embed, so ten embeds would sit above ten anonymous buttons. A Section
-# owns its accessory, which is what makes "this button, that ticket" unambiguous.
+# The digest is a Container of Text Displays: one block per ticket, so a reader skims
+# lines rather than a wall, and each message records which ticket ids it accounts for.
+#
+# It is posted by the app rather than through an incoming webhook. That was originally
+# because each card carried a Comment button and a plain webhook cannot send
+# interactive components; the buttons are gone now — replies are written on the ticket
+# itself, see note_reply.py — and the transport is simply left as it is.
 #
 # https://docs.discord.com/developers/components/reference
 COMPONENTS_V2_FLAG = 1 << 15
 CONTAINER = 17
-SECTION = 9
 TEXT_DISPLAY = 10
 SEPARATOR = 14
-BUTTON = 2
-BUTTON_SECONDARY = 2
 
-# Discord allows 40 components in one message. A ticket costs three — its Section,
-# the Text Display inside it, and the button hanging off it — and the header block
-# costs two more, so the ceiling is twelve. Ten leaves room for the accounting lines
-# the header grows on a busy day.
-MAX_SECTIONS_PER_MESSAGE = 10
-COMMENT_BUTTON_LABEL = "Comment"
-# Discord's ceiling on all the text in one Components V2 message.
+# Discord allows 40 components in one message, and a ticket now costs one Text
+# Display, so that ceiling no longer binds — the character budget below does. Ten is
+# kept because it is a readable message, not because it is the limit.
+MAX_ENTRIES_PER_MESSAGE = 10
+# Discord's ceiling on all the text in one Components V2 message, and the constraint
+# that actually binds. Ten clipped ticket lines plus a header come to roughly 3,500,
+# so this is a guard rather than a routine constraint.
 MAX_MESSAGE_TEXT_CHARS = 4000
-# What the ticket lines and the header may spend of it. The accessory labels are text
-# in the message as much as the lines are, so they come off the budget rather than
-# being left to a margin nobody wrote down. Ten sections of clipped ticket text come
-# to roughly 3,500, so this is a guard rather than a routine constraint.
-MAX_COMPONENT_CHARS = (MAX_MESSAGE_TEXT_CHARS
-                       - MAX_SECTIONS_PER_MESSAGE * len(COMMENT_BUTTON_LABEL))
+MAX_COMPONENT_CHARS = MAX_MESSAGE_TEXT_CHARS
 
 
 def ticket_url(subdomain, ticket_id):
@@ -1388,26 +1582,6 @@ def build_ticket_line(finding, subdomain, is_update=False):
     if reported:
         parts.append(f"Reported: `{reported}`")
     return " | ".join(parts)
-
-
-def build_ticket_section(text, ticket_id):
-    """One ticket as a card carrying its own Comment button.
-
-    A Section owns its accessory, and that ownership is the whole point: components
-    attach to a message rather than to an embed, so ten embeds would sit above ten
-    buttons the reader has to match back to tickets by eye.
-    """
-    return {
-        "type": SECTION,
-        "components": [{"type": TEXT_DISPLAY, "content": text}],
-        "accessory": {
-            "type": BUTTON,
-            "style": BUTTON_SECONDARY,
-            "label": COMMENT_BUTTON_LABEL,
-            # Parsed by relay.py, which answers it with the compose dialog.
-            "custom_id": f"comment:{ticket_id}",
-        },
-    }
 
 
 def build_collapsed_line(collapsed, subdomain):
@@ -1469,14 +1643,22 @@ def build_header(findings, highlights, stats=None):
     reviews = stats.get("skipped_reviews") or 0
     if reviews:
         window += f" Skipped **{reviews}** positive app-store review(s)."
+    # Usually the largest of the three, and the least obvious: the window is on
+    # updated_at, so our own private notes drag old tickets in and drop_quiet_tickets
+    # takes them back out. Measured on a real 72h window: 56 of 79. Unreported, the
+    # digest looks like it analyzed a fraction of what it fetched for no stated reason.
+    quiet = stats.get("skipped_quiet") or 0
+    if quiet:
+        window += (f" Skipped **{quiet}** the requester has not touched in this "
+                   f"window.")
     lines = [window]
 
     non_review = stats.get("total_unsolved_non_review")
     if backlog is not None and non_review is not None:
-        lines.append(f"Backlog: **{non_review:,}** unsolved excluding app-store reviews "
+        lines.append(f"Backlog: **{non_review:,}** awaiting a reply, excluding app-store reviews "
                      f"(**{backlog - non_review:,}** more are reviews, not triaged).")
     elif backlog is not None:
-        lines.append(f"Backlog: **{backlog:,}** unsolved tickets in total (not triaged).")
+        lines.append(f"Backlog: **{backlog:,}** tickets awaiting a reply (not triaged).")
 
     serious = by_severity.get("crash", 0) + by_severity.get("data_loss", 0)
     tail = f"**{len(highlights)}** worth looking into"
@@ -1502,7 +1684,7 @@ def build_header(findings, highlights, stats=None):
     return "\n".join(lines)
 
 
-def chunk_entries(entries, max_items=MAX_SECTIONS_PER_MESSAGE,
+def chunk_entries(entries, max_items=MAX_ENTRIES_PER_MESSAGE,
                   max_chars=MAX_COMPONENT_CHARS, first_used=0):
     """Group (line, ticket_ids) pairs into messages within Discord's budgets.
 
@@ -1584,10 +1766,8 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
         for f in shown
     ]
     # Last, under the individual tickets: lowest position for the lowest priority.
-    collapsed_entry = None
     if collapsed:
-        collapsed_entry = (build_collapsed_line(collapsed, subdomain), collapsed_ids)
-        entries.append(collapsed_entry)
+        entries.append((build_collapsed_line(collapsed, subdomain), collapsed_ids))
 
     messages, coverage = [], []
     # A quiet day still owes the channel the header — chunk_entries has nothing to
@@ -1605,20 +1785,8 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
             # The header accounts for every classified ticket except the highlights
             # that didn't fit; those are covered by no message and stay eligible.
             covered |= header_ids
-        for entry in chunk:
-            text, ids = entry
-            # The collapsed line stands for every abuse report at once, so there is no
-            # single ticket to comment on — and a group nobody can act on is the last
-            # thing that should offer a reply button. Plain text, no accessory.
-            #
-            # Asked by identity rather than by comparing id sets: matching on the ids
-            # happened to work only because a collapsed ticket never also appears as
-            # its own line, which is a fact about build_messages and not about what
-            # this branch is trying to decide.
-            if entry is collapsed_entry:
-                blocks.append({"type": TEXT_DISPLAY, "content": text})
-            else:
-                blocks.append(build_ticket_section(text, next(iter(ids))))
+        for text, ids in chunk:
+            blocks.append({"type": TEXT_DISPLAY, "content": text})
             covered |= ids
         messages.append({
             "flags": COMPONENTS_V2_FLAG,
@@ -1754,13 +1922,15 @@ def main():
         api_token = get_env("ZENDESK_API_TOKEN", args.api_token)
 
         # An explicit query wins over --window-hours; warn rather than silently drop it.
+        window_start = None
         explicit_query = args.query or os.environ.get("ZENDESK_QUERY")
         if explicit_query:
             if args.window_hours:
                 print("Note: --window-hours ignored because an explicit query was given.")
             query = explicit_query
         elif args.window_hours:
-            query = build_window_query(args.window_hours)
+            window_start = window_cutoff(args.window_hours)
+            query = build_window_query(args.window_hours, window_start)
             stats["scope"] = window_label(args.window_hours)
         else:
             query = DEFAULT_QUERY
@@ -1798,11 +1968,23 @@ def main():
                 print("Only positive reviews in this window; nothing to report.")
                 return
 
-        if args.state:
-            # Before partition_by_state, which compares on requester_updated_at, and
-            # after the review filter, so the sideload only covers what can be
-            # reported. One request per 100 tickets.
+        # One sideload serves both the window filter and the dedup, so it runs
+        # whenever either needs it. After the review filter, so it only covers
+        # tickets that can still be reported. One request per 100 tickets.
+        if window_start or args.state:
             hydrate_requester_activity(zd, subdomain, tickets)
+
+        if window_start:
+            tickets, quiet = drop_quiet_tickets(tickets, window_start)
+            if quiet:
+                stats["skipped_quiet"] = len(quiet)
+                print(f"Skipped {len(quiet)} ticket(s) that only we touched in this "
+                      f"window; {len(tickets)} remain.")
+            if not tickets:
+                print("Nothing the requester touched in this window; nothing to report.")
+                return
+
+        if args.state:
             state = load_state(args.state)
             new, changed, unchanged = partition_by_state(tickets, state)
             print(f"{len(new)} new, {len(changed)} changed since last reported, "

@@ -92,36 +92,10 @@ def digest_text(messages):
 def all_text(message):
     """Every character Discord counts towards a Components V2 message's ceiling.
 
-    The button labels as well as the Text Displays: an accessory's label is text in
-    the message the same way a ticket line is.
+    Text Displays are all there is now: the digest carries no accessories, so there
+    are no button labels to add.
     """
-    total = sum(len(t) for t in text_displays(message["components"]))
-
-    def labels(node):
-        if isinstance(node, list):
-            return sum(labels(item) for item in node)
-        if not isinstance(node, dict):
-            return 0
-        own = len(node.get("label") or "") if node.get("type") == triage.BUTTON else 0
-        return own + labels(node.get("components")) + labels(node.get("accessory"))
-
-    return total + labels(message["components"])
-
-
-def buttons(message):
-    """Every button custom_id in a message, in order."""
-    found = []
-    def walk(node):
-        if isinstance(node, list):
-            for item in node:
-                walk(item)
-        elif isinstance(node, dict):
-            if node.get("type") == triage.BUTTON:
-                found.append(node["custom_id"])
-            walk(node.get("components"))
-            walk(node.get("accessory"))
-    walk(message["components"])
-    return found
+    return sum(len(t) for t in text_displays(message["components"]))
 
 
 class FakeResponse:
@@ -234,11 +208,69 @@ class TestWindowQuery(unittest.TestCase):
     def test_query_keeps_unsolved_filter_and_newest_first_ordering(self):
         query = triage.build_window_query(72)
         self.assertIn("type:ticket", query)
-        self.assertIn("status<solved", query)
+        # `status<pending`, not `status<solved`: a pending ticket has already been
+        # replied to and the automation resolves it on its own, so putting it in the
+        # digest asks a human to look at work that is finished.
+        self.assertIn("status<pending", query)
+        self.assertNotIn("status<solved", query)
         # Ordered by the same field the window bounds, so a fetch truncated at
         # --max-tickets drops the least recently touched rather than the oldest.
         self.assertIn("order_by:updated_at", query)
         self.assertIn("sort:desc", query)
+
+    def test_store_reviews_are_never_in_scope(self):
+        """A review takes one developer response, replacing any previous one, and
+        cannot be asked a follow-up. It is not work a digest can queue up."""
+        for query in (triage.build_window_query(72), triage.DEFAULT_QUERY):
+            with self.subTest(query=query):
+                self.assertIn(f"-via:{triage.REVIEW_CHANNEL}", query)
+
+    def test_pending_tickets_are_out_of_scope(self):
+        """A pending ticket is one somebody already answered. It leaves the queue on
+        its own after 72h, so listing it asks for attention that is not needed."""
+        for query in (triage.build_window_query(72), triage.DEFAULT_QUERY,
+                      triage.BACKLOG_QUERY, triage.BACKLOG_NON_REVIEW_QUERY):
+            with self.subTest(query=query):
+                self.assertIn("status<pending", query)
+
+    def test_the_backlog_count_is_scoped_like_the_analysis(self):
+        """The header number and the tickets below it must mean the same thing, or
+        the digest reports a backlog it is not showing. The headline figure is the
+        review-excluded one, which is what the analysis now covers."""
+        analysed = triage.build_window_query(72).split(" updated>")[0]
+        self.assertEqual(sorted(analysed.split()),
+                         sorted(triage.BACKLOG_NON_REVIEW_QUERY.split()))
+
+    def test_a_ticket_only_we_touched_leaves_the_window(self):
+        """The bug this exists for: a `claude: explain` note bumps updated_at, and
+        the window query is on updated_at — so a ticket whose customer last wrote
+        100 days ago was appearing in a 72-hour digest because we touched it."""
+        cutoff = "2026-09-01T00:00:00Z"
+        ours = {"id": 1, "updated_at": "2026-09-03T02:35:00Z",
+                "requester_updated_at": "2026-05-26T06:55:00Z"}
+        theirs = {"id": 2, "updated_at": "2026-09-02T09:00:00Z",
+                  "requester_updated_at": "2026-09-02T09:00:00Z"}
+        fresh, quiet = triage.drop_quiet_tickets([ours, theirs], cutoff)
+        self.assertEqual([t["id"] for t in fresh], [2])
+        self.assertEqual([t["id"] for t in quiet], [1])
+
+    def test_a_missing_requester_stamp_keeps_the_ticket(self):
+        """A failed metric sideload must leave the digest noisy, never silent."""
+        blind = {"id": 1, "updated_at": "2026-09-03T02:35:00Z"}
+        fresh, quiet = triage.drop_quiet_tickets([blind], "2026-09-01T00:00:00Z")
+        self.assertEqual(fresh, [blind])
+        self.assertEqual(quiet, [])
+
+    def test_a_ticket_touched_exactly_at_the_cutoff_is_kept(self):
+        edge = {"id": 1, "requester_updated_at": "2026-09-01T00:00:00Z"}
+        fresh, _ = triage.drop_quiet_tickets([edge], "2026-09-01T00:00:00Z")
+        self.assertEqual(fresh, [edge])
+
+    def test_the_query_and_the_filter_share_one_cutoff(self):
+        """Computed twice they would sit seconds apart, which is enough to drop a
+        ticket that arrived mid-run."""
+        cutoff = triage.window_cutoff(72)
+        self.assertIn(f"updated>{cutoff}", triage.build_window_query(72, cutoff))
 
     def test_a_longer_window_reaches_further_back(self):
         short = triage.build_window_query(48).split("updated>")[1].split(" ")[0]
@@ -513,19 +545,32 @@ class TestHeader(unittest.TestCase):
     def test_omits_the_skip_line_when_nothing_was_skipped(self):
         self.assertNotIn("Skipped", self.header([finding(1)], {"skipped_unchanged": 0}))
 
+    def test_it_accounts_for_the_tickets_only_we_touched(self):
+        """The largest skip category on a real window, and the least obvious one:
+        our own private notes bump updated_at and drag old tickets in. Unreported,
+        the digest looks like it analyzed a fraction of its fetch for no reason."""
+        header = triage.build_header([finding(1)], [finding(1)],
+                                     {"matched": 79, "skipped_quiet": 56})
+        self.assertIn("**56**", header)
+        self.assertIn("not touched in this window", header)
+
+    def test_no_quiet_tickets_adds_no_line(self):
+        header = triage.build_header([finding(1)], [finding(1)], {"matched": 1})
+        self.assertNotIn("not touched in this window", header)
+
     def test_reports_the_backlog_excluding_store_reviews(self):
         """The unqualified number is ~13x the queue that needs a human, because 92%
         of unsolved tickets are AppFollow reviews."""
         text = self.header([finding(1)], {"total_unsolved": 5680,
                                           "total_unsolved_non_review": 428})
-        self.assertIn("Backlog: **428** unsolved excluding app-store reviews", text)
+        self.assertIn("Backlog: **428** awaiting a reply, excluding app-store reviews", text)
         self.assertIn("**5,252** more are reviews", text)
 
     def test_falls_back_to_the_total_when_the_review_count_is_unavailable(self):
         """Both counts are best-effort; losing one must not lose the whole line."""
         text = self.header([finding(1)], {"total_unsolved": 5609,
                                           "total_unsolved_non_review": None})
-        self.assertIn("Backlog: **5,609** unsolved tickets in total", text)
+        self.assertIn("Backlog: **5,609** tickets awaiting a reply", text)
 
     def test_omits_the_backlog_line_when_the_count_is_unavailable(self):
         self.assertNotIn("Backlog", self.header([finding(1)], {"total_unsolved": None}))
@@ -646,19 +691,24 @@ class TestBuildMessages(unittest.TestCase):
             self.assertNotIn("embeds", message)
             self.assertEqual(message["components"][0]["type"], triage.CONTAINER)
 
-    def test_every_ticket_card_carries_its_own_comment_button(self):
-        """The button is a Section accessory rather than a loose row, so which
-        ticket it belongs to is unambiguous."""
-        findings = [finding(1), finding(2)]
-        message, = build_messages(findings, "acme")
-        self.assertEqual(buttons(message), ["comment:1", "comment:2"])
+    def test_each_ticket_gets_its_own_block(self):
+        """One Text Display per ticket, so a reader skims lines rather than a wall."""
+        message, = build_messages([finding(1), finding(2)], "acme")
+        lines = [t for t in text_displays(message["components"]) if "#" in t]
+        self.assertEqual(len(lines), 2)
+
+    def test_the_digest_carries_no_interactive_components(self):
+        """Replies are written on the ticket now, see note_reply.py. A button here
+        would open a compose flow that no longer exists."""
+        messages, _ = triage.build_messages([finding(1), finding(2)], "acme")
+        self.assertNotIn("accessory", json.dumps(messages))
+        self.assertNotIn("custom_id", json.dumps(messages))
 
     def test_a_quiet_day_still_posts_the_header(self):
         """Nothing worth looking into is a result, not a reason to say nothing."""
         messages = build_messages([finding(1, worth_looking_into=False)], "acme")
         self.assertEqual(len(messages), 1)
         self.assertIn("Zendesk triage", digest_text(messages))
-        self.assertEqual(buttons(messages[0]), [])
 
 
 class TestCollapsedAbuseReports(unittest.TestCase):
@@ -1093,7 +1143,7 @@ class TestMessageCharLimit(unittest.TestCase):
                             summary="s" * triage.SUMMARY_CHARS,
                             likely_root_cause="r" * triage.ROOT_CAUSE_CHARS,
                             cluster=f"cluster-{i % 3}")
-                    for i in range(triage.MAX_SECTIONS_PER_MESSAGE)]
+                    for i in range(triage.MAX_ENTRIES_PER_MESSAGE)]
         messages = build_messages(findings, "acme", stats)
         for message in messages:
             rendered = text_displays(message["components"])
@@ -1122,10 +1172,9 @@ class TestMessageCharLimit(unittest.TestCase):
         findings = [finding(i, summary="s", likely_root_cause="") for i in range(5)]
         self.assertEqual(len(build_messages(findings, "acme")), 1)
 
-    def test_the_button_labels_are_counted_too(self):
-        """Every Comment label is text in the message as much as the lines are. The
-        budget used to be the ceiling less a 100-character margin nobody wrote down,
-        which ten labels came within thirty characters of spending."""
+    def test_a_full_message_stays_inside_the_character_ceiling(self):
+        """The character budget is the limit that binds now that a ticket costs one
+        component rather than three."""
         findings = [self.fat(i) for i in range(triage.MAX_HIGHLIGHTS)]
         for message in build_messages(findings, "acme"):
             self.assertLessEqual(all_text(message), triage.MAX_MESSAGE_TEXT_CHARS)
@@ -1138,13 +1187,16 @@ class TestMessageCharLimit(unittest.TestCase):
         messages = build_messages(findings, "acme")
         self.assertGreater(len(messages), 1)
         for message in messages:
-            self.assertLessEqual(len(buttons(message)),
-                                 triage.MAX_SECTIONS_PER_MESSAGE)
+            # header included, so one more than the entry cap
+            self.assertLessEqual(len(text_displays(message["components"])),
+                                 triage.MAX_ENTRIES_PER_MESSAGE + 1)
 
     def test_chunking_splits_on_whichever_limit_binds_first(self):
-        entries = [("x" * 2000, {1}), ("y" * 2000, {2})]
+        # Together these overrun MAX_COMPONENT_CHARS, so characters bind before the
+        # entry count does.
+        entries = [("x" * 2100, {1}), ("y" * 2100, {2})]
         self.assertEqual(len(triage.chunk_entries(entries)), 2)   # characters
-        lean = [("x", {i}) for i in range(triage.MAX_SECTIONS_PER_MESSAGE + 1)]
+        lean = [("x", {i}) for i in range(triage.MAX_ENTRIES_PER_MESSAGE + 1)]
         self.assertEqual(len(triage.chunk_entries(lean)), 2)      # card count
 
     def test_an_oversized_entry_still_gets_a_message(self):
@@ -1196,21 +1248,17 @@ class TestCoverage(unittest.TestCase):
         flat = [tid for ids in coverage for tid in ids]
         self.assertEqual(len(flat), len(set(flat)))
 
-    def test_the_collapsed_line_carries_no_comment_button(self):
-        """It stands for every abuse report at once, so there is no single ticket a
-        reply could go to — and the merge that brought the collapsed line onto the
-        Components V2 digest wrapped it in a Section like any ticket, giving it a
-        button whose custom_id was an arbitrary member of the set."""
+    def test_the_collapsed_line_is_rendered_like_any_other(self):
+        """It stands for every abuse report at once. It used to need a special case
+        so it would not get a Comment button pointing at an arbitrary member of the
+        set; with no buttons anywhere, that special case is gone."""
         findings = [finding(i, category="abuse_report") for i in range(10, 18)]
         messages, _ = triage.build_messages(findings, "acme")
         collapsed = [m for m in messages
                      if any("abuse report" in text
                             for text in text_displays(m["components"]))]
         self.assertTrue(collapsed)
-        for message in collapsed:
-            for custom_id in buttons(message):
-                self.assertNotIn(custom_id.removeprefix("comment:"),
-                                 {str(i) for i in range(10, 18)})
+        self.assertNotIn("accessory", json.dumps(collapsed))
 
     def test_the_collapsed_line_covers_the_abuse_reports_it_accounts_for(self):
         """Covered by the message carrying that line — not by the header, which no
@@ -1912,7 +1960,7 @@ def unit_commands(unit="zendesk-digest.service"):
 
 class TestDigestOrdering(unittest.TestCase):
     """The digest is only correct if the positive-review resolver ran first: solved
-    reviews leave the triage's `status<solved` query, so running second would have
+    reviews leave the triage's `status<pending` query, so running second would have
     the digest re-count reviews the other script had just closed.
 
     This used to be two chained GitHub jobs; it is now two ExecStart lines. The
@@ -2029,7 +2077,7 @@ class TestEnglishTranscript(unittest.TestCase):
         self.assertEqual([t["index"] for t in turns], [0, 1, 2])
 
     def test_private_notes_are_left_out(self):
-        """Internal annotation, not conversation — and reply.py's own attribution
+        """Internal annotation, not conversation — and note_reply.py's own attribution
         notes are among them, so their `[discord:…]` markers would reach the agent as
         if the customer had written them."""
         turns = self.turns([
@@ -2225,3 +2273,70 @@ class TestEnglishTranscript(unittest.TestCase):
                                       [{"id": 99, "language": "German"}],
                                       "claude-sonnet-5", field_id=42),
                 0)
+
+
+class TestCustomerSide(unittest.TestCase):
+    """Which comments are the customer's. Decided by requester_id alone this was
+    wrong on every channel integration: a Twitter DM authors the customer's own
+    message under the integration's id, so their words were dropped from the language
+    sample and labelled "Support" in the transcript."""
+
+    TWEET = {"id": 1, "subject": "Conversation with 我命由我不由天",
+             "description": "Conversation with 我命由我不由天", "requester_id": 999}
+    EMAIL = {"id": 2, "subject": "Cannot log in",
+             "description": "Ich kann mich nicht anmelden.", "requester_id": 999}
+
+    @staticmethod
+    def said(body, author, public=True, cid=1):
+        return {"id": cid, "author_id": author, "public": public, "body": body}
+
+    def test_an_ordinary_ticket_costs_no_lookups(self):
+        session = FakeSession([])
+        authors = triage.customer_authors(
+            session, "acme", self.EMAIL, [self.said("Hallo", 999)])
+        self.assertEqual(authors, {999})
+        self.assertEqual(session.calls, [], "the requester wrote, so no role lookup")
+
+    def test_a_dm_falls_back_to_whoever_is_not_an_agent(self):
+        session = FakeSession([FakeResponse({"user": {}}),
+                               FakeResponse({"user": {"id": 7, "role": "admin"}})])
+        authors = triage.customer_authors(session, "acme", self.TWEET, [
+            self.said("中国大陆可以使用吗？", -1),
+            self.said("Thanks for getting in touch.", 7)])
+        self.assertEqual(authors, {-1})
+
+    def test_an_unresolvable_author_counts_as_the_customer(self):
+        session = FakeSession([FakeResponse({}, status_code=404)])
+        self.assertEqual(
+            triage.customer_authors(session, "acme", self.TWEET,
+                                    [self.said("中国大陆", -1)]), {-1})
+
+    def test_the_sample_keeps_their_words_and_drops_the_agent_s(self):
+        session = FakeSession([FakeResponse({"user": {}}),
+                               FakeResponse({"user": {"id": 7, "role": "admin"}})])
+        sample = triage.customer_text(session, "acme", self.TWEET, [
+            self.said("中国大陆可以使用吗？", -1),
+            self.said("Thanks for getting in touch.", 7)], 2000)
+        self.assertIn("中国大陆可以使用吗", sample)
+        self.assertNotIn("Thanks for getting in touch", sample)
+
+    def test_channel_boilerplate_is_not_the_customer_writing(self):
+        """"Conversation with <handle>" is the ticket's own description, not words
+        anybody typed, and it was what the language detector saw."""
+        session = FakeSession([FakeResponse({"user": {}})])
+        sample = triage.customer_text(session, "acme", self.TWEET,
+                                      [self.said("中国大陆", -1)], 2000)
+        self.assertNotIn("Conversation with", sample)
+
+    def test_private_notes_never_reach_the_sample(self):
+        session = FakeSession([])
+        sample = triage.customer_text(session, "acme", self.EMAIL,
+                                      [self.said("claude: draft - x", 999, public=False)],
+                                      2000)
+        self.assertNotIn("claude: draft", sample)
+
+    def test_a_ticket_with_no_text_still_yields_a_sample(self):
+        session = FakeSession([])
+        self.assertTrue(triage.customer_text(
+            session, "acme", dict(self.EMAIL, description=""), [], 2000).strip())
+
