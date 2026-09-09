@@ -521,6 +521,19 @@ class Solve(unittest.TestCase):
         self.assertIn("Audric", body)
         self.assertIn("spam, nothing actionable", body)
 
+    def test_the_reason_is_echoed_back_untouched(self):
+        """Their sentence, and a `draft` brief is already exempt at build_draft_note.
+        The same text typed after a different verb is not ours to repunctuate either,
+        and whoever reopens this in three months reads what they actually wrote."""
+        session = fake_session(FakeResponse({"user": {"id": AGENT, "name": "Audric"}}),
+                               FakeResponse({"ticket": {}}))
+        note_reply.run_solve(session, "sub", {"id": 7, "status": "open"},
+                             dict(self.CMD, brief="duplicate — see #4021"),
+                             dry_run=False)
+        body = next(kw["json"]["ticket"]["comment"]["html_body"]
+                    for m, u, kw in session.calls if m == "PUT" and "/tags.json" not in u)
+        self.assertIn("duplicate — see #4021", html.unescape(body))
+
     def test_it_is_tagged_so_a_batch_can_be_found_again(self):
         session = fake_session(FakeResponse({"user": {"id": AGENT, "name": "Audric"}}),
                                FakeResponse({"ticket": {}}))

@@ -268,13 +268,14 @@ def para(text):
     """One paragraph of the note's own English prose, escaped and stripped of dashes.
 
     Every line this tool writes for itself goes through here or bold_para, so this is
-    the one place that guarantees no em or en dash reaches a note — whether it came
+    the one place that guarantees no em or en dash reaches OUR prose — whether it came
     from a template below, from the model, or from the house-answer file. All of it is
     English, which is what makes undash_english safe to apply blindly here.
 
-    Two exemptions, both deliberate. verbatim() carries the agent's own brief and the
-    exact reply text, neither of which is ours to rewrite. quoted_para() carries words
-    somebody else typed, which may not be English at all.
+    The guarantee stops at our own words, and both exemptions are text belonging to
+    somebody else. verbatim() carries the agent's brief and the exact reply text, whose
+    whitespace has to survive intact. quoted_para() carries what the customer said and
+    what the agent gave as a solve reason, which are theirs and may not be English.
     """
     return f"<p>{html.escape(triage.undash_english(text))}</p>"
 
@@ -285,12 +286,17 @@ def bold_para(text):
 
 
 def quoted_para(text):
-    """One paragraph of somebody else's words, escaped but never rewritten.
+    """One paragraph carrying somebody else's words, escaped but never rewritten.
 
-    The transcript is a record of what the customer actually said, in whatever
-    language they said it in. undash_english would rewrite their punctuation, and
-    where the long dash is grammar rather than decoration it would rewrite their
-    meaning — in the note an agent reads to understand them.
+    Two kinds reach this. A transcript turn is what the customer actually said, in
+    whatever language they said it in: undash_english would rewrite their punctuation,
+    and where the long dash is grammar rather than decoration it would rewrite their
+    meaning — in the note an agent reads to understand them. A solve reason is the
+    agent's own sentence, echoed back to whoever reopens the ticket months later.
+
+    A fixed label may lead the quoted text in the same paragraph. Those are literals
+    in this file and carry no long dash, so leaving them uncleaned costs nothing and
+    keeps the label on the same line as what it introduces.
     """
     return f"<p>{html.escape(text or '')}</p>"
 
@@ -885,7 +891,10 @@ def run_solve(session, subdomain, ticket, command, dry_run):
     note = [para(f"Solved by {who}, from their note on this ticket. "
                  f"No reply was sent to the customer.")]
     if command["brief"]:
-        note.append(para("Reason given: " + command["brief"]))
+        # Their sentence, not ours: build_draft_note already echoes a `draft` brief
+        # back through verbatim() untouched, and a `solve` reason is the same text
+        # typed after a different verb.
+        note.append(quoted_para("Reason given: " + command["brief"]))
     note.append(para(done_marker(command["id"])))
     write_to_ticket(session, subdomain, ticket_id, "".join(note), public=False,
                     status=SOLVED_STATUS, as_html=True, add_tags=[TAG_SOLVED],
