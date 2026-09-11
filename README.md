@@ -302,7 +302,9 @@ Solving a ticket fires triggers and automations, and an AppFollow requester may 
 
 ### How it drains
 
-No state file: a solved ticket drops out of the query, so runs are idempotent. Zendesk's search API caps at 1,000 results, so a run can never see more than that — the first few runs work the backlog down and after that five runs a week comfortably clear the ~420 reviews a week that arrive. `update_many` takes [100 ids per request](https://developer.zendesk.com/api-reference/ticketing/tickets/tickets/#update-many-tickets) and is asynchronous, so each batch's job is polled to completion and per-ticket failures fail the run rather than being reported as success.
+No state file: a solved ticket drops out of the query, so runs are idempotent. The first few runs work the backlog down and after that five runs a week comfortably clear the ~420 reviews a week that arrive. `update_many` takes [100 ids per request](https://developer.zendesk.com/api-reference/ticketing/tickets/tickets/#update-many-tickets) and is asynchronous, so each batch's job is polled to completion and per-ticket failures fail the run rather than being reported as success.
+
+Every match is fetched, not the newest 1,000. [Zendesk's search API caps a query at 1,000 results](https://developer.zendesk.com/api-reference/ticketing/ticket-management/search/#results-limit), which `triage.fetch_every_ticket` walks past in `created_at` slices — and the walk has to be allowed to finish, because the solvable reviews are a thin scatter through a result set that 1-3★ ones hold open. A fetch that stops at the cap stops on reviews this job never solves, so they never leave the query, newer arrivals keep pushing the boundary away from the tail, and nothing further down is reachable by any later run. `--max-tickets` therefore bounds **what a run solves**, never what it fetches; `FETCH_CEILING` is the fetch's own runaway guard and sits well clear of the per-query cap.
 
 ### What it posts
 
@@ -310,9 +312,13 @@ Every applied run reports to the same Discord channel as the triage, so a job th
 
 > ✅ Marked **12** 4★ and **31** 5★ app-store reviews as solved in Zendesk.
 > 🔍 [Review what changed](#)
-> 📥 **4,769** more tickets match than this run looked at; the next run picks them up.
+> 📥 **4,769** more eligible reviews than this run's --max-tickets guard; the next run picks them up.
 
 The rating split is the point — a bare total wouldn't say which reviews went. The tally counts the ids each bulk job **confirmed**, not the ids submitted, so the number is what Zendesk actually changed; a batch with per-ticket failures adds a line saying so, next to the count it contradicts. The leftover line appears only while there's a backlog left to drain.
+
+A leftover the run **deferred** and a match it **never fetched** are reported apart, because only the first is a queue. A deferred review is eligible and still in the query, and solving takes a run's worth out of that query each time, so the next run does reach it. A match the walk never reached is a fault: the next run starts from the same end of the same query and gets no closer, so it says so rather than promising otherwise.
+
+> ⚠️ **11** query matches were never fetched — this run could not see them, and the next one will not either.
 
 **A run that solved nothing reports that too**, rather than staying quiet:
 

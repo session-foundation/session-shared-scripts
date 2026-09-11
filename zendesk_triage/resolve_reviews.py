@@ -87,10 +87,16 @@ import triage  # noqa: E402  (needs the path insert above)
 # floor would have this job close the reviews most worth reading. Changing it is a
 # deliberate edit here, not something a dispatch can do by accident.
 MIN_STARS = 4
-# Zendesk's search API returns at most 1000 results, so a run can never see more
-# than that anyway. At ~420 new reviews a week the first few runs drain the
-# backlog and the five runs after that clear the week's intake.
+# Tickets solved per run, and only that — never the fetch budget. Spending it on the
+# fetch starves the job: the solvable reviews are a thin scatter through a result set
+# held open by low-star ones it never solves, so a fetch that stops early stops on
+# reviews that stay in the query forever, and no later run gets any closer.
+# At ~420 new reviews a week, five runs a week at this bound clear the intake.
 DEFAULT_MAX_TICKETS = 1000
+# Runaway guard on the fetch. fetch_every_ticket ends its created_at walk when a
+# slice adds nothing new, so this only bounds a result set that has grown past
+# anything this job should be draining unattended.
+FETCH_CEILING = 20000
 # update_many takes at most 100 ids per request.
 # https://developer.zendesk.com/api-reference/ticketing/tickets/tickets/#update-many-tickets
 BATCH_SIZE = 100
@@ -261,8 +267,8 @@ def format_tally(counts):
     return parts[0] if parts else ""
 
 
-def build_message(counts, *, url=None, examined=0, attempted=0, remaining=0,
-                  failures=0, dry_run=False):
+def build_message(counts, *, url=None, examined=0, attempted=0, deferred=0,
+                  unfetched=0, failures=0, dry_run=False):
     """The run summary: what the run did, and what to click to check it.
 
     Every applied run posts one, including the runs that solved nothing. A job that
@@ -272,8 +278,13 @@ def build_message(counts, *, url=None, examined=0, attempted=0, remaining=0,
     that die before there is a message to post are covered by an if: failure() step
     in the workflow, which posts to the same channel.
 
-    Keyword-only: these are six independent facts about one run, and at a call site
+    Keyword-only: these are seven independent facts about one run, and at a call site
     `build_message(counts, examined=48, attempted=0)` says which is which.
+
+    `deferred` and `unfetched` are both leftovers and they are not interchangeable.
+    A deferred review is eligible, still in the query, and the next run does solve
+    it. An unfetched match is one the walk never reached, and nothing about the next
+    run makes it more reachable — so it reads as a fault, not as a queue.
     """
     total = sum(counts.values())
     lines = []
@@ -304,11 +315,20 @@ def build_message(counts, *, url=None, examined=0, attempted=0, remaining=0,
         # nothing to do".
         label = "Review what changed" if total else "Everything this job has solved"
         lines.append(f"🔍 [{label}]({url})")
-    if remaining:
-        # Query matches this run did not look at, not reviews: the query cannot
-        # express the star rating, so some of these are not reviews at all.
-        lines.append(f"📥 **{remaining:,}** more tickets match than this run looked "
-                     f"at; the next run picks them up.")
+    if deferred:
+        # Eligible reviews the per-run guard held back. Solving removes a review from
+        # the query, so the set shrinks by a run's worth each time and this one is
+        # the promise it sounds like.
+        noun, it = ("review", "it") if deferred == 1 else ("reviews", "them")
+        lines.append(f"📥 **{deferred:,}** more eligible {noun} than this run's "
+                     f"--max-tickets guard; the next run picks {it} up.")
+    if unfetched:
+        # Not a queue: the walk stopped short of these, and the next run starts from
+        # the same end of the same query, so they do not come back into reach on
+        # their own. Says the number and asks for a look, rather than promising.
+        noun, it = ("match was", "it") if unfetched == 1 else ("matches were", "them")
+        lines.append(f"⚠️ **{unfetched:,}** query {noun} never fetched — this run "
+                     f"could not see {it}, and the next one will not either.")
     return "\n".join(lines)
 
 
@@ -330,7 +350,9 @@ def main():
                              "reports what it would do and changes nothing.")
     parser.add_argument("--max-tickets", type=int, default=DEFAULT_MAX_TICKETS, metavar="N",
                         help=f"Runaway guard on tickets solved per run "
-                             f"(default: {DEFAULT_MAX_TICKETS}, Zendesk's search cap).")
+                             f"(default: {DEFAULT_MAX_TICKETS}). Bounds what is "
+                             f"solved, not what is fetched — every match is always "
+                             f"looked at.")
     parser.add_argument("--tag", default=RESOLVED_TAG,
                         help=f"Tag added to every ticket solved, so they stay "
                              f"identifiable and a trigger can exclude them "
@@ -362,15 +384,21 @@ def main():
 
     session = triage.zendesk_session(email, api_token)
     query = build_query()
-    # Every match, not the newest 1000: the tail of this query is held open by
-    # low-star reviews the job never solves, so a plain fetch hides the solvable
-    # ones behind them for good. See triage.fetch_every_ticket.
+    # FETCH_CEILING, never args.max_tickets: the tail of this query is held open by
+    # low-star reviews the job never solves, so a fetch bounded by the number of
+    # tickets a run may solve hides the solvable ones behind them for good. See
+    # triage.fetch_every_ticket.
     tickets, total_matched = triage.fetch_every_ticket(
-        session, subdomain, query, args.max_tickets)
+        session, subdomain, query, FETCH_CEILING)
     matched = "?" if total_matched is None else total_matched
     print(f"Fetched {len(tickets)} of {matched} matching tickets (query: {query!r}).")
 
     resolvable, skipped = select_resolvable(tickets, MIN_STARS)
+    deferred = max(0, len(resolvable) - args.max_tickets)
+    if deferred:
+        resolvable = resolvable[:args.max_tickets]
+        print(f"Note: {deferred} eligible review(s) over the --max-tickets guard of "
+              f"{args.max_tickets}; the next run picks them up.")
     if skipped:
         reasons = {}
         for _, reason in skipped:
@@ -385,11 +413,12 @@ def main():
         # "looked, found nothing" is the half that proves the job ran.
         print("Nothing to solve.")
 
-    remaining = 0
+    unfetched = 0
     if total_matched is not None and total_matched > len(tickets):
-        remaining = total_matched - len(tickets)
-        print(f"Note: {remaining} more match the query than this run "
-              f"looked at; the next run picks them up.")
+        unfetched = total_matched - len(tickets)
+        print(f"Warning: {unfetched} match(es) the walk never reached. These are out "
+              f"of this job's reach, not queued — raise FETCH_CEILING or narrow the "
+              f"query.")
 
     if not args.apply:
         print("Dry run: nothing was changed. Re-run with --apply to solve them.")
@@ -397,8 +426,8 @@ def main():
             tally_by_stars(resolvable),
             url=solved_search_url(subdomain, args.tag,
                                   search_since() if resolvable else None),
-            examined=len(tickets), attempted=len(resolvable), remaining=remaining,
-            dry_run=True)
+            examined=len(tickets), attempted=len(resolvable), deferred=deferred,
+            unfetched=unfetched, dry_run=True)
         print(f"Discord message that a real run would post:\n{preview}")
         return
 
@@ -429,7 +458,8 @@ def main():
     solved_tickets = [by_id[i] for i in solved_ids if i in by_id]
     message = build_message(tally_by_stars(solved_tickets), url=url,
                             examined=len(tickets), attempted=len(ids),
-                            remaining=remaining, failures=len(failures))
+                            deferred=deferred, unfetched=unfetched,
+                            failures=len(failures))
     posted = True
     if args.no_discord:
         print(f"Discord post skipped (--no-discord):\n{message}")

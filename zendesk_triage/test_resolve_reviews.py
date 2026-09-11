@@ -10,7 +10,9 @@ This script writes to Zendesk, so the tests lean on the guards rather than the h
 path: that a dry run cannot PUT, that only positive app-store reviews are selected,
 and that an asynchronous job's failures are surfaced instead of swallowed.
 """
+import contextlib
 import inspect
+import io
 import os
 import re
 import sys
@@ -22,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import resolve_reviews  # noqa: E402
 import triage  # noqa: E402
 from test_triage import (  # noqa: E402
-    ROOT, FakeResponse, FakeSession, NoSleep, unit_commands)
+    ROOT, FakeResponse, FakeSession, NoSleep, Patched, unit_commands)
 
 
 def review(ticket_id, stars=5, channel="any_channel", subject=None):
@@ -315,8 +317,29 @@ class TestSummaryMessage(unittest.TestCase):
 
     def test_the_leftover_line_appears_only_when_there_is_a_leftover(self):
         self.assertNotIn("📥", resolve_reviews.build_message({5: 2}))
-        self.assertIn("**4,769** more tickets match",
-                      resolve_reviews.build_message({5: 2}, remaining=4769))
+        self.assertIn("**4,769** more eligible reviews",
+                      resolve_reviews.build_message({5: 2}, deferred=4769))
+
+    def test_a_deferred_review_is_promised_to_the_next_run(self):
+        """Solving takes a review out of the query, so the eligible set shrinks by a
+        run's worth each time and the next run really does reach these."""
+        message = resolve_reviews.build_message({5: 2}, deferred=40)
+        self.assertIn("--max-tickets guard", message)
+        self.assertIn("the next run picks them up", message)
+
+    def test_an_unfetched_match_is_not_promised_to_anyone(self):
+        """The walk stopped short of these and the next run starts from the same end
+        of the same query, so "the next run picks them up" would be a false promise."""
+        message = resolve_reviews.build_message({5: 2}, unfetched=11)
+        self.assertIn("**11** query matches were never fetched", message)
+        self.assertNotIn("picks them up", message)
+
+    def test_the_two_leftovers_are_reported_apart(self):
+        """One is a queue and one is a fault; collapsing them into a single count
+        lets a fault be read as a queue."""
+        message = resolve_reviews.build_message({5: 2}, deferred=40, unfetched=11)
+        self.assertIn("**40** more eligible reviews", message)
+        self.assertIn("**11** query matches were never fetched", message)
 
     def test_a_dry_run_message_is_hypothetical(self):
         message = resolve_reviews.build_message({5: 2}, dry_run=True)
@@ -341,7 +364,7 @@ class TestSummaryMessage(unittest.TestCase):
         message, and this proves the worst case stays inside the cap."""
         message = resolve_reviews.build_message(
             {4: 999999, 5: 999999}, examined=999999, attempted=999999,
-            remaining=999999, failures=999999,
+            deferred=999999, unfetched=999999, failures=999999,
             url=resolve_reviews.solved_search_url("subdomain", "auto-resolved-review",
                                                   "2026-08-16"))
         self.assertLess(len(message), triage.MAX_MESSAGE_CHARS)
@@ -375,6 +398,63 @@ class TestSharedDetectionIsNotReimplemented(unittest.TestCase):
         job solves exactly that set, so the two numbers cannot disagree."""
         self.assertEqual(resolve_reviews.MIN_STARS,
                          triage.DEFAULT_REVIEW_STAR_FLOOR + 1)
+
+
+class TestFetchBudgetIsNotTheSolveGuard(unittest.TestCase):
+    """--max-tickets bounds what a run solves, never what it fetches.
+
+    The two cannot share a budget. Solvable reviews are a thin scatter through a
+    result set held open by the 1-3★ ones this job never solves, so a fetch that
+    stops early stops on tickets that stay in the query forever; newer arrivals keep
+    pushing the boundary away from the tail, and nothing past it is reachable by any
+    later run.
+    """
+
+    def drive(self, matched, tickets, argv=()):
+        """Run main() as a dry run over a canned result set; return (budget, out)."""
+        seen = {}
+
+        def fetch_every_ticket(session, subdomain, query, max_tickets):
+            seen["budget"] = max_tickets
+            return list(tickets), matched
+
+        out = io.StringIO()
+        with Patched(resolve_reviews.triage,
+                     fetch_every_ticket=fetch_every_ticket,
+                     get_env=lambda name, cli=None, required=True: "x",
+                     zendesk_session=lambda email, token: FakeSession([])), \
+                Patched(sys, argv=["resolve_reviews.py", *argv]), \
+                contextlib.redirect_stdout(out):
+            resolve_reviews.main()
+        return seen["budget"], out.getvalue()
+
+    def test_the_fetch_is_not_bounded_by_the_per_run_solve_guard(self):
+        budget, _ = self.drive(3, [review(1)], argv=["--max-tickets", "5"])
+        self.assertEqual(budget, resolve_reviews.FETCH_CEILING)
+        self.assertNotEqual(budget, 5)
+
+    def test_the_ceiling_clears_zendesk_s_per_query_result_limit(self):
+        """fetch_every_ticket walks past the 1000-result cap in created_at slices; a
+        ceiling at the cap would stop the walk on its first slice."""
+        self.assertGreater(resolve_reviews.FETCH_CEILING, triage.SEARCH_RESULT_LIMIT)
+
+    def test_the_solve_guard_still_bounds_what_a_run_solves(self):
+        """The guard is what makes `--apply --max-tickets 5` a safe first run."""
+        _, out = self.drive(9, [review(i) for i in range(9)],
+                            argv=["--max-tickets", "5"])
+        self.assertIn("5 review(s) at 4★ or better would be solved", out)
+        self.assertIn("4 eligible review(s) over the --max-tickets guard", out)
+        self.assertIn("**4** more eligible reviews", out)
+
+    def test_a_run_inside_the_guard_defers_nothing(self):
+        _, out = self.drive(2, [review(1), review(2)])
+        self.assertNotIn("📥", out)
+        self.assertNotIn("⚠️", out)
+
+    def test_matches_the_walk_never_reached_are_reported_as_a_fault(self):
+        _, out = self.drive(1002, [review(1)])
+        self.assertIn("1001 match(es) the walk never reached", out)
+        self.assertNotIn("the next run picks them up", out)
 
 
 class TestSchedulerWiring(unittest.TestCase):
