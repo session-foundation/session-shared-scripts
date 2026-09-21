@@ -13,7 +13,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from babel import Locale  # noqa: E402  (needs the path insert above)
-from generate_shared import cldr_locale  # noqa: E402
+from generate_shared import cldr_locale, is_rtl  # noqa: E402
 from generate_language_list import (  # noqa: E402
     build_language_data,
     display_name,
@@ -85,6 +85,17 @@ class TestTerritories(unittest.TestCase):
         # wrong answer rather than a missing one.
         self.assertIsNone(territory_for(cldr_locale('es-419')))
         self.assertIsNone(territory_for(cldr_locale('eo')))
+
+
+class TestTextDirection(unittest.TestCase):
+    def test_cldr_overrules_the_project_setting(self):
+        self.assertTrue(is_rtl(language('bal')))
+        self.assertTrue(is_rtl(language('ku')))
+
+    def test_crowdin_answers_for_a_language_cldr_does_not_know(self):
+        self.assertIsNone(cldr_locale('qqq'))
+        self.assertTrue(is_rtl(language('qqq', text_direction='rtl')))
+        self.assertFalse(is_rtl(language('qqq')))
 
 
 class TestOutput(unittest.TestCase):

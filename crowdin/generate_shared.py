@@ -177,6 +177,20 @@ def cldr_locale(locale_key: str) -> Optional[Locale]:
     return None
 
 
+def is_rtl(language: Dict[str, Any]) -> bool:
+    """
+    Whether a language is written right to left.
+
+    CLDR answers it wherever it knows the language, because the direction belongs to the script:
+    Crowdin's project setting has Baluchi as left-to-right where its Perso-Arabic script is not.
+    Crowdin's own answer is the fallback for a language CLDR does not know.
+    """
+    locale = cldr_locale(get_locale_key(language['locale'], language['twoLettersCode']))
+    if locale is None:
+        return language['textDirection'] == 'rtl'
+    return locale.text_direction == 'rtl'
+
+
 def setup_generation(input_directory: str):
     # Extract the project information
     print_progress("Processing project info...")
@@ -198,9 +212,8 @@ def setup_generation(input_directory: str):
     print_success(f"Project info processed, {
                   num_languages} languages will be converted")
 
-    # Convert the non-translatable strings to the desired format
     rtl_languages: List[str] = [
-        lang for lang in target_languages if lang["textDirection"] == "rtl"]
+        lang for lang in target_languages if is_rtl(lang)]
 
     return {
         "source_language": source_language,
