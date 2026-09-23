@@ -18,6 +18,7 @@ import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qsl, urlsplit
 
 import requests
 
@@ -1281,6 +1282,26 @@ class TestCoverage(unittest.TestCase):
         covered = set().union(*coverage)
         self.assertEqual(covered, {f["id"] for f in findings})
         self.assertIn("more", digest_text(messages))
+
+
+class TestDigestWebhookUrl(unittest.TestCase):
+    """Discord ignores `components` on a webhook post without this param, and the
+    digest is nothing but components."""
+
+    def test_adds_the_param(self):
+        self.assertEqual(
+            triage.digest_webhook_url("https://discord.com/api/webhooks/1/tok"),
+            "https://discord.com/api/webhooks/1/tok?with_components=true")
+
+    def test_keeps_an_existing_query(self):
+        url = triage.digest_webhook_url(
+            "https://discord.com/api/webhooks/1/tok?thread_id=42")
+        self.assertEqual(dict(parse_qsl(urlsplit(url).query)),
+                         {"thread_id": "42", "with_components": "true"})
+
+    def test_does_not_duplicate_the_param(self):
+        once = triage.digest_webhook_url("https://discord.com/api/webhooks/1/tok")
+        self.assertEqual(triage.digest_webhook_url(once), once)
 
 
 class TestPostToDiscord(unittest.TestCase):

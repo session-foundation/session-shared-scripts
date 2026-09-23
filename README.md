@@ -133,7 +133,7 @@ The header accounts for the batch in full, so nothing is dropped silently. The b
 
 Two limits bound a message and whichever binds first splits it — 40 components, which no longer binds now that a ticket costs one, and `MAX_MESSAGE_TEXT_CHARS` across all its text, which does. `MAX_ENTRIES_PER_MESSAGE` stays at 10 because that is a readable message, not because it is the ceiling. Lines are clipped (`SUMMARY_CHARS`, `ROOT_CAUSE_CHARS`), and each message records which ticket ids it accounts for, which is what makes a partial post failure recoverable.
 
-**This is why the digest posts as the app rather than through a webhook.** A plain incoming webhook silently drops interactive components, so the digest needs `DISCORD_BOT_TOKEN` and `ZENDESK_DISCORD_CHANNEL_ID` where it used to need `ZENDESK_DISCORD_WEBHOOK_URL`. That webhook still exists — the positive-review tally and the failure alerts use it, and neither needs a button.
+**That is what lets everything here go over one incoming webhook** — the digest, the positive-review tally and the failure alerts alike. A webhook no application owns may send non-interactive components and nothing else, so adding an interactive one means moving the digest back to a bot token and a channel id. The request needs `?with_components=true` (`digest_webhook_url`): Discord ignores the `components` field on a webhook post without it, and the digest is nothing but components.
 
 ### Deduplication
 
@@ -161,8 +161,7 @@ Two caveats worth knowing:
 | `ZENDESK_SUBDOMAIN`   | Zendesk subdomain (`mycompany` → `mycompany.zendesk.com`) |
 | `ZENDESK_EMAIL`       | Agent email used for Zendesk API-token auth             |
 | `ZENDESK_API_TOKEN`   | Zendesk API token                                       |
-| `DISCORD_BOT_TOKEN` | Bot token for the app the digest posts as. It carried interactive components when the cards had buttons; the buttons are gone and the transport is simply left as it is |
-| `ZENDESK_DISCORD_CHANNEL_ID` | Channel the digest posts into. The bot needs Send Messages there |
+| `ZENDESK_DISCORD_WEBHOOK_URL` | Discord incoming webhook for the triage channel, shared with the tally and the failure alerts |
 
 ### Claude Authentication
 
@@ -250,7 +249,7 @@ Offline tests covering the window arithmetic, dedup partitioning, state round-tr
 
 ### Local Testing
 
-Local runs need the `claude` CLI on `PATH` and logged in (`claude --version`), alongside the Zendesk credentials. `--dry-run` prints the Discord payload instead of posting, so no bot token is needed. Keep it to local runs: it prints ticket content. `--no-discord` prints counts only:
+Local runs need the `claude` CLI on `PATH` and logged in (`claude --version`), alongside the Zendesk credentials. `--dry-run` prints the Discord payload instead of posting, so no webhook is needed. Keep it to local runs: it prints ticket content. `--no-discord` prints counts only:
 
 ```
 pip install -r zendesk_triage/requirements.txt

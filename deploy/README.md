@@ -131,11 +131,9 @@ ZENDESK_SUBDOMAIN=
 ZENDESK_EMAIL=
 ZENDESK_API_TOKEN=
 
-# The digest posts as the app rather than through the webhook below.
-DISCORD_BOT_TOKEN=
-# Where the digest lands. The real triage channel, not a test server.
-ZENDESK_DISCORD_CHANNEL_ID=
-# The review tally and the failure alerts. Same channel, addressed as a webhook.
+# Where the digest, the review tally and the failure alerts all land. The real
+# triage channel, not a test server: a webhook is bound to the channel it was
+# created in, so this one value decides where everything goes.
 ZENDESK_DISCORD_WEBHOOK_URL=
 
 # Verifies Zendesk's webhook signatures, for the `claude:` private-note route.
@@ -265,33 +263,18 @@ is the coupling self-hosting was meant to remove.
 
 The Zendesk half does not move — replies are written on the ticket, not from Discord,
 so nothing about the reply flow is involved. What moves is everything that identifies
-the server and channel the digest posts into, plus the bot that posts it.
-`DISCORD_BOT_TOKEN` changes with the application. DNS and nginx stay exactly as they
-are.
+the channel everything posts into. DNS and nginx stay exactly as they are.
 
-What the server's admins have to do:
-
-1. **Create an application** (Developer Portal → New Application) and add a bot to it.
-   You need its **Application ID** and **bot token** — the token sent privately, since
-   it can post as the app. No Interactions Endpoint URL: the digest is read-only and
-   the app receives nothing.
-2. **Invite the bot**:
-   `https://discord.com/oauth2/authorize?client_id=<APP_ID>&scope=bot&permissions=19456`
-   — View Channel, Send Messages, Embed Links, and nothing else. No slash commands, no
-   message-content intent, no reading the channel. A private target channel also needs
-   View Channel and Send Messages granted to the bot's role on the channel itself.
-3. **Create a webhook in that channel** (Channel Settings → Integrations → Webhooks)
-   and send the URL privately. A webhook is bound to the channel it was created in, so
-   the old one cannot reach the new one.
-
-Channel ids need no admin: enable Developer Mode (User Settings → Advanced), then
-right-click → Copy Channel ID.
+One thing for the server's admins: **create a webhook in the target channel**
+(Channel Settings → Integrations → Webhooks) and send the URL privately. A webhook is
+bound to the channel it was created in, so the old one cannot reach the new one. No
+application and no bot invite — the digest carries no interactive components, which is
+the whole of what a webhook may not send.
 
 Then, on the host:
 
 ```bash
-"${EDITOR:-nano}" /etc/zendesk/env   # DISCORD_BOT_TOKEN, ZENDESK_DISCORD_CHANNEL_ID,
-                                     # ZENDESK_DISCORD_WEBHOOK_URL,
+"${EDITOR:-nano}" /etc/zendesk/env   # ZENDESK_DISCORD_WEBHOOK_URL,
                                      # ZENDESK_WEBHOOK_SECRET, and RELAY_DRY_RUN=1
                                      # for the first run
 mv /var/lib/zendesk/seen.json /var/lib/zendesk/seen.json.old

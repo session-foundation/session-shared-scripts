@@ -33,15 +33,10 @@ Config (env vars, or flags for local runs):
                           Classification runs through the locally installed
                           Claude Code CLI, which supplies its own credentials,
                           so no Claude key lives in this deployment at all.
-    DISCORD_BOT_TOKEN     Bot token for the app that answers the digest's Comment
-                          buttons (see relay.py). Every ticket gets one, and an
-                          incoming webhook cannot send interactive components —
-                          only an application can — so this posts as the bot
+    ZENDESK_DISCORD_WEBHOOK_URL
+                          Discord incoming webhook for the triage channel, shared
+                          with resolve_reviews.py's tally and the failure alerts
                           (not needed with --dry-run or --no-discord)
-    ZENDESK_DISCORD_CHANNEL_ID
-                          Channel the digest posts into. The bot needs Send Messages
-                          there. Replaces ZENDESK_DISCORD_WEBHOOK_URL, which
-                          resolve_reviews.py still uses for its tally.
     ZENDESK_QUERY         (optional) Zendesk search query; see DEFAULT_QUERY
     ZENDESK_TRIAGE_MODEL  (optional) Claude model id or alias; defaults to
                           claude-opus-5. Set it to override, e.g. `sonnet` for a
@@ -79,6 +74,7 @@ import textwrap
 import time
 from datetime import datetime, timedelta, timezone
 from functools import partial
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
 
@@ -1507,10 +1503,10 @@ COLLAPSED_LINKS_CHARS = 900
 # The digest is a Container of Text Displays: one block per ticket, so a reader skims
 # lines rather than a wall, and each message records which ticket ids it accounts for.
 #
-# It is posted by the app rather than through an incoming webhook. That was originally
-# because each card carried a Comment button and a plain webhook cannot send
-# interactive components; the buttons are gone now — replies are written on the ticket
-# itself, see note_reply.py — and the transport is simply left as it is.
+# Every component here is non-interactive, which is what lets a plain incoming webhook
+# carry it: Discord allows a webhook that no application owns only those. Adding an
+# interactive one would need the transport moved back to a bot token — see
+# test_the_digest_carries_no_interactive_components.
 #
 # https://docs.discord.com/developers/components/reference
 COMPONENTS_V2_FLAG = 1 << 15
@@ -1796,28 +1792,20 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
     return messages, coverage
 
 
-def discord_bot_session(token):
-    """A session authorized as the application, for posting the digest.
+def digest_webhook_url(webhook_url):
+    """The webhook, told to respect the components field.
 
-    The digest carries a Comment button per ticket, and an incoming webhook cannot
-    send interactive components at all — only an application can. That is why the
-    digest posts to a channel as the bot rather than through the webhook the
-    positive-review tally still uses.
+    Discord ignores `components` on a webhook post without it, and the digest is
+    nothing but components.
     """
-    session = requests.Session()
-    session.headers["Authorization"] = f"Bot {token}"
-    return session
-
-
-def channel_messages_url(channel_id):
-    return f"https://discord.com/api/v10/channels/{channel_id}/messages"
+    parts = urlsplit(webhook_url)
+    query = dict(parse_qsl(parts.query))
+    query["with_components"] = "true"
+    return urlunsplit(parts._replace(query=urlencode(query)))
 
 
 def post_to_discord(session, url, messages):
     """POST each message in order; return how many Discord accepted.
-
-    Transport-agnostic on purpose: the digest passes a bot session and a channel
-    URL, while resolve_reviews passes a bare session and an incoming webhook.
 
     Stops at the first failure and returns the accepted count instead of exiting, so
     the caller can record the tickets that did land before signalling the failure —
@@ -1846,10 +1834,8 @@ def main():
     parser.add_argument("--subdomain", help="Zendesk subdomain (else ZENDESK_SUBDOMAIN).")
     parser.add_argument("--email", help="Zendesk agent email (else ZENDESK_EMAIL).")
     parser.add_argument("--api-token", help="Zendesk API token (else ZENDESK_API_TOKEN).")
-    parser.add_argument("--bot-token",
-                        help="Discord bot token (else DISCORD_BOT_TOKEN). The digest's\n"
-                             "Comment buttons mean it must post as the app, not a webhook.")
-    parser.add_argument("--channel", help="Discord channel id (else ZENDESK_DISCORD_CHANNEL_ID).")
+    parser.add_argument("--webhook",
+                        help="Discord webhook URL (else ZENDESK_DISCORD_WEBHOOK_URL).")
     parser.add_argument("--query", help="Zendesk search query (else ZENDESK_QUERY, else default). "
                                         "Takes precedence over --window-hours.")
     parser.add_argument("--window-hours", type=int, metavar="N",
@@ -1903,8 +1889,7 @@ def main():
     # credential should stop the run rather than have it spend tokens on a digest it
     # cannot deliver. A dump exits before rendering, so it never needs them either.
     needs_discord = not (args.dry_run or args.no_discord or args.dump_batch)
-    bot_token = get_env("DISCORD_BOT_TOKEN", args.bot_token, required=needs_discord)
-    channel_id = get_env("ZENDESK_DISCORD_CHANNEL_ID", args.channel, required=needs_discord)
+    webhook = get_env("ZENDESK_DISCORD_WEBHOOK_URL", args.webhook, required=needs_discord)
     model = args.model or os.environ.get("ZENDESK_TRIAGE_MODEL") or DEFAULT_MODEL
 
     stats = {}
@@ -2073,8 +2058,8 @@ def main():
               f"next run.")
         return
 
-    posted = post_to_discord(discord_bot_session(bot_token),
-                             channel_messages_url(channel_id), messages)
+    # A fresh session, never the Zendesk one: that carries the API-token auth header.
+    posted = post_to_discord(requests.Session(), digest_webhook_url(webhook), messages)
     print(f"Posted {posted} of {len(messages)} Discord message(s).")
 
     # Record only tickets covered by messages Discord actually accepted, so a partial
