@@ -1,0 +1,14 @@
+# What ban.py needs from PyPI. The suite is stdlib unittest and imports nothing else.
+requests==2.34.2
+
+# The blinding factor and blinded_ids are still derived here: the scalar arithmetic for
+# those reaches session_util only in a release later than 0.1.0.
+pynacl==1.6.2
+
+# NOT INSTALLABLE FROM HERE. The blinded request signatures come from session_util,
+# libsession-util's Python binding, which is published as a deb rather than a wheel:
+#
+#     https://deb.oxen.io   ->   sudo apt install python3-session-util
+#
+# It is a compiled extension built per Python minor version, so a virtualenv needs
+# --system-site-packages to see it.
