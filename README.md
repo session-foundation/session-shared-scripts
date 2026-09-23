@@ -647,9 +647,11 @@ It is a compiled extension built per Python minor version, so a Python upgrade n
 matching package, and a virtualenv needs `--system-site-packages` to see it. This is why
 `ban.py` is run from a checkout by hand rather than deployed anywhere.
 
-pynacl stays for the blinding factor and the two candidate blinded ids, which the binding
-does not expose. [session-foundation/libsession-python#2](https://github.com/session-foundation/libsession-python/pull/2)
-adds `blind15_id`; until a release carries it, that derivation is ours.
+pynacl stays for the blinding factor and for `blinded_ids`, which the deletion step walks:
+a Session ID does not carry the sign of the key behind it, so both candidates have to be
+tried. `session_util` grew a `blind15_id` covering this in
+[`7e8d126`](https://github.com/session-foundation/libsession-python/commit/7e8d126), which
+no packaged release carries yet.
 
 ## Workflow Failure Notificaiton
 
