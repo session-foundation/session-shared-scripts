@@ -1,6 +1,14 @@
-# What ban.py needs. The suite is stdlib unittest and imports nothing else.
+# What ban.py needs from PyPI. The suite is stdlib unittest and imports nothing else.
 requests==2.32.3
 
-# Ed25519 signing and the scalar arithmetic the blinded request signatures are built
-# from (nacl.bindings). pysogs verifies those signatures with the same primitives.
+# The blinding factor and the two candidate blinded ids are still derived here: the
+# scalar arithmetic for those is not exposed by session_util yet.
 pynacl==1.6.2
+
+# NOT INSTALLABLE FROM HERE. The blinded request signatures come from session_util,
+# libsession-util's Python binding, which is published as a deb rather than a wheel:
+#
+#     https://deb.oxen.io   ->   sudo apt install python3-session-util
+#
+# It is a compiled extension built per Python minor version, so a virtualenv needs
+# --system-site-packages to see it.

@@ -622,13 +622,34 @@ yet. Deleting messages is the step that needs the blinded form — see
 ### Tests
 
 ```sh
+sudo apt install python3-session-util      # see "Dependencies" below
 pip install -r sogs_moderation/requirements.txt
 python -m unittest discover -s sogs_moderation -v
 ```
 
-The signing tests check our request signatures against the vectors pysogs publishes in
-its own `contrib/auth-example.py`, so a broken port of that construction fails here
-rather than at the server.
+The blinded signature is checked by verifying it under the blinded pubkey rather than
+against a fixed vector. A blinded signature is not deterministic across implementations,
+because the nonce derivation is not part of what a verifier checks, and pysogs accepts it
+as a plain Ed25519 signature under that pubkey. The unblinded signature is deterministic
+and is still checked against pysogs' published vector.
+
+### Dependencies
+
+The blinded request signatures come from `session_util`, libsession-util's Python
+binding. It is published as a deb rather than a wheel, so `pip` cannot reach it:
+
+```sh
+# https://deb.oxen.io has the repository setup
+sudo apt install python3-session-util
+```
+
+It is a compiled extension built per Python minor version, so a Python upgrade needs a
+matching package, and a virtualenv needs `--system-site-packages` to see it. This is why
+`ban.py` is run from a checkout by hand rather than deployed anywhere.
+
+pynacl stays for the blinding factor and the two candidate blinded ids, which the binding
+does not expose. [session-foundation/libsession-python#2](https://github.com/session-foundation/libsession-python/pull/2)
+adds `blind15_id`; until a release carries it, that derivation is ours.
 
 ## Workflow Failure Notificaiton
 

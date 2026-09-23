@@ -61,6 +61,14 @@ only tried the 05 form would report an emptied account for every id.
 Which of the two blinded ids an account is stored under is not derivable (the sign is
 lost in blinding), so the deletion tries each in turn and the first non-404 answers.
 
+## Dependencies
+
+The blinded request signatures come from session_util, libsession-util's Python binding,
+which ships as a deb rather than a wheel: `apt install python3-session-util` from
+https://deb.oxen.io. It is compiled per Python minor version, so a virtualenv needs
+--system-site-packages. pynacl stays for the blinding factor and the two candidate
+blinded ids, which the binding does not expose.
+
 ## Configuration
 
 The server is SOGS_URL/SOGS_PUBKEY below, fixed in the script. This bans people from
@@ -98,20 +106,28 @@ import secrets
 import sys
 import time
 from base64 import b64encode
-from hashlib import blake2b, sha512
+from hashlib import blake2b
 
 import nacl.bindings as sodium
 import requests
 from nacl.signing import SigningKey
+
+try:
+    from session_util import blinding, xed25519
+except ImportError as e:  # pragma: no cover - environment, not logic
+    raise SystemExit(
+        "session_util is missing. It is libsession-util's Python binding, and it is not on "
+        "PyPI — install it from the Session apt repository:\n"
+        "    https://deb.oxen.io\n"
+        "    sudo apt install python3-session-util\n"
+        "A virtualenv needs --system-site-packages to see it."
+    ) from e
 
 SESSION_ID_RE = re.compile(r'\A05[0-9a-fA-F]{64}\Z')
 
 # The server we moderate. Not configurable on purpose — see "Configuration" above.
 SOGS_URL = 'https://open.getsession.org'
 SOGS_PUBKEY = 'a03c383cf63c3c4efe67acc52112a6dd734b3a946b9545f488aaa93da7991238'
-
-# Curve25519 field order, for the u -> y birational map in ed25519_pubkey().
-FIELD_P = 2**255 - 19
 
 HTTP_TIMEOUT = 30
 
@@ -137,42 +153,13 @@ class PartialBan(SogsError):
                          f"({label} -> {code}: {str(body)[:200]})")
 
 
-def sha512_parts(*parts):
-    hasher = sha512()
-    for part in parts:
-        if isinstance(part, (list, tuple)):
-            for p in part:
-                hasher.update(p)
-        else:
-            hasher.update(part)
-    return hasher.digest()
-
-
 def blinding_factor(server_pubkey: bytes) -> bytes:
     return sodium.crypto_core_ed25519_scalar_reduce(blake2b(server_pubkey, digest_size=64).digest())
 
 
-def blinded_keys(server_pubkey: bytes, signing_key: SigningKey):
-    """Returns (ka, kA): our blinded private scalar and blinded pubkey for this server."""
-    k = blinding_factor(server_pubkey)
-    # to_curve25519_private_key() is the sodium-supported way to get 'a', the Ed25519
-    # private scalar: the converted X25519 key is that same scalar.
-    a = signing_key.to_curve25519_private_key().encode()
-    ka = sodium.crypto_core_ed25519_scalar_mul(k, a)
-    return ka, sodium.crypto_scalarmult_ed25519_base_noclamp(ka)
-
-
-def blinded_signature(message_parts, signing_key: SigningKey, ka: bytes, kA: bytes) -> bytes:
-    """
-    Ed25519 signature under the blinded key, with kA mixed into the hash that yields r
-    so that different blinded pubkeys are domain separated. Verification is unaffected.
-    """
-    h_rh = sha512(signing_key.encode()).digest()[32:]
-    r = sodium.crypto_core_ed25519_scalar_reduce(sha512_parts(h_rh, kA, message_parts))
-    sig_r = sodium.crypto_scalarmult_ed25519_base_noclamp(r)
-    hram = sodium.crypto_core_ed25519_scalar_reduce(sha512_parts(sig_r, kA, message_parts))
-    sig_s = sodium.crypto_core_ed25519_scalar_add(r, sodium.crypto_core_ed25519_scalar_mul(hram, ka))
-    return sig_r + sig_s
+def blinded_pubkey(server_pubkey: bytes, signing_key: SigningKey) -> bytes:
+    """Our blinded (15) pubkey for this server: the id the server knows us by."""
+    return blinding.blind15_key_pair(signing_key.encode(), server_pubkey).pubkey
 
 
 def auth_headers(signing_key, server_pubkey, method, path, timestamp, nonce, body, blinded):
@@ -188,9 +175,8 @@ def auth_headers(signing_key, server_pubkey, method, path, timestamp, nonce, bod
         to_sign.append(blake2b(body, digest_size=64).digest())
 
     if blinded:
-        ka, kA = blinded_keys(server_pubkey, signing_key)
-        pubkey = '15' + kA.hex()
-        sig = blinded_signature(to_sign, signing_key, ka, kA)
+        pubkey = '15' + blinded_pubkey(server_pubkey, signing_key).hex()
+        sig = blinding.blind15_sign(signing_key.encode(), server_pubkey, b''.join(to_sign))
     else:
         pubkey = '00' + signing_key.verify_key.encode().hex()
         sig = signing_key.sign(b''.join(to_sign)).signature
@@ -215,8 +201,7 @@ def ed25519_pubkey(session_id: str) -> bytes:
     in blinded_ids() fails on a point that is not on the curve, and a Session ID
     mistyped out of a ticket is exactly how that happens.
     """
-    u = int.from_bytes(bytes.fromhex(session_id[2:]), 'little')
-    y = ((u - 1) * pow(u + 1, FIELD_P - 2, FIELD_P) % FIELD_P).to_bytes(32, 'little')
+    y = xed25519.pubkey(bytes.fromhex(session_id[2:]))
     if not sodium.crypto_core_ed25519_is_valid_point(y):
         raise SogsError(f"{session_id} is not a usable Session ID: not a valid public key")
     return y

@@ -9,9 +9,12 @@ drift in our port of that construction breaks these before it reaches the server
 import contextlib
 import io
 import unittest
+from base64 import b64decode
+from hashlib import blake2b
 from unittest import mock
 
-from nacl.signing import SigningKey
+from nacl.exceptions import BadSignatureError
+from nacl.signing import SigningKey, VerifyKey
 
 import ban
 
@@ -24,6 +27,15 @@ PATH = '/room/the-best-room/messages/recent?limit=25'
 SESSION_ID = '0588672ccb97f40bb57238989226cf429b575ba355443f47bc76c5ab144a96c65b'
 BLINDED_ABS = '1598932d4bccbe595a8789d7eb1629cefc483a0eaddc7e20e8fe5c771efafd9a75'
 BLINDED_NEG = '1598932d4bccbe595a8789d7eb1629cefc483a0eaddc7e20e8fe5c771efafd9af5'
+
+
+def signed_bytes(body=None):
+    """The exact bytes auth_headers signs, so a signature can be verified here."""
+    parts = [bytes.fromhex(SERVER_PUBKEY), bytes.fromhex(NONCE),
+             str(TIMESTAMP).encode(), b'GET', PATH.encode()]
+    if body:
+        parts.append(blake2b(body, digest_size=64).digest())
+    return b''.join(parts)
 
 
 def headers(blinded, body=None):
@@ -51,12 +63,23 @@ class TestSigning(unittest.TestCase):
         )
 
     def test_blinded(self):
+        """Checked by verification rather than against a fixed vector: a blinded signature
+        is not deterministic across implementations, because the nonce derivation is not
+        part of what a verifier checks. pysogs verifies it as a plain Ed25519 signature
+        under the blinded pubkey, so that is the property worth asserting."""
         h = headers(blinded=True)
         self.assertEqual(h['X-SOGS-Pubkey'], BLINDED_NEG)
-        self.assertEqual(
-            h['X-SOGS-Signature'],
-            'gYqpWZX6fnF4Gb2xQM3xaXs0WIYEI49+B8q4mUUEg8Rw0ObaHUWfoWjMHMArAtP9QlORfiydsKWz1o6zdPVeCQ==',
+        VerifyKey(bytes.fromhex(BLINDED_NEG[2:])).verify(
+            signed_bytes(), b64decode(h['X-SOGS-Signature'])
         )
+
+    def test_blinded_signature_is_rejected_under_the_wrong_key(self):
+        """Guards the check above: verify() must be capable of failing here."""
+        h = headers(blinded=True)
+        with self.assertRaises(BadSignatureError):
+            VerifyKey(bytes.fromhex(BLINDED_ABS[2:])).verify(
+                signed_bytes(), b64decode(h['X-SOGS-Signature'])
+            )
 
     def test_body_changes_the_signature(self):
         self.assertNotEqual(
@@ -74,9 +97,23 @@ class TestBlinding(unittest.TestCase):
             ban.blinded_ids(SESSION_ID, bytes.fromhex(SERVER_PUBKEY)), (BLINDED_ABS, BLINDED_NEG)
         )
 
+    def test_hex_that_is_not_a_key_is_refused(self):
+        """xed25519.pubkey maps any 32 bytes to a point-shaped result without judging it,
+        so the curve check is the whole defence against a Session ID mistyped out of a
+        ticket. Both of these are the right shape and neither is a key."""
+        for bad in ('ff' * 32, '00' * 32):
+            with self.assertRaises(ban.SogsError):
+                ban.ed25519_pubkey('05' + bad)
+
+    def test_a_real_session_id_survives_that_check(self):
+        """Guards the test above: the check must not simply reject everything."""
+        self.assertEqual(len(ban.ed25519_pubkey(SESSION_ID)), 32)
+
     def test_the_signing_key_blinds_to_one_of_them(self):
-        """The key's own blinded pubkey must be one of the two we would look it up under."""
-        _, kA = ban.blinded_keys(bytes.fromhex(SERVER_PUBKEY), SigningKey(bytes.fromhex(SEED)))
+        """Ties the two together: libsession derives our own blinded pubkey, blinded_ids
+        derives the candidates for an account whose key we do not hold, and the first must
+        be one of the second or the two disagree about what this server calls us."""
+        kA = ban.blinded_pubkey(bytes.fromhex(SERVER_PUBKEY), SigningKey(bytes.fromhex(SEED)))
         self.assertIn('15' + kA.hex(), ban.blinded_ids(SESSION_ID, bytes.fromhex(SERVER_PUBKEY)))
 
 
