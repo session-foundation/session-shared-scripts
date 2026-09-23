@@ -34,8 +34,11 @@ accounts: GET /room/<token>/permissions reports room-level bans only, and answer
 ours anyway. An inbox probe can tell a globally banned account from a live one, but only
 as a before/after pair: alone, a 404 cannot be told from an account never seen.
 
-A /sequence stops at its first failure, so a partial application is visible rather than
-silent — the steps that ran are printed and the id is counted as failed.
+A /sequence stops at its first failure, and a deletion that never reaches the server is
+caught rather than raised, so a partial application is visible rather than silent — the
+steps that ran are printed and the id is counted as failed. Re-running is how the deletion
+is retried: the ban is idempotent, and an errored attempt leaves the remaining id forms
+untried.
 
 The ban is still sent as a one-step /sequence rather than a bare POST: the deletion
 cannot join it, because which id form the delete route answers to is not known until it
@@ -119,7 +122,8 @@ class SogsError(RuntimeError):
 
 
 class PartialBan(SogsError):
-    """A /sequence that stopped part-way. Carries the steps that did run.
+    """A run that stopped part-way: a /sequence that aborted, or a deletion that never
+    reached the server. Carries the steps that did run.
 
     Distinct from a plain SogsError because the account is left half-actioned: the
     caller has to print what landed before it gives up on this id.
@@ -332,7 +336,13 @@ def apply_to(client, sid, unban):
         raise PartialBan(sid, outcome, total_steps)
 
     if delete_messages:
-        form, code, body = delete_all_posts(client, sid)
+        try:
+            form, code, body = delete_all_posts(client, sid)
+        except SogsError as e:
+            # The ban has already landed. Letting this escape would drop the outcome on
+            # the floor and report a banned account as untouched.
+            raise PartialBan(sid, outcome + [('delete messages', 'error', str(e))],
+                             total_steps) from e
         # Every form answered 404: no account here under any id the server could know.
         outcome.append((f'delete messages ({form})', code, {'total': 0, 'rooms': {}} if code == 404 else body))
         if code != 404 and not 200 <= code < 300:
@@ -364,11 +374,14 @@ def report(sid, outcome):
         # Only a 2xx or the every-form 404 is a count. A refused deletion can carry a JSON
         # body too, and formatting that as a count prints a failure as "0 deleted" in the
         # one line that answers the ticket.
-        countable = 200 <= code < 300 or code == 404
+        # A step that never reached the server carries its error text in place of a
+        # status, so nothing here may assume `code` is a number.
+        succeeded = isinstance(code, int) and 200 <= code < 300
+        countable = succeeded or code == 404
         if label.startswith('delete messages') and countable and isinstance(body, dict):
             touched = ', '.join(f"{t}: {n}" for t, n in (body.get('rooms') or {}).items() if n)
             note = f"  {body.get('total', 0)} deleted" + (f" ({touched})" if touched else "")
-        elif not 200 <= code < 300:
+        elif not succeeded:
             note = f"  {str(body)[:120]}"
         print(f"  {label:<24}{code}{note}")
 

@@ -95,6 +95,8 @@ class FakeClient:
     def request(self, method, path, body_json=None):
         self.tried.append(path)
         res = self.deletes.pop(0) if self.deletes else {'code': 404, 'body': 'No such user'}
+        if isinstance(res, Exception):
+            raise res
         return res['code'], res['body']
 
 
@@ -185,6 +187,17 @@ class TestApply(unittest.TestCase):
         with self.assertRaises(ban.PartialBan):
             ban.apply_to(client, SESSION_ID, unban=True)
 
+    def test_a_deletion_that_never_reached_the_server_keeps_the_ban(self):
+        """The ban has landed by then, so a network error on the deletion must not
+        escape as a plain SogsError: that reports a banned account as untouched."""
+        client = FakeClient([ok({})], [ban.SogsError('DELETE /rooms/all/05… failed: timed out')])
+        with self.assertRaises(ban.PartialBan) as e:
+            ban.apply_to(client, SESSION_ID, unban=False)
+        self.assertEqual([(label, code) for label, code, _ in e.exception.outcome],
+                         [('server-wide ban', 200), ('delete messages', 'error')])
+        self.assertIn('timed out', e.exception.outcome[-1][2])
+        self.assertIn('2/2', str(e.exception))
+
 
 class TestReport(unittest.TestCase):
     """The per-step block is what gets pasted into the ticket reply, so a failure must
@@ -207,6 +220,13 @@ class TestReport(unittest.TestCase):
         self.assertIn('3 deleted', line)
         self.assertIn('session-updates: 3', line)
         self.assertNotIn('quiet', line)
+
+    def test_a_step_with_no_status_renders_its_error(self):
+        """A deletion that never reached the server carries error text where every other
+        step carries a number."""
+        line = self.render([('delete messages', 'error', 'DELETE /rooms/all/05… failed: timed out')])
+        self.assertNotIn('deleted', line)
+        self.assertIn('timed out', line)
 
     def test_an_every_form_404_is_a_count_not_an_error(self):
         """No account under any id form leaves the ban standing with nothing to delete."""

@@ -532,6 +532,10 @@ that ran are printed, the id is counted as failed, and the run exits non-zero.
 A refused step prints the server's answer rather than a count, so a deletion that was
 turned down cannot read as an emptied account in the line that answers the ticket.
 
+A deletion that never reaches the server prints `error` in place of a status, so the ban
+that already landed is still reported. Re-run to retry it: the ban is idempotent, and an
+errored attempt leaves the remaining id forms untried.
+
 There is deliberately no read-back of the resulting state, because nothing on the server
 lists globally banned accounts: `GET /room/<token>/permissions` reports room-level bans
 only, and answers `500` on ours anyway. An inbox probe distinguishes a globally banned
