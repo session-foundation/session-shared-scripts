@@ -1,0 +1,6 @@
+# What ban.py needs. The suite is stdlib unittest and imports nothing else.
+requests==2.32.3
+
+# Ed25519 signing and the scalar arithmetic the blinded request signatures are built
+# from (nacl.bindings). pysogs verifies those signatures with the same primitives.
+pynacl==1.6.2

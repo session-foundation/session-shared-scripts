@@ -488,6 +488,132 @@ python zendesk_triage/note_reply.py --ticket 27603 --dry-run
 A ticket with no command note prints `no command note to act on` and stops, so this
 is safe to point at anything.
 
+## Community Bans
+
+Abuse reports arrive through Zendesk with a Session ID. [`sogs_moderation/ban.py`](sogs_moderation/ban.py)
+bans those IDs from the whole SOGS we run, not room by room, and prints what the
+server answered at each step, so the reply to the ticket can say what happened:
+
+```sh
+set -a && . ./.env && set +a                 # SOGS_MOD_SEED
+python sogs_moderation/ban.py 05abc...def
+```
+
+The two bans go out as one `/sequence` — global, then every room we moderate — and the
+deletion follows once they have landed (skip it with `--keep-messages`). `--dry-run`
+prints what would be sent and sends nothing; `--unban` lifts both bans, though deleted
+messages are gone for good.
+
+The per-room bans are not redundant with the global one. Other moderators' clients read
+room bans only — Session Desktop's ban button sends `rooms: [<this room>]` with an
+explicit `global: false` — so without them the account shows as unbanned to everyone
+else moderating.
+
+### Confirming the ban
+
+Each step's HTTP status is the confirmation, and the script prints one line per step:
+
+```
+05abc...def
+  server-wide ban       200
+  ban in all rooms      200
+  delete messages       200  17 deleted (session-updates: 12, oxen-updates: 5)
+```
+
+pysogs does the work inside the request — `user.ban()` writes the row before the
+handler returns — so a `2xx` is the server saying it applied that step. A `/sequence`
+stops at its first failure, so a partial application shows as a short reply: the steps
+that ran are printed, the id is counted as failed, and the run exits non-zero.
+
+There is deliberately no read-back of the resulting state. `GET /room/<token>/permissions`
+is the only endpoint that reports room bans and it answers `500` on our server; the
+per-id variant is not deployed there. An inbox probe distinguishes a globally banned
+account from a live one, but only as a before/after pair — on its own, a `404` can't be
+told apart from an account the server has never seen.
+
+### Which id form
+
+Our server is older than pysogs [`21e2ef2`](https://github.com/session-foundation/session-pysogs/commit/21e2ef2),
+which widened several routes from blinded ids to either form. Probed against it:
+
+| route | `05…` | `15…` |
+| ----- | ----- | ----- |
+| `/user/<id>/ban` | ok | ok |
+| `/rooms/all/<id>` | `404` | ok |
+| `/room/<token>/permissions/<id>` | `404` | ok |
+
+So a ban takes the 05 id straight from the ticket and the server resolves it to the
+blinded account itself, while deleting messages has to go under the blinded id. The
+catch is that `404` is also what those routes answer for an account they have never
+seen, so a deletion that only tried the 05 form would report an emptied account for
+every id. Blinding loses the key's sign, which leaves two possible blinded ids and no
+way to derive which is real, so the deletion tries each in turn and the first non-`404`
+answers. The line reports which form it went under:
+
+```
+  delete messages (15)  200  17 deleted (session-updates: 12, oxen-updates: 5)
+```
+
+### Letting a test account post
+
+Our rooms are read-only to everyone but moderators, so a test account has nothing for
+the deletion step to delete and the run proves nothing.
+[`sogs_moderation/perms.py`](sogs_moderation/perms.py) grants it write permission in
+one room, and takes it back afterwards:
+
+```sh
+python sogs_moderation/perms.py --room session-updates --write on --upload on 05<test account>
+# ... post from that account, then ban it, then:
+python sogs_moderation/perms.py --room session-updates --write default --upload default 05<test account>
+```
+
+`on` grants, `off` denies (muting one account without banning it), `default` drops the
+override back to the room's own default. The endpoint answers with the account's
+remaining overrides, so an empty object is the confirmation that the last one is gone.
+
+This route is blinded-id-only too, and here guessing the wrong one of the two is
+silent rather than loud: the endpoint creates the account row it is given, so the
+permission would land on an id nobody holds and the answer would look like success.
+The two candidates are resolved first against `POST /inbox/<id>` with an empty body —
+`400` is the server saying that account exists, `404` that it does not, and nothing is
+delivered either way because the `400` comes before the message is read. An account
+that has never opened the community answers `404` under both, and so does a banned
+one: unban before granting.
+
+### The server
+
+`SOGS_URL` and `SOGS_PUBKEY` are constants in the script, not configuration. This bans
+people from the communities we run, and the only thing a flag that retargets it can
+add is a bulk ban on somebody else's server. Point it elsewhere by editing those two
+lines, deliberately.
+
+### The moderator key
+
+`SOGS_MOD_SEED` is the Ed25519 seed the requests are signed with, and whoever holds it
+is a global moderator of the server. It lives in the repo's gitignored `.env`, sourced
+into the environment like the Zendesk jobs' secrets. The account must already be a
+global moderator or admin — `--whoami` prints its Session ID, and on the server:
+
+```sh
+python3 -msogs --add-moderators 05<id> --rooms + --hidden
+```
+
+For the bans themselves, blinded IDs need no handling: the server maps the 05 ID to
+the blinded account, and records the ban for later if that account has not connected
+yet. Deleting messages is the step that needs the blinded form — see
+[Which id form](#which-id-form).
+
+### Tests
+
+```sh
+pip install -r sogs_moderation/requirements.txt
+python -m unittest discover -s sogs_moderation -v
+```
+
+The signing tests check our request signatures against the vectors pysogs publishes in
+its own `contrib/auth-example.py`, so a broken port of that construction fails here
+rather than at the server.
+
 ## Workflow Failure Notificaiton
 
 If a workflow fails and is in the list of workflows monitored by the failure notificaiton workflow, the failure notificaiton workflow will send a message to a discord webhook.
