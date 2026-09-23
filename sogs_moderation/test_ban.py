@@ -6,7 +6,8 @@ contrib/auth-example.py for the seed, server pubkey, nonce and timestamp below. 
 drift in our port of that construction breaks these before it reaches the server.
 """
 
-import inspect
+import contextlib
+import io
 import unittest
 from unittest import mock
 
@@ -103,48 +104,46 @@ def ok(body):
 
 class TestApply(unittest.TestCase):
     def steps(self, **kwargs):
-        client = FakeClient([ok({}), ok({})], [ok({'total': 3, 'rooms': {'session': 3}})])
+        client = FakeClient([ok({})], [ok({'total': 3, 'rooms': {'session': 3}})])
         ban.apply_to(client, SESSION_ID, **kwargs)
         return [(r['method'], r['path'], r.get('json')) for r in client.sent]
 
     def test_ban_sequence(self):
-        """Only the bans are sequenced: the deletion follows them, under whichever id
-        form the route answers to."""
+        """The ban is server-wide only. The deletion is not in the sequence: it follows,
+        under whichever id form the route answers to."""
         self.assertEqual(
-            self.steps(unban=False, ban_rooms=True, delete_messages=True),
-            [
-                ('POST', f'/user/{SESSION_ID}/ban', {'global': True}),
-                ('POST', f'/user/{SESSION_ID}/ban', {'rooms': ['*']}),
-            ],
+            self.steps(unban=False),
+            [('POST', f'/user/{SESSION_ID}/ban', {'global': True})],
         )
 
     def test_unban_sequence(self):
         self.assertEqual(
-            self.steps(unban=True, ban_rooms=True, delete_messages=False),
-            [
-                ('POST', f'/user/{SESSION_ID}/unban', {'global': True}),
-                ('POST', f'/user/{SESSION_ID}/unban', {'rooms': ['*']}),
-            ],
+            self.steps(unban=True),
+            [('POST', f'/user/{SESSION_ID}/unban', {'global': True})],
         )
+
+    def test_unban_deletes_nothing(self):
+        """An unban that deleted messages would be the opposite of undoing the ban."""
+        client = FakeClient([ok({})], [ok({'total': 3, 'rooms': {'session': 3}})])
+        outcome = ban.apply_to(client, SESSION_ID, unban=True)
+        self.assertEqual([label for label, _, _ in outcome], ['server-wide unban'])
+        self.assertEqual(client.tried, [])
 
     def test_every_step_reports_its_status(self):
         """The statuses are the whole confirmation now, so they have to come back
         attached to the step they belong to."""
-        client = FakeClient([ok({}), ok({})], [ok({'total': 3, 'rooms': {'session': 3}})])
-        outcome = ban.apply_to(client, SESSION_ID, unban=False, ban_rooms=True,
-                               delete_messages=True)
+        client = FakeClient([ok({})], [ok({'total': 3, 'rooms': {'session': 3}})])
+        outcome = ban.apply_to(client, SESSION_ID, unban=False)
         self.assertEqual([(label, code) for label, code, _ in outcome],
-                         [('server-wide ban', 200), ('ban in all rooms', 200),
-                          ('delete messages (05)', 200)])
+                         [('server-wide ban', 200), ('delete messages (05)', 200)])
         self.assertEqual(outcome[-1][2], {'total': 3, 'rooms': {'session': 3}})
 
     def test_missing_user_still_counts_as_banned(self):
         """A user the server has never seen has nothing to delete; the ban stands, so
         a 404 on that step is not a failure. Every id form has to have been tried
         before that conclusion is drawn."""
-        client = FakeClient([ok({}), ok({})])
-        outcome = ban.apply_to(client, SESSION_ID, unban=False, ban_rooms=True,
-                               delete_messages=True)
+        client = FakeClient([ok({})])
+        outcome = ban.apply_to(client, SESSION_ID, unban=False)
         self.assertEqual(outcome[-1][:1] + outcome[-1][2:],
                          ('delete messages (05/15)', {'total': 0, 'rooms': {}}))
         self.assertEqual(client.tried,
@@ -154,46 +153,65 @@ class TestApply(unittest.TestCase):
         """Our server 404s /rooms/all/ on an 05 id — the route itself does not match —
         and that answer is indistinguishable from an account it has never seen."""
         client = FakeClient(
-            [ok({}), ok({})],
+            [ok({})],
             [{'code': 404, 'body': ''}, ok({'total': 2, 'rooms': {'session-updates': 2}})],
         )
-        outcome = ban.apply_to(client, SESSION_ID, unban=False, ban_rooms=True,
-                               delete_messages=True)
+        outcome = ban.apply_to(client, SESSION_ID, unban=False)
         self.assertEqual(outcome[-1][0], 'delete messages (15)')
         self.assertEqual(outcome[-1][2]['total'], 2)
         self.assertEqual(client.tried, [f'/rooms/all/{SESSION_ID}', f'/rooms/all/{BLINDED_ABS}'])
 
     def test_a_refused_deletion_is_a_partial_ban(self):
-        client = FakeClient([ok({}), ok({})], [{'code': 403, 'body': 'nope'}])
+        client = FakeClient([ok({})], [{'code': 403, 'body': 'nope'}])
         with self.assertRaises(ban.PartialBan) as e:
-            ban.apply_to(client, SESSION_ID, unban=False, ban_rooms=True,
-                         delete_messages=True)
+            ban.apply_to(client, SESSION_ID, unban=False)
         self.assertEqual(e.exception.outcome[-1][:2], ('delete messages (05)', 403))
 
-    def test_failed_ban_raises(self):
+    def test_a_refused_ban_carries_what_did_run(self):
+        """The ban is refused, so nothing should have been deleted: the deletion must
+        not run for an account the server would not let us ban."""
         client = FakeClient([{'code': 403, 'body': 'This endpoint requires moderator permissions'}])
-        with self.assertRaises(ban.SogsError):
-            ban.apply_to(client, SESSION_ID, unban=False, ban_rooms=True, delete_messages=True)
-
-    def test_a_partial_sequence_carries_what_did_run(self):
-        """The account is left half-actioned, so the steps that landed have to survive
-        the exception — otherwise the operator cannot tell a refused ban from a ban
-        whose deletion failed."""
-        client = FakeClient([ok({}), {'code': 403, 'body': 'nope'}], [ok({})])
         with self.assertRaises(ban.PartialBan) as e:
-            ban.apply_to(client, SESSION_ID, unban=False, ban_rooms=True,
-                         delete_messages=True)
+            ban.apply_to(client, SESSION_ID, unban=False)
         self.assertEqual([(label, code) for label, code, _ in e.exception.outcome],
-                         [('server-wide ban', 200), ('ban in all rooms', 403)])
-        self.assertEqual(e.exception.total_steps, 3)
-        self.assertIn('2/3', str(e.exception))
+                         [('server-wide ban', 403)])
+        self.assertEqual(e.exception.total_steps, 2)
+        self.assertIn('1/2', str(e.exception))
+        self.assertEqual(client.tried, [])
 
     def test_a_sequence_cut_short_is_a_partial_ban(self):
         """/sequence answers with fewer results than it was sent when it aborts."""
-        client = FakeClient([ok({})])
+        client = FakeClient([])
         with self.assertRaises(ban.PartialBan):
-            ban.apply_to(client, SESSION_ID, unban=False, ban_rooms=True,
-                         delete_messages=False)
+            ban.apply_to(client, SESSION_ID, unban=True)
+
+
+class TestReport(unittest.TestCase):
+    """The per-step block is what gets pasted into the ticket reply, so a failure must
+    not be able to render as a count."""
+
+    def render(self, outcome):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ban.report(SESSION_ID, outcome)
+        return out.getvalue()
+
+    def test_a_refused_deletion_shows_the_error_not_a_count(self):
+        line = self.render([('delete messages (15)', 403, {'error': 'forbidden'})])
+        self.assertNotIn('deleted', line)
+        self.assertIn('forbidden', line)
+
+    def test_a_successful_deletion_shows_the_count_and_rooms(self):
+        line = self.render([('delete messages (15)', 200,
+                             {'total': 3, 'rooms': {'session-updates': 3, 'quiet': 0}})])
+        self.assertIn('3 deleted', line)
+        self.assertIn('session-updates: 3', line)
+        self.assertNotIn('quiet', line)
+
+    def test_an_every_form_404_is_a_count_not_an_error(self):
+        """No account under any id form leaves the ban standing with nothing to delete."""
+        line = self.render([('delete messages (05/15)', 404, {'total': 0, 'rooms': {}})])
+        self.assertIn('0 deleted', line)
 
 
 class TestIds(unittest.TestCase):
@@ -236,6 +254,29 @@ class TestModeratorKey(unittest.TestCase):
                 self.read(bad)
 
 
+class TestConfirm(unittest.TestCase):
+    def test_yes_skips_the_prompt(self):
+        with mock.patch('builtins.input', side_effect=AssertionError("should not prompt")):
+            self.assertTrue(ban.confirm(True))
+
+    def test_a_closed_stdin_refuses_instead_of_raising(self):
+        """These run from cron and CI, where input() hits EOF and would otherwise leave
+        a traceback rather than an aborted run."""
+        with mock.patch('builtins.input', side_effect=EOFError):
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertFalse(ban.confirm(False))
+
+    def test_anything_but_yes_refuses(self):
+        for answer in ('', 'n', 'no', 'Y E S', ' '):
+            with mock.patch('builtins.input', return_value=answer):
+                self.assertFalse(ban.confirm(False))
+
+    def test_y_and_yes_accept(self):
+        for answer in ('y', 'YES', ' Yes '):
+            with mock.patch('builtins.input', return_value=answer):
+                self.assertTrue(ban.confirm(False))
+
+
 class TestServerIsFixed(unittest.TestCase):
     """The server is a constant, not a flag: the only thing retargeting this tool can
     add is a bulk ban on somebody else's server."""
@@ -244,14 +285,17 @@ class TestServerIsFixed(unittest.TestCase):
         self.assertRegex(ban.SOGS_PUBKEY, r'\A[0-9a-f]{64}\Z')
 
     def test_the_url_carries_no_path_or_query(self):
-        """read_config used to strip a join link down to scheme://netloc; the constant
-        has to already be in that form, since nothing trims it now."""
+        """Nothing trims this constant, so it has to already be scheme://netloc."""
         self.assertEqual(ban.SOGS_URL, 'https://open.getsession.org')
 
     def test_no_flag_can_retarget_the_server(self):
-        parser_src = inspect.getsource(ban.main)
-        for flag in ('--url', '--server-pubkey', '--seed-file'):
-            self.assertNotIn(flag, parser_src)
+        """The flag set is asserted whole rather than blocklisted by name: a blocklist
+        passes anything spelled differently, which is the way this would actually be
+        reintroduced."""
+        self.assertEqual(
+            {a.dest for a in ban.build_parser()._actions},
+            {'help', 'session_ids', 'from_file', 'unban', 'dry_run', 'yes', 'whoami'},
+        )
 
 
 if __name__ == '__main__':

@@ -499,15 +499,20 @@ set -a && . ./.env && set +a                 # SOGS_MOD_SEED
 python sogs_moderation/ban.py 05abc...def
 ```
 
-The two bans go out as one `/sequence` — global, then every room we moderate — and the
-deletion follows once they have landed (skip it with `--keep-messages`). `--dry-run`
-prints what would be sent and sends nothing; `--unban` lifts both bans, though deleted
-messages are gone for good.
+The ban is server-wide, and the deletion follows once it has landed. The order matters:
+a globally banned account cannot make any further request, so it cannot post into a room
+the deletion has already walked.
 
-The per-room bans are not redundant with the global one. Other moderators' clients read
-room bans only — Session Desktop's ban button sends `rooms: [<this room>]` with an
-explicit `global: false` — so without them the account shows as unbanned to everyone
-else moderating.
+| flag | |
+| --- | --- |
+| `--from-file PATH` | one ID per line, `#` comments allowed |
+| `--unban` | lift the ban; deleted messages are gone for good |
+| `--dry-run` | print the steps, send no ban or deletion |
+| `--yes` / `-y` | skip the confirmation prompt |
+| `--whoami` | print the Session ID of the configured key |
+
+There is no flag to keep the messages or to narrow the scope: the tool exists for abuse
+reports, where both are always wanted.
 
 ### Confirming the ban
 
@@ -515,9 +520,8 @@ Each step's HTTP status is the confirmation, and the script prints one line per 
 
 ```
 05abc...def
-  server-wide ban       200
-  ban in all rooms      200
-  delete messages       200  17 deleted (session-updates: 12, oxen-updates: 5)
+  server-wide ban         200
+  delete messages (15)    200  17 deleted (session-updates: 12, oxen-updates: 5)
 ```
 
 pysogs does the work inside the request — `user.ban()` writes the row before the
@@ -525,16 +529,20 @@ handler returns — so a `2xx` is the server saying it applied that step. A `/se
 stops at its first failure, so a partial application shows as a short reply: the steps
 that ran are printed, the id is counted as failed, and the run exits non-zero.
 
-There is deliberately no read-back of the resulting state. `GET /room/<token>/permissions`
-is the only endpoint that reports room bans and it answers `500` on our server; the
-per-id variant is not deployed there. An inbox probe distinguishes a globally banned
+A refused step prints the server's answer rather than a count, so a deletion that was
+turned down cannot read as an emptied account in the line that answers the ticket.
+
+There is deliberately no read-back of the resulting state, because nothing on the server
+lists globally banned accounts: `GET /room/<token>/permissions` reports room-level bans
+only, and answers `500` on ours anyway. An inbox probe distinguishes a globally banned
 account from a live one, but only as a before/after pair — on its own, a `404` can't be
 told apart from an account the server has never seen.
 
 ### Which id form
 
 Our server is older than pysogs [`21e2ef2`](https://github.com/session-foundation/session-pysogs/commit/21e2ef2),
-which widened several routes from blinded ids to either form. Probed against it:
+which widened several routes from blinded ids to either form, and it runs with
+`REQUIRE_BLIND_KEYS` — both conditions are needed to see this. Probed against it:
 
 | route | `05…` | `15…` |
 | ----- | ----- | ----- |
@@ -551,8 +559,12 @@ way to derive which is real, so the deletion tries each in turn and the first no
 answers. The line reports which form it went under:
 
 ```
-  delete messages (15)  200  17 deleted (session-updates: 12, oxen-updates: 5)
+  delete messages (15)    200  17 deleted (session-updates: 12, oxen-updates: 5)
 ```
+
+Once the server is upgraded past `21e2ef2` the fallback can be dropped: those routes
+then resolve a 05 id themselves, and against both blinded candidates, so the first
+attempt answers and the loop never reaches the rest. It is harmless until then.
 
 ### Letting a test account post
 

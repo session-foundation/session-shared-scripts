@@ -7,26 +7,19 @@ Takes the 05 Session IDs from a Zendesk abuse report and, for each one, applies 
 one room. It reports the server's answer to each step, so the reply to the ticket can
 say what actually happened.
 
-The bans go out as one /sequence, so the second only runs if the first succeeded:
-
     POST /user/<id>/ban   {"global": true}   server-wide ban
-    POST /user/<id>/ban   {"rooms": ["*"]}   ban in every room we moderate
-
-The deletion follows, once the bans have landed:
-
     DELETE /rooms/all/<id>                   delete their posts and uploads
+
+The ban has to land before the deletion runs: a globally banned account cannot make any
+further request, so it cannot post into a room the deletion has already walked.
 
 /rooms/all/ takes an id our server will not accept in the 05 form (see "Which id form"
 below), so the deletion is tried under each form the account can be known by.
 
-The room bans are not redundant with the global one. A global ban is invisible to other
-moderators' clients, which show a user as banned only from the room bans. Skip them
-with --global-only if you ever want the global ban alone.
+Deletion is irreversible. --unban lifts the ban but restores nothing.
 
-Deletion is irreversible and can be turned off with --keep-messages.
-
-The ban steps need no blinded-id handling: the server maps the 05 ID to the matching
-15 blinded account, and if that account has not connected yet it records the ban so it
+The ban needs no blinded-id handling: the server maps the 05 ID to the matching 15
+blinded account, and if that account has not connected yet it records the ban so it
 applies when they do.
 
 ## Confirmation
@@ -36,14 +29,17 @@ Each step's HTTP status is the confirmation. pysogs does the work inside the req
 server saying it applied that step, and the deletion step answers with its own
 per-room counts.
 
-There is deliberately no read-back. The only endpoint that reports room bans,
-GET /room/<token>/permissions, answers 500 on our server, and its per-id variant
-matches a blinded id only — so the statuses are the confirmation rather than a
-fallback for one. An inbox probe can tell a globally banned account from a live one, but only as a
-before/after pair: alone, a 404 cannot be told from an account never seen.
+There is deliberately no read-back, because nothing on the server lists globally banned
+accounts: GET /room/<token>/permissions reports room-level bans only, and answers 500 on
+ours anyway. An inbox probe can tell a globally banned account from a live one, but only
+as a before/after pair: alone, a 404 cannot be told from an account never seen.
 
 A /sequence stops at its first failure, so a partial application is visible rather than
 silent — the steps that ran are printed and the id is counted as failed.
+
+The ban is still sent as a one-step /sequence rather than a bare POST: the deletion
+cannot join it, because which id form the delete route answers to is not known until it
+has been tried, and a sequence cannot branch.
 
 ## Which id form
 
@@ -54,8 +50,8 @@ to either form. Checked against it:
     /rooms/all/<id>           05 404   15 ok
     /room/<t>/permissions/    05 404   15 ok
 
-So the ban steps take the 05 id straight from the ticket — the server resolves it to
-the blinded account itself — while the deletion has to go under the blinded id. 404 is
+So the ban takes the 05 id straight from the ticket — the server resolves it to the
+blinded account itself — while the deletion has to go under the blinded id. 404 is
 the same answer the route gives for an account it has never seen, so a deletion that
 only tried the 05 form would report an emptied account for every id.
 
@@ -87,7 +83,7 @@ runs the server registers it with:
     python ban.py 05abc...def                     # one ID
     python ban.py 05abc...def 05123...456         # several
     python ban.py --from-file ids.txt             # one ID per line, # comments allowed
-    python ban.py --dry-run 05abc...def           # print what would be sent, send nothing
+    python ban.py --dry-run 05abc...def           # print the steps, send no ban or deletion
     python ban.py --unban 05abc...def             # undo (does not restore messages)
 """
 
@@ -272,11 +268,13 @@ class Sogs:
             r = self.http.request(
                 method, self.base_url + path, data=body, headers=headers, timeout=HTTP_TIMEOUT
             )
+            # Decoding inside the guard: a proxy or error page can claim application/json
+            # and not be, and that has to surface as a SogsError like any other failure.
+            if r.headers.get('content-type', '').startswith('application/json'):
+                return r.status_code, r.json()
         except requests.RequestException as e:
             raise SogsError(f"{method} {path} failed: {e}") from e
 
-        if r.headers.get('content-type', '').startswith('application/json'):
-            return r.status_code, r.json()
         return r.status_code, r.text
 
     def get(self, path):
@@ -306,7 +304,7 @@ def capabilities(base_url):
         raise SogsError(f"Could not read {base_url}/capabilities: {e}") from e
 
 
-def apply_to(client, sid, unban, ban_rooms, delete_messages):
+def apply_to(client, sid, unban):
     """Applies the ban (or unban) to one Session ID.
 
     Returns [(label, status code, body)] in the order the steps ran, which is what the
@@ -316,20 +314,20 @@ def apply_to(client, sid, unban, ban_rooms, delete_messages):
     """
     verb = 'unban' if unban else 'ban'
     steps = [('server-wide ' + verb, {'method': 'POST', 'path': f'/user/{sid}/{verb}', 'json': {'global': True}})]
-    if ban_rooms:
-        steps.append((verb + ' in all rooms', {'method': 'POST', 'path': f'/user/{sid}/{verb}', 'json': {'rooms': ['*']}}))
 
     results = client.sequence([s[1] for s in steps])
 
+    delete_messages = not unban
     total_steps = len(steps) + (1 if delete_messages else 0)
 
     outcome = []
     for (label, _), res in zip(steps, results):
-        if not 200 <= res['code'] < 300:
-            outcome.append((label, res['code'], res['body']))
-            raise PartialBan(sid, outcome, total_steps)
         outcome.append((label, res['code'], res['body']))
+        if not 200 <= res['code'] < 300:
+            raise PartialBan(sid, outcome, total_steps)
 
+    # Guards a /sequence that returns short without a failing entry, which pysogs does
+    # not do: it always includes the non-2xx that stopped it.
     if len(outcome) < len(steps):
         raise PartialBan(sid, outcome, total_steps)
 
@@ -363,12 +361,16 @@ def report(sid, outcome):
     print(f"\n{sid}")
     for label, code, body in outcome:
         note = ''
-        if label.startswith('delete messages') and isinstance(body, dict):
+        # Only a 2xx or the every-form 404 is a count. A refused deletion can carry a JSON
+        # body too, and formatting that as a count prints a failure as "0 deleted" in the
+        # one line that answers the ticket.
+        countable = 200 <= code < 300 or code == 404
+        if label.startswith('delete messages') and countable and isinstance(body, dict):
             touched = ', '.join(f"{t}: {n}" for t, n in (body.get('rooms') or {}).items() if n)
             note = f"  {body.get('total', 0)} deleted" + (f" ({touched})" if touched else "")
         elif not 200 <= code < 300:
             note = f"  {str(body)[:120]}"
-        print(f"  {label:<22}{code}{note}")
+        print(f"  {label:<24}{code}{note}")
 
 
 def read_ids(args):
@@ -392,6 +394,19 @@ def read_ids(args):
     return out
 
 
+def confirm(assume_yes):
+    """Asks before acting. A closed stdin is a refusal, not a traceback: these run from
+    cron and CI, where the prompt would otherwise fail with an unhandled EOFError."""
+    if assume_yes:
+        return True
+    try:
+        answer = input("Continue? [y/N] ")
+    except EOFError:
+        print("Aborted: stdin is closed and --yes was not given.", file=sys.stderr)
+        return False
+    return answer.strip().lower() in ('y', 'yes')
+
+
 def read_moderator_key():
     """The signing key from SOGS_MOD_SEED.
 
@@ -410,20 +425,22 @@ def read_moderator_key():
     return SigningKey(bytes.fromhex(seed))
 
 
-def main():
+def build_parser():
     ap = argparse.ArgumentParser(
         description=f"Ban Session IDs from our communities on {SOGS_URL}, server-wide.",
         epilog="SOGS_MOD_SEED must be the seed of a global moderator or admin of the server.",
     )
     ap.add_argument('session_ids', nargs='*', metavar='SESSION_ID', help="05... Session IDs to ban")
     ap.add_argument('--from-file', metavar='PATH', help="File of Session IDs, one per line")
-    ap.add_argument('--unban', action='store_true', help="Lift the bans instead (messages are not restored)")
-    ap.add_argument('--keep-messages', action='store_true', help="Do not delete their posts and uploads")
-    ap.add_argument('--global-only', action='store_true', help="Apply only the server-wide ban, no per-room bans")
-    ap.add_argument('--dry-run', action='store_true', help="Print what would be sent and exit")
+    ap.add_argument('--unban', action='store_true', help="Lift the ban instead (messages are not restored)")
+    ap.add_argument('--dry-run', action='store_true', help="Print the steps and exit without banning or deleting")
     ap.add_argument('--yes', '-y', action='store_true', help="Do not ask for confirmation")
     ap.add_argument('--whoami', action='store_true', help="Print the Session ID of the configured key and exit")
-    args = ap.parse_args()
+    return ap
+
+
+def main():
+    args = build_parser().parse_args()
 
     url, server_pubkey = SOGS_URL, bytes.fromhex(SOGS_PUBKEY)
     signing_key = read_moderator_key()
@@ -452,36 +469,31 @@ def main():
             "Register it on the server with:\n"
             f"    python3 -msogs --add-moderators {session_id_of(signing_key)} --rooms + --hidden"
         )
-    room_tokens = [r['token'] for r in rooms]
-
-    delete_messages = not (args.keep_messages or args.unban)
+    delete_messages = not args.unban
     verb = 'unban' if args.unban else 'ban'
     steps = ([f"POST /user/<id>/{verb} {{'global': true}}"]
-             + ([] if args.global_only else [f"POST /user/<id>/{verb} {{'rooms': ['*']}}"])
              + (["DELETE /rooms/all/<id>, under each id form until one answers"] if delete_messages else []))
 
     action = 'Unbanning' if args.unban else 'Banning'
-    scope = 'server-wide only' if args.global_only else f"server-wide and in {len(room_tokens)} room(s)"
-    print(f"{action} {len(ids)} account(s) on {url}, {scope}"
+    print(f"{action} {len(ids)} account(s) on {url}, server-wide"
           + (", and deleting all their messages" if delete_messages else ""))
     for step in steps:
         print(f"  {step}")
 
     if args.dry_run:
-        print("\nDry run: nothing was sent.")
+        print("\nDry run: no ban or deletion was sent.")
         for sid in ids:
             print(f"  {sid}")
         return 0
 
-    if not args.yes:
-        if input("Continue? [y/N] ").strip().lower() not in ('y', 'yes'):
-            print("Aborted.")
-            return 1
+    if not confirm(args.yes):
+        print("Aborted.")
+        return 1
 
     failures = []
     for sid in ids:
         try:
-            report(sid, apply_to(client, sid, args.unban, not args.global_only, delete_messages))
+            report(sid, apply_to(client, sid, args.unban))
         except PartialBan as e:
             report(sid, e.outcome)
             failures.append(str(e))

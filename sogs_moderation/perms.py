@@ -46,6 +46,7 @@ from ban import (
     SogsError,
     blinded_ids,
     capabilities,
+    confirm,
     ed25519_pubkey,
     read_moderator_key,
     session_id_of,
@@ -130,7 +131,7 @@ def main():
     if args.dry_run:
         print("\nDry run: nothing was sent.")
         return 0
-    if not args.yes and input("Continue? [y/N] ").strip().lower() not in ('y', 'yes'):
+    if not confirm(args.yes):
         print("Aborted.")
         return 1
 
