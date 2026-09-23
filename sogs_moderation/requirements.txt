@@ -1,5 +1,5 @@
 # What ban.py needs from PyPI. The suite is stdlib unittest and imports nothing else.
-requests==2.32.3
+requests==2.34.2
 
 # The blinding factor and the two candidate blinded ids are still derived here: the
 # scalar arithmetic for those is not exposed by session_util yet.
