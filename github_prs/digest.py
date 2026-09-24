@@ -48,16 +48,16 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared import discord, state as dedup  # noqa: E402
-from shared.discord import MAX_MESSAGE_TEXT_CHARS, clip  # noqa: E402
+from shared.discord import MAX_MESSAGE_TEXT_CHARS  # noqa: E402
 from shared.env import get_env  # noqa: E402
 from shared.retry import request_with_retry  # noqa: E402
+from shared.text import clip, window_label  # noqa: E402
 
 API = "https://api.github.com"
 DEFAULT_ORG = "session-foundation"
 # Three days, because the timer runs on weekdays: Monday's window has to reach back
 # over the weekend. Overlap between consecutive runs is what --state absorbs.
 DEFAULT_WINDOW_HOURS = 72
-DEFAULT_RETENTION_DAYS = 30
 STATE_VERSION = 1
 # The Search API caps a query at 1000 results and returns 422 for any page past it
 # (at per_page=100 that is page 11). Past the cap the digest reports truncation
@@ -197,39 +197,11 @@ def activity_key(pr):
 
 # ---- Dedup state -----------------------------------------------------------
 
-
-def empty_state():
-    return dedup.empty_state(STATE_VERSION)
-
-
-def load_state(path):
-    return dedup.load_state(path, STATE_VERSION, "PR")
-
-
-def partition_by_state(prs, state):
-    """Split into (new, changed, unchanged) against what was last reported."""
-    seen = state.get("seen", {})
-    new, changed, unchanged = [], [], []
-    for pr in prs:
-        previous = seen.get(pr_id(pr))
-        if previous is None:
-            new.append(pr)
-        elif previous.get("updated_at") != activity_key(pr):
-            changed.append(pr)
-        else:
-            unchanged.append(pr)
-    return new, changed, unchanged
-
-
-def save_state(path, state, reported, retention_days=DEFAULT_RETENTION_DAYS):
-    """Record `reported` as seen. Returns (kept, pruned)."""
-    records = {pr_id(pr): {"updated_at": activity_key(pr),
-                           # Not read back. The file is the first thing anyone opens
-                           # when the digest reports the wrong thing, and an id
-                           # alone identifies nothing.
-                           "pr": f"{repo_name(pr)}#{pr.get('number')}"}
-               for pr in reported}
-    return dedup.save_state(path, state, records, retention_days, STATE_VERSION)
+# The repo#number is never read back. The file is the first thing anyone opens when
+# the digest reports the wrong thing, and an id alone identifies nothing.
+STATE = dedup.Tracker(STATE_VERSION, "PR", pr_id, activity_key, "updated_at",
+                      describe=lambda pr: {"pr": f"{repo_name(pr)}#{pr.get('number')}"})
+DEFAULT_RETENTION_DAYS = STATE.retention_days
 
 
 # ---- Discord rendering -----------------------------------------------------
@@ -309,13 +281,6 @@ def group_by_repo(new, updated, now, max_chars=MAX_MESSAGE_TEXT_CHARS):
     return [block for blocks, _ in repos for block in blocks]
 
 
-def window_label(hours):
-    if hours % 24 == 0 and hours >= 24:
-        days = hours // 24
-        return f"{days} day{'s' if days > 1 else ''}"
-    return f"{hours}h"
-
-
 def build_header(new, updated, backlog, window_hours, truncated):
     lines = [f"**Contributor pull requests** · last {window_label(window_hours)}"]
     if new or updated:
@@ -362,7 +327,7 @@ def main():
     if args.window_hours < 1:
         sys.exit("--window-hours must be at least 1.")
 
-    org = args.org or os.environ.get("GITHUB_PRS_ORG") or DEFAULT_ORG
+    org = get_env("GITHUB_PRS_ORG", args.org, default=DEFAULT_ORG)
     token = get_env("GITHUB_PRS_TOKEN", args.token)
     webhook = get_env("GITHUB_PRS_DISCORD_WEBHOOK_URL", args.webhook,
                       required=not args.dry_run)
@@ -374,8 +339,8 @@ def main():
     prs = contributor_prs(items, repos, maintainers)
 
     now = datetime.now(timezone.utc)
-    state = load_state(args.state)
-    new, changed, unchanged = partition_by_state(
+    state = STATE.load(args.state)
+    new, changed, unchanged = STATE.partition(
         in_window(prs, now - timedelta(hours=args.window_hours)), state)
     print(f"{len(items)} open PRs in {org}, {len(prs)} from contributors across "
           f"{len(repos)} repos: {len(new)} new, {len(changed)} changed since last "
@@ -391,9 +356,9 @@ def main():
                                      discord.components_webhook_url(webhook), messages)
     # Only what Discord accepted. A PR in a message that never landed stays eligible.
     if args.state:
-        landed = set().union(*coverage[:posted]) if posted else set()
+        landed = discord.delivered_ids(coverage, posted)
         reported = [pr for pr in new + changed if pr_id(pr) in landed]
-        kept, pruned = save_state(args.state, state, reported,
+        kept, pruned = STATE.save(args.state, state, reported,
                                   args.state_retention_days)
         print(f"State: {len(reported)} recorded, {kept} tracked "
               f"({pruned} pruned beyond {args.state_retention_days} days).")

@@ -50,6 +50,7 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared import discord, retry  # noqa: E402
+from shared.text import clip  # noqa: E402
 
 API = "https://api.crowdin.com/api/v2"
 DEFAULT_PROJECT = "618696"
@@ -109,16 +110,6 @@ def user_label(u):
     if not u:
         return "<none/MT>"
     return f"{u.get('id')}:{u.get('username') or u.get('fullName') or '?'}"
-
-
-def snippet(text, n=70):
-    text = (text or "").replace("\n", " ")
-    return text[:n] + ("…" if len(text) > n else "")
-
-
-def clip(text, n):
-    text = text or ""
-    return text if len(text) <= n else text[: n - 1] + "…"
 
 
 # --------------------------------------------------------------------------- #

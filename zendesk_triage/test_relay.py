@@ -24,8 +24,10 @@ import unittest
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import relay  # noqa: E402
-from test_triage import Patched  # noqa: E402
+from shared import testing  # noqa: E402
+from shared.testing import Patched  # noqa: E402
 
 # The relay only ever compares this against what it computes, so its value is
 # arbitrary — but it must not be empty, since an unset secret refuses everything.
@@ -35,26 +37,11 @@ BASE_ENV = {"ZENDESK_SUBDOMAIN": "acme", "ZENDESK_EMAIL": "agent@acme.test",
             "ZENDESK_API_TOKEN": "tok", "RELAY_DRY_RUN": None}
 
 
-class Env:
-    """Replace the process environment for the duration of a block."""
+class Env(testing.Env):
+    """The relay's working environment, with `overrides` on top."""
 
     def __init__(self, **overrides):
-        self.overrides = {**BASE_ENV, **overrides}
-        self.saved = None
-
-    def __enter__(self):
-        self.saved = dict(os.environ)
-        for key, value in self.overrides.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-        return self
-
-    def __exit__(self, *exc):
-        os.environ.clear()
-        os.environ.update(self.saved)
-        return False
+        super().__init__(**{**BASE_ENV, **overrides})
 
 
 def zendesk_post(body=None, *, secret=ZENDESK_SECRET, sign=True, age=0, tamper=False):

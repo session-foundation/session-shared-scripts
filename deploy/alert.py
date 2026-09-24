@@ -25,10 +25,13 @@ import socket
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))), "zendesk_triage"))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "zendesk_triage"))
 import requests  # noqa: E402
-import triage  # noqa: E402
+from shared.discord import post_to_discord  # noqa: E402
+from shared.env import get_env  # noqa: E402
+from triage import CLAUDE_CLI  # noqa: E402
 
 
 # A dead login reads as a broken job unless the alert names it: the job is fine and
@@ -37,7 +40,7 @@ import triage  # noqa: E402
 # checked: Zendesk's own 401 body says "Couldn't authenticate you".
 AUTH_SIGNATURES = ("oauth", "/login", "authenticate", "invalid api key",
                    "unauthorized", "credit balance", "signed in")
-CLI_FAILURE_PREFIX = f"{triage.CLAUDE_CLI} exited"
+CLI_FAILURE_PREFIX = f"{CLAUDE_CLI} exited"
 # Where the Claude Code CLI lives for the account the units run as; see
 # deploy/README.md. Spelled out because an alert that says "log in again" without
 # saying how sends whoever is on call to the README first.
@@ -104,13 +107,12 @@ def main():
     args = [arg.strip() for arg in sys.argv[1:]]
     if not args or len(args) > 2 or not args[0]:
         sys.exit("usage: alert.py <name> [journal-unit]")
-    webhook = (os.environ.get("ALERT_DISCORD_WEBHOOK_URL")
-               or triage.get_env("ZENDESK_DISCORD_WEBHOOK_URL"))
+    webhook = get_env("ZENDESK_DISCORD_WEBHOOK_URL", os.environ.get("ALERT_DISCORD_WEBHOOK_URL"))
     detail = last_job_line(journal_tail(args[-1]))
     message = build_message(args[0], socket.gethostname(), *args[1:], detail=detail)
     # A fresh session, never a Zendesk one — that carries the API-token auth header,
     # and Discord has no business receiving it.
-    if not triage.post_to_discord(requests.Session(), webhook, [{"content": message}]):
+    if not post_to_discord(requests.Session(), webhook, [{"content": message}]):
         sys.exit("Could not post the failure to Discord.")
 
 

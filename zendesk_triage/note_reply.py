@@ -68,7 +68,11 @@ import sys
 import textwrap
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import triage  # noqa: E402  (needs the path insert above)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import triage  # noqa: E402  (needs the path inserts above)
+from shared.env import get_env  # noqa: E402
+from shared.retry import request_with_retry  # noqa: E402
+from shared.text import clip, squash  # noqa: E402
 
 DEFAULT_MODEL = "claude-sonnet-5"
 COMPOSE_TIMEOUT_SECONDS = 240
@@ -205,7 +209,7 @@ def api_user_id(session, subdomain):
     this same user so a draft never fires the webhook at all — see the README.
     """
     url = f"https://{subdomain}.zendesk.com/api/v2/users/me.json"
-    resp = triage.request_with_retry(session, "GET", url)
+    resp = request_with_retry(session, "GET", url)
     if resp.status_code >= 400:
         sys.exit(f"Zendesk refused to identify the API user ({resp.status_code}).")
     return ((resp.json() or {}).get("user") or {}).get("id")
@@ -242,7 +246,7 @@ def change_tags(session, subdomain, ticket_id, add=(), drop=()):
                           ("DELETE", [t for t in drop if t])):
         if not names:
             continue
-        resp = triage.request_with_retry(session, method, url, json={"tags": names})
+        resp = request_with_retry(session, method, url, json={"tags": names})
         if resp.status_code >= 400:
             # Never worth failing a run over: tags are a dashboard light, not the work.
             print(f"Note: could not {method.lower()} tags on #{ticket_id} "
@@ -354,7 +358,7 @@ def write_to_ticket(session, subdomain, ticket_id, body, public,
     if status:
         fields["status"] = status
     url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}.json"
-    resp = triage.request_with_retry(session, "PUT", url, json={"ticket": fields})
+    resp = request_with_retry(session, "PUT", url, json={"ticket": fields})
     if resp.status_code >= 400:
         sys.exit(f"Zendesk rejected the {'reply' if public else 'note'} on "
                  f"#{ticket_id} ({resp.status_code}).")
@@ -448,7 +452,7 @@ PLACEMENT_SYSTEM = textwrap.dedent(
 def place_ticket(model, book, ticket, sample):
     """Which group and platform this ticket belongs to. (None, None) if unplaceable."""
     catalogue = "\n".join(f"- {g['key']}: {g['title']}" for g in book["groups"])
-    body = triage.clip(sample, CUSTOMER_SAMPLE_CHARS)
+    body = clip(sample, CUSTOMER_SAMPLE_CHARS)
     try:
         found = triage.claude_cli_json(
             model, "medium", PLACEMENT_SYSTEM, PLACEMENT_SCHEMA,
@@ -801,7 +805,7 @@ def first_line(text, limit=90):
     whole reply, which is already on the ticket one comment above.
     """
     line = next((part.strip() for part in (text or "").splitlines() if part.strip()), "")
-    return triage.clip(line, limit)
+    return clip(line, limit)
 
 
 def build_sent_note(user, comment_id, sent):
@@ -852,7 +856,7 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
               f"({cell['n']} solved, {cell['consistency']} consistency).")
 
     try:
-        result = compose(model, triage.clip(sample, CUSTOMER_SAMPLE_CHARS), brief,
+        result = compose(model, clip(sample, CUSTOMER_SAMPLE_CHARS), brief,
                          previous, precedent)
     except SystemExit as exc:
         say(session, subdomain, ticket_id, comment_id,
@@ -1019,9 +1023,8 @@ def already_english(turns, translated):
             english[int(item.get("index"))] = (item.get("english") or "").strip()
         except (TypeError, ValueError):
             continue
-    squash = lambda text: " ".join((text or "").split()).lower()
     return all(english.get(turn["index"])
-               and squash(english[turn["index"]]) == squash(turn["body"])
+               and squash(english[turn["index"]]).lower() == squash(turn["body"]).lower()
                for turn in turns)
 
 
@@ -1055,7 +1058,7 @@ def run_english(session, subdomain, model, ticket, comments, command, dry_run):
     try:
         rendered = triage.claude_cli_json(
             model, "medium", triage.TRANSCRIPT_SYSTEM_PROMPT, triage.TRANSCRIPT_SCHEMA,
-            triage.clip(payload, triage.TRANSCRIPT_INPUT_CHARS),
+            clip(payload, triage.TRANSCRIPT_INPUT_CHARS),
             triage.ENGLISH_TIMEOUT_SECONDS, f"the English transcript of #{ticket_id}")
     except SystemExit as exc:
         say(session, subdomain, ticket_id, command["id"],
@@ -1138,9 +1141,9 @@ def main():
                         help="do everything except write to Zendesk")
     args = parser.parse_args()
 
-    subdomain = triage.get_env("ZENDESK_SUBDOMAIN")
-    session = triage.zendesk_session(triage.get_env("ZENDESK_EMAIL"),
-                                     triage.get_env("ZENDESK_API_TOKEN"))
+    subdomain = get_env("ZENDESK_SUBDOMAIN")
+    session = triage.zendesk_session(get_env("ZENDESK_EMAIL"),
+                                     get_env("ZENDESK_API_TOKEN"))
     api_user = api_user_id(session, subdomain)
 
     ticket = triage.fetch_ticket(session, subdomain, args.ticket)

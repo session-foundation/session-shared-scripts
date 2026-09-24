@@ -193,20 +193,14 @@ class TestWindowQuery(unittest.TestCase):
         long = triage.build_window_query(168).split("updated>")[1].split(" ")[0]
         self.assertLess(long, short)  # ISO-8601 sorts chronologically
 
-    def test_window_label_reads_naturally(self):
-        self.assertEqual(triage.window_label(24), "updated in the past 1 day")
-        self.assertEqual(triage.window_label(48), "updated in the past 2 days")
-        self.assertEqual(triage.window_label(168), "updated in the past 7 days")
-        self.assertEqual(triage.window_label(36), "updated in the past 36h")
-
 
 # ---- Dedup state -----------------------------------------------------------
 
 
 class TestPartitionByState(unittest.TestCase):
     def test_empty_state_makes_everything_new(self):
-        new, changed, unchanged = triage.partition_by_state(
-            [ticket(1), ticket(2)], triage.empty_state()
+        new, changed, unchanged = triage.STATE.partition(
+            [ticket(1), ticket(2)], triage.STATE.empty()
         )
         self.assertEqual([t["id"] for t in new], [1, 2])
         self.assertEqual(changed, [])
@@ -214,7 +208,7 @@ class TestPartitionByState(unittest.TestCase):
 
     def test_same_requester_activity_is_unchanged(self):
         state = {"seen": {"1": {"requester_updated_at": "2026-08-03T12:00:00Z"}}}
-        new, changed, unchanged = triage.partition_by_state(
+        new, changed, unchanged = triage.STATE.partition(
             [ticket(1, updated_at="2026-08-03T12:00:00Z")], state
         )
         self.assertEqual((new, changed), ([], []))
@@ -222,7 +216,7 @@ class TestPartitionByState(unittest.TestCase):
 
     def test_moved_requester_activity_is_changed(self):
         state = {"seen": {"1": {"requester_updated_at": "2026-08-03T12:00:00Z"}}}
-        new, changed, unchanged = triage.partition_by_state(
+        new, changed, unchanged = triage.STATE.partition(
             [ticket(1, updated_at="2026-08-04T09:00:00Z")], state
         )
         self.assertEqual((new, unchanged), ([], []))
@@ -234,14 +228,14 @@ class TestPartitionByState(unittest.TestCase):
         state = {"seen": {"1": {"requester_updated_at": "2026-08-03T12:00:00Z"}}}
         touched = ticket(1, updated_at="2026-08-04T09:01:00Z")
         touched["requester_updated_at"] = "2026-08-03T12:00:00Z"
-        _, changed, unchanged = triage.partition_by_state([touched], state)
+        _, changed, unchanged = triage.STATE.partition([touched], state)
         self.assertEqual(changed, [])
         self.assertEqual([t["id"] for t in unchanged], [1])
 
     def test_a_missing_metric_set_falls_back_to_updated_at(self):
         """A failed sideload degrades to the old noisy behaviour, never to silence."""
         state = {"seen": {"1": {"requester_updated_at": "2026-08-03T12:00:00Z"}}}
-        _, changed, _ = triage.partition_by_state(
+        _, changed, _ = triage.STATE.partition(
             [ticket(1, updated_at="2026-08-04T09:00:00Z")], state
         )
         self.assertEqual([t["id"] for t in changed], [1])
@@ -258,7 +252,7 @@ class TestPartitionByState(unittest.TestCase):
             ticket(2, updated_at="2026-08-04T09:00:00Z"),  # changed
             ticket(3),                                      # new
         ]
-        new, changed, unchanged = triage.partition_by_state(batch, state)
+        new, changed, unchanged = triage.STATE.partition(batch, state)
         self.assertEqual([t["id"] for t in new], [3])
         self.assertEqual([t["id"] for t in changed], [2])
         self.assertEqual([t["id"] for t in unchanged], [1])
@@ -266,7 +260,7 @@ class TestPartitionByState(unittest.TestCase):
     def test_ids_are_matched_as_strings_not_ints(self):
         """State comes back from JSON, where keys are always strings."""
         state = {"seen": {"27564": {"requester_updated_at": "2026-08-03T12:00:00Z"}}}
-        _, _, unchanged = triage.partition_by_state(
+        _, _, unchanged = triage.STATE.partition(
             [ticket(27564, updated_at="2026-08-03T12:00:00Z")], state
         )
         self.assertEqual(len(unchanged), 1)
@@ -331,27 +325,27 @@ class TestStateRoundTrip(unittest.TestCase):
         self.addCleanup(self.dir.cleanup)
 
     def test_save_then_load_recovers_reported_tickets(self):
-        triage.save_state(self.path, triage.empty_state(), [ticket(1), ticket(2)], 30)
-        state = triage.load_state(self.path)
+        triage.STATE.save(self.path, triage.STATE.empty(), [ticket(1), ticket(2)], 30)
+        state = triage.STATE.load(self.path)
         self.assertEqual(sorted(state["seen"]), ["1", "2"])
         self.assertEqual(state["seen"]["1"]["requester_updated_at"], "2026-08-03T12:00:00Z")
         self.assertEqual(state["version"], triage.STATE_VERSION)
 
     def test_save_creates_missing_parent_directories(self):
-        triage.save_state(self.path, triage.empty_state(), [ticket(1)], 30)
+        triage.STATE.save(self.path, triage.STATE.empty(), [ticket(1)], 30)
         self.assertTrue(os.path.exists(self.path))
 
     def test_save_leaves_no_temp_file_behind(self):
-        triage.save_state(self.path, triage.empty_state(), [ticket(1)], 30)
+        triage.STATE.save(self.path, triage.STATE.empty(), [ticket(1)], 30)
         siblings = os.listdir(os.path.dirname(self.path))
         self.assertEqual(siblings, ["seen.json"])
 
     def test_resaving_updates_an_existing_entry(self):
-        triage.save_state(self.path, triage.empty_state(), [ticket(1, updated_at="A")], 30)
-        state = triage.load_state(self.path)
-        triage.save_state(self.path, state, [ticket(1, updated_at="B")], 30)
+        triage.STATE.save(self.path, triage.STATE.empty(), [ticket(1, updated_at="A")], 30)
+        state = triage.STATE.load(self.path)
+        triage.STATE.save(self.path, state, [ticket(1, updated_at="B")], 30)
         self.assertEqual(
-            triage.load_state(self.path)["seen"]["1"]["requester_updated_at"], "B")
+            triage.STATE.load(self.path)["seen"]["1"]["requester_updated_at"], "B")
 
     def test_entries_past_retention_are_pruned(self):
         old = (datetime.now(timezone.utc) - timedelta(days=40)).strftime(STAMP)
@@ -363,21 +357,21 @@ class TestStateRoundTrip(unittest.TestCase):
                 "2": {"requester_updated_at": "B", "last_reported": recent},
             },
         }
-        kept, pruned = triage.save_state(self.path, state, [], 30)
+        kept, pruned = triage.STATE.save(self.path, state, [], 30)
         self.assertEqual((kept, pruned), (1, 1))
-        self.assertEqual(list(triage.load_state(self.path)["seen"]), ["2"])
+        self.assertEqual(list(triage.STATE.load(self.path)["seen"]), ["2"])
 
     def test_entries_with_unparseable_timestamps_are_dropped(self):
         state = {"version": triage.STATE_VERSION,
                  "seen": {"1": {"requester_updated_at": "A", "last_reported": "nonsense"}}}
-        kept, pruned = triage.save_state(self.path, state, [], 30)
+        kept, pruned = triage.STATE.save(self.path, state, [], 30)
         self.assertEqual((kept, pruned), (0, 1))
 
     def test_a_ticket_reported_now_survives_pruning(self):
         old = (datetime.now(timezone.utc) - timedelta(days=40)).strftime(STAMP)
         state = {"version": triage.STATE_VERSION,
                  "seen": {"1": {"requester_updated_at": "A", "last_reported": old}}}
-        kept, _ = triage.save_state(self.path, state, [ticket(1, updated_at="B")], 30)
+        kept, _ = triage.STATE.save(self.path, state, [ticket(1, updated_at="B")], 30)
         self.assertEqual(kept, 1)
 
 
@@ -397,45 +391,45 @@ class TestStateDegradation(unittest.TestCase):
 
     def test_missing_file(self):
         path = os.path.join(self.dir.name, "absent.json")
-        self.assertEqual(triage.load_state(path), triage.empty_state())
+        self.assertEqual(triage.STATE.load(path), triage.STATE.empty())
 
     def test_unparseable_json(self):
-        self.assertEqual(triage.load_state(self._write("c.json", "{{{")), triage.empty_state())
+        self.assertEqual(triage.STATE.load(self._write("c.json", "{{{")), triage.STATE.empty())
 
     def test_json_that_is_not_an_object(self):
-        self.assertEqual(triage.load_state(self._write("l.json", "[]")), triage.empty_state())
+        self.assertEqual(triage.STATE.load(self._write("l.json", "[]")), triage.STATE.empty())
 
     def test_object_without_a_seen_map(self):
         self.assertEqual(
-            triage.load_state(self._write("n.json", '{"version": 1}')), triage.empty_state()
+            triage.STATE.load(self._write("n.json", '{"version": 1}')), triage.STATE.empty()
         )
 
     def test_seen_of_the_wrong_type(self):
         self.assertEqual(
-            triage.load_state(self._write("w.json", '{"seen": []}')), triage.empty_state()
+            triage.STATE.load(self._write("w.json", '{"seen": []}')), triage.STATE.empty()
         )
 
     def test_absent_version_is_a_cache_miss(self):
         """Without a version we can't know the fields mean what we think."""
         path = self._write("v.json", '{"seen": {"1": {"updated_at": "A"}}}')
-        self.assertEqual(triage.load_state(path), triage.empty_state())
+        self.assertEqual(triage.STATE.load(path), triage.STATE.empty())
 
     def test_unknown_version_is_a_cache_miss(self):
         path = self._write("v2.json", '{"version": 99, "seen": {"1": {"updated_at": "A"}}}')
-        self.assertEqual(triage.load_state(path), triage.empty_state())
+        self.assertEqual(triage.STATE.load(path), triage.STATE.empty())
 
     def test_matching_version_loads_normally(self):
         path = self._write(
             "ok.json",
             json.dumps({"version": triage.STATE_VERSION, "seen": {"1": {"updated_at": "A"}}}),
         )
-        self.assertEqual(list(triage.load_state(path)["seen"]), ["1"])
+        self.assertEqual(list(triage.STATE.load(path)["seen"]), ["1"])
 
     def test_state_written_by_save_state_round_trips_the_version(self):
         """Guards against save_state and load_state disagreeing on the version."""
         path = os.path.join(self.dir.name, "rt.json")
-        triage.save_state(path, triage.empty_state(), [ticket(1)], 30)
-        self.assertEqual(list(triage.load_state(path)["seen"]), ["1"])
+        triage.STATE.save(path, triage.STATE.empty(), [ticket(1)], 30)
+        self.assertEqual(list(triage.STATE.load(path)["seen"]), ["1"])
 
 
 # ---- Discord rendering -----------------------------------------------------

@@ -80,7 +80,11 @@ from urllib.parse import quote
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import triage  # noqa: E402  (needs the path insert above)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import triage  # noqa: E402  (needs the path inserts above)
+from shared.discord import post_to_discord  # noqa: E402
+from shared.env import get_env  # noqa: E402
+from shared.retry import request_with_retry  # noqa: E402
 
 # Reviews at or above this rating carry nothing to act on. Fixed rather than a flag:
 # 3★ and below are what the triage treats as bug reports in disguise, so lowering the
@@ -188,7 +192,7 @@ def solve_batch(session, subdomain, ids, tag, note):
     payload = {"ticket": {"status": "solved", "additional_tags": [tag]}}
     if note:
         payload["ticket"]["comment"] = {"body": note, "public": False}
-    resp = triage.request_with_retry(
+    resp = request_with_retry(
         session, "PUT", url, params={"ids": ",".join(str(i) for i in ids)}, json=payload
     )
     if resp.status_code >= 400:
@@ -214,7 +218,7 @@ def wait_for_job(session, subdomain, job_id, timeout=JOB_TIMEOUT_SECONDS):
     url = f"https://{subdomain}.zendesk.com/api/v2/job_statuses/{job_id}.json"
     deadline = time.monotonic() + timeout
     while True:
-        resp = triage.request_with_retry(session, "GET", url)
+        resp = request_with_retry(session, "GET", url)
         if resp.status_code >= 400:
             sys.exit(f"could not read job {job_id} ({resp.status_code}): {resp.text[:200]}")
         job = (resp.json() or {}).get("job_status") or {}
@@ -318,8 +322,7 @@ def post_summary(webhook_url, message):
     A fresh session, never the Zendesk one — that carries the API-token auth header,
     and Discord has no business receiving it.
     """
-    return bool(triage.post_to_discord(requests.Session(), webhook_url,
-                                       [{"content": message}]))
+    return bool(post_to_discord(requests.Session(), webhook_url, [{"content": message}]))
 
 
 def main():
@@ -346,9 +349,9 @@ def main():
                         help="Discord webhook URL (else ZENDESK_DISCORD_WEBHOOK_URL).")
     args = parser.parse_args()
 
-    subdomain = triage.get_env("ZENDESK_SUBDOMAIN", args.subdomain)
-    email = triage.get_env("ZENDESK_EMAIL", args.email)
-    api_token = triage.get_env("ZENDESK_API_TOKEN", args.api_token)
+    subdomain = get_env("ZENDESK_SUBDOMAIN", args.subdomain)
+    email = get_env("ZENDESK_EMAIL", args.email)
+    api_token = get_env("ZENDESK_API_TOKEN", args.api_token)
     # The triage channel's own webhook, the one the digest posts to — a Discord
     # webhook is bound to the channel it was created in, so posting alongside the
     # digest means using its secret rather than the shared DISCORD_WEBHOOK_URL.
@@ -357,8 +360,7 @@ def main():
     # should stop the run rather than have it bulk-edit tickets it cannot report. A
     # dry run posts nothing, so it never needs one.
     needs_webhook = args.apply and not args.no_discord
-    webhook = triage.get_env("ZENDESK_DISCORD_WEBHOOK_URL", args.webhook,
-                             required=needs_webhook)
+    webhook = get_env("ZENDESK_DISCORD_WEBHOOK_URL", args.webhook, required=needs_webhook)
 
     session = triage.zendesk_session(email, api_token)
     query = build_query()

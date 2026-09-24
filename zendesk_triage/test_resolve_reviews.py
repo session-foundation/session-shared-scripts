@@ -19,10 +19,11 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import resolve_reviews  # noqa: E402
 import triage  # noqa: E402
-from test_triage import (  # noqa: E402
-    ROOT, FakeResponse, FakeSession, NoSleep, unit_commands)
+from shared.testing import FakeResponse, FakeSession, NoSleep, Patched  # noqa: E402
+from test_triage import ROOT, unit_commands  # noqa: E402
 
 
 def review(ticket_id, stars=5, channel="any_channel", subject=None):
@@ -349,13 +350,9 @@ class TestSummaryMessage(unittest.TestCase):
     def test_the_summary_does_not_reuse_the_zendesk_session(self):
         """That session carries the API-token auth header; Discord must not see it."""
         posted = []
-        original = triage.post_to_discord
-        triage.post_to_discord = lambda session, url, messages: (
-            posted.append((session, url, messages)) or len(messages))
-        try:
+        with Patched(resolve_reviews, post_to_discord=lambda session, url, messages: (
+                posted.append((session, url, messages)) or len(messages))):
             self.assertTrue(resolve_reviews.post_summary("https://hook", "hi"))
-        finally:
-            triage.post_to_discord = original
         session, url, messages = posted[0]
         self.assertIsNone(session.auth)
         self.assertEqual((url, messages), ("https://hook", [{"content": "hi"}]))

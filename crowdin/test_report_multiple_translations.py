@@ -15,29 +15,15 @@ import report_multiple_translations as report  # noqa: E402
 from shared.testing import FakeResponse, FakeSession, NoSleep, Patched  # noqa: E402
 
 
-class ApiResponse(FakeResponse):
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise requests.HTTPError(f"{self.status_code}", response=self)
-
-
-class WebhookSession(FakeSession):
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-
 class TestRequestWithRetry(unittest.TestCase):
     def test_a_client_error_raises_rather_than_returning(self):
         """Callers read the body straight off the response, so a 4xx has to stop them."""
         with self.assertRaises(requests.HTTPError):
-            report.request_with_retry(FakeSession([ApiResponse({}, status_code=404)]),
+            report.request_with_retry(FakeSession([FakeResponse({}, status_code=404)]),
                                       "GET", "https://x")
 
     def test_crowdins_budget_is_ten_attempts_at_sixty_seconds(self):
-        session = FakeSession([ApiResponse({}, status_code=503)] * 9 + [ApiResponse({"ok": 1})])
+        session = FakeSession([FakeResponse({}, status_code=503)] * 9 + [FakeResponse({"ok": 1})])
         with NoSleep():
             self.assertEqual(report.request_with_retry(session, "GET", "https://x").json(), {"ok": 1})
         self.assertEqual(len(session.calls), 10)
@@ -46,7 +32,7 @@ class TestRequestWithRetry(unittest.TestCase):
 
 class TestPostToDiscord(unittest.TestCase):
     def post(self, responses, messages):
-        session = WebhookSession(responses)
+        session = FakeSession(responses)
         with Patched(report.requests, Session=lambda: session), \
                 contextlib.redirect_stdout(io.StringIO()):
             report.post_to_discord("https://hook", messages)
@@ -64,7 +50,7 @@ class TestPostToDiscord(unittest.TestCase):
         self.assertIn("1 of 3", str(caught.exception))
 
     def test_the_warning_is_plain_content_the_webhook_cannot_reject_for_size(self):
-        session = WebhookSession([FakeResponse({}, status_code=400), FakeResponse({}, status_code=204)])
+        session = FakeSession([FakeResponse({}, status_code=400), FakeResponse({}, status_code=204)])
         with Patched(report.requests, Session=lambda: session), \
                 contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
             report.post_to_discord("https://hook", [{"embeds": [{"title": "x" * 9000}]}])

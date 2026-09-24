@@ -93,20 +93,20 @@ class TestPartitionByState(unittest.TestCase):
                 "seen": {key: {"updated_at": stamp} for key, stamp in records}}
 
     def test_a_pr_never_reported_is_new(self):
-        new, changed, unchanged = digest.partition_by_state([pr(1)], digest.empty_state())
+        new, changed, unchanged = digest.STATE.partition([pr(1)], digest.STATE.empty())
         self.assertEqual([p["number"] for p in new], [1])
         self.assertEqual((changed, unchanged), ([], []))
 
     def test_a_pr_that_moved_since_it_was_reported_is_changed(self):
         item = pr(1, updated="2026-09-24T09:00:00Z")
-        new, changed, unchanged = digest.partition_by_state(
+        new, changed, unchanged = digest.STATE.partition(
             [item], self.state((digest.pr_id(item), "2026-09-20T09:00:00Z")))
         self.assertEqual([p["number"] for p in changed], [1])
         self.assertEqual((new, unchanged), ([], []))
 
     def test_a_pr_that_has_not_moved_is_dropped(self):
         item = pr(1, updated="2026-09-24T09:00:00Z")
-        new, changed, unchanged = digest.partition_by_state(
+        new, changed, unchanged = digest.STATE.partition(
             [item], self.state((digest.pr_id(item), "2026-09-24T09:00:00Z")))
         self.assertEqual([p["number"] for p in unchanged], [1])
         self.assertEqual((new, changed), ([], []))
@@ -120,21 +120,21 @@ class TestStateFile(unittest.TestCase):
 
     def save(self, *prs, **kwargs):
         with contextlib.redirect_stdout(io.StringIO()):
-            return digest.save_state(self.path, digest.empty_state(), list(prs), **kwargs)
+            return digest.STATE.save(self.path, digest.STATE.empty(), list(prs), **kwargs)
 
     def load(self):
         with contextlib.redirect_stdout(io.StringIO()):
-            return digest.load_state(self.path)
+            return digest.STATE.load(self.path)
 
     def test_a_reported_pr_comes_back_unchanged_next_run(self):
         item = pr(1, updated="2026-09-24T09:00:00Z")
         self.save(item)
-        _, _, unchanged = digest.partition_by_state([item], self.load())
+        _, _, unchanged = digest.STATE.partition([item], self.load())
         self.assertEqual(len(unchanged), 1)
 
     def test_the_same_pr_moved_comes_back_changed(self):
         self.save(pr(1, updated="2026-09-24T09:00:00Z"))
-        _, changed, _ = digest.partition_by_state(
+        _, changed, _ = digest.STATE.partition(
             [pr(1, updated="2026-09-24T11:00:00Z")], self.load())
         self.assertEqual(len(changed), 1)
 
@@ -144,7 +144,7 @@ class TestStateFile(unittest.TestCase):
             self.assertIn("session-desktop#1958", handle.read())
 
     def test_no_path_means_no_state_and_no_complaint(self):
-        self.assertEqual(digest.load_state(None), digest.empty_state())
+        self.assertEqual(digest.STATE.load(None), digest.STATE.empty())
 
 
 class TestAge(unittest.TestCase):

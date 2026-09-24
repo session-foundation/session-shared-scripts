@@ -22,9 +22,10 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import note_reply  # noqa: E402
 import triage  # noqa: E402
-from test_triage import FakeResponse, FakeSession, Patched  # noqa: E402
+from shared.testing import Env, FakeResponse, FakeSession, Patched  # noqa: E402
 
 API_USER = 901790886886
 AGENT = 555
@@ -289,8 +290,7 @@ BOOK = {
 class HouseAnswers(unittest.TestCase):
     def test_absent_config_turns_the_feature_off(self):
         """Drafting must work exactly as before on a host with no knowledge file."""
-        with Patched(os, environ={k: v for k, v in os.environ.items()
-                                  if k != note_reply.HOUSE_ENV}):
+        with Env(**{note_reply.HOUSE_ENV: None}):
             self.assertIsNone(note_reply.load_house())
 
     def test_a_corrupt_file_degrades_rather_than_fails(self):
@@ -633,12 +633,12 @@ class Authorisation(unittest.TestCase):
         self.assertFalse(note_reply.may_command({"id": AGENT, "role": "end-user"}))
 
     def test_allowlist_narrows_further(self):
-        with Patched(os, environ={**os.environ, "ZENDESK_NOTE_AUTHORS": "1,2"}):
+        with Env(ZENDESK_NOTE_AUTHORS="1,2"):
             self.assertFalse(note_reply.may_command({"id": AGENT, "role": "agent"}))
             self.assertTrue(note_reply.may_command({"id": 2, "role": "agent"}))
 
     def test_allowlist_does_not_override_the_role_check(self):
-        with Patched(os, environ={**os.environ, "ZENDESK_NOTE_AUTHORS": str(AGENT)}):
+        with Env(ZENDESK_NOTE_AUTHORS=str(AGENT)):
             self.assertFalse(note_reply.may_command({"id": AGENT, "role": "end-user"}))
 
 

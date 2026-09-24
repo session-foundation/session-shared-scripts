@@ -83,9 +83,10 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared import discord, state as dedup  # noqa: E402
-from shared.discord import clip, post_to_discord  # noqa: E402
+from shared.discord import post_to_discord  # noqa: E402
 from shared.env import get_env  # noqa: E402
 from shared.retry import request_with_retry  # noqa: E402
+from shared.text import clip, squash, window_label  # noqa: E402
 
 # The channel AppFollow imports app-store reviews on. Identified reviews with no
 # false positives in a 3,662-ticket sample; tags did not (only 287 carried one).
@@ -169,11 +170,6 @@ def drop_quiet_tickets(tickets, cutoff):
     return fresh, quiet
 
 
-def window_label(hours):
-    if hours % 24 == 0 and hours >= 24:
-        days = hours // 24
-        return f"updated in the past {days} day{'s' if days > 1 else ''}"
-    return f"updated in the past {hours}h"
 # A pinned id rather than the `opus` alias, deliberately. This is an unattended
 # digest a human skims: the batch-wide fields (`cluster`, `priority_rank`) and the
 # severity calibration shift when the model underneath changes, and an alias would
@@ -540,14 +536,6 @@ def fetch_total_unsolved(session, subdomain, query=BACKLOG_QUERY):
 # file is a real one, because it is what makes losing it merely noisy.
 
 
-def empty_state():
-    return dedup.empty_state(STATE_VERSION)
-
-
-def load_state(path):
-    return dedup.load_state(path, STATE_VERSION, "ticket")
-
-
 def activity_key(ticket):
     """The timestamp a re-report is judged against.
 
@@ -598,30 +586,8 @@ def hydrate_requester_activity(session, subdomain, tickets):
     return hydrated
 
 
-def partition_by_state(tickets, state):
-    """Split into (new, changed, unchanged) against saved state.
-
-    `changed` means the requester has touched the ticket since we last reported it —
-    see activity_key. An agent reply or an automation firing is not a change here.
-    """
-    seen = state.get("seen", {})
-    new, changed, unchanged = [], [], []
-    for ticket in tickets:
-        previous = seen.get(str(ticket.get("id")))
-        if previous is None:
-            new.append(ticket)
-        elif previous.get("requester_updated_at") != activity_key(ticket):
-            changed.append(ticket)
-        else:
-            unchanged.append(ticket)
-    return new, changed, unchanged
-
-
-def save_state(path, state, reported, retention_days):
-    """Record `reported` as seen. Returns (kept, pruned)."""
-    records = {str(t.get("id")): {"requester_updated_at": activity_key(t)}
-               for t in reported}
-    return dedup.save_state(path, state, records, retention_days, STATE_VERSION)
+STATE = dedup.Tracker(STATE_VERSION, "ticket", lambda t: str(t.get("id")), activity_key,
+                      "requester_updated_at")
 
 
 # ---- App-store review filtering --------------------------------------------
@@ -760,11 +726,6 @@ def customer_text(session, subdomain, ticket, comments, limit):
     # body. Say so rather than sending an empty sample, which reads as a blank
     # question the model has to answer anyway.
     return clip("\n\n".join(parts), limit) or "(no text)"
-
-
-def squash(value):
-    """Collapse whitespace so subject/description can be compared meaningfully."""
-    return re.sub(r"\s+", " ", value or "").strip()
 
 
 def review_stars(ticket):
@@ -1707,8 +1668,9 @@ def main():
                              "unchanged (same Zendesk updated_at) are skipped entirely; "
                              "changed ones are re-reported and flagged. Written only on a "
                              "real run, after Discord accepts the post.")
-    parser.add_argument("--state-retention-days", type=int, default=30, metavar="N",
-                        help="Forget state entries older than N days (default: 30).")
+    parser.add_argument("--state-retention-days", type=int, default=STATE.retention_days,
+                        metavar="N",
+                        help=f"Forget state entries older than N days (default: {STATE.retention_days}).")
     parser.add_argument("--dump-batch", metavar="PATH",
                         help="Write the batch (tickets, prompt, schema) to PATH and exit, for "
                              "hand-classification. WARNING: writes ticket content to disk.")
@@ -1722,7 +1684,7 @@ def main():
     # cannot deliver. A dump exits before rendering, so it never needs them either.
     needs_discord = not (args.dry_run or args.no_discord or args.dump_batch)
     webhook = get_env("ZENDESK_DISCORD_WEBHOOK_URL", args.webhook, required=needs_discord)
-    model = args.model or os.environ.get("ZENDESK_TRIAGE_MODEL") or DEFAULT_MODEL
+    model = get_env("ZENDESK_TRIAGE_MODEL", args.model, default=DEFAULT_MODEL)
 
     stats = {}
     state = None
@@ -1740,7 +1702,7 @@ def main():
 
         # An explicit query wins over --window-hours; warn rather than silently drop it.
         window_start = None
-        explicit_query = args.query or os.environ.get("ZENDESK_QUERY")
+        explicit_query = get_env("ZENDESK_QUERY", args.query, required=False)
         if explicit_query:
             if args.window_hours:
                 print("Note: --window-hours ignored because an explicit query was given.")
@@ -1748,7 +1710,7 @@ def main():
         elif args.window_hours:
             window_start = window_cutoff(args.window_hours)
             query = build_window_query(args.window_hours, window_start)
-            stats["scope"] = window_label(args.window_hours)
+            stats["scope"] = f"updated in the past {window_label(args.window_hours)}"
         else:
             query = DEFAULT_QUERY
 
@@ -1802,8 +1764,8 @@ def main():
                 return
 
         if args.state:
-            state = load_state(args.state)
-            new, changed, unchanged = partition_by_state(tickets, state)
+            state = STATE.load(args.state)
+            new, changed, unchanged = STATE.partition(tickets, state)
             print(f"{len(new)} new, {len(changed)} changed since last reported, "
                   f"{len(unchanged)} unchanged (skipped).")
             stats["skipped_unchanged"] = len(unchanged)
@@ -1898,9 +1860,9 @@ def main():
     # Record only tickets covered by messages Discord actually accepted, so a partial
     # failure neither reposts what landed nor suppresses what didn't.
     if args.state and state is not None:
-        delivered = set().union(*coverage[:posted]) if posted else set()
+        delivered = discord.delivered_ids(coverage, posted)
         recorded = [t for t in classified if t.get("id") in delivered]
-        kept, pruned = save_state(args.state, state, recorded, args.state_retention_days)
+        kept, pruned = STATE.save(args.state, state, recorded, args.state_retention_days)
         print(f"Recorded {len(recorded)} tickets; state now tracks {kept} "
               f"({pruned} pruned beyond {args.state_retention_days} days).")
 
