@@ -11,9 +11,9 @@ and what each PR's updated_at was at the time, so a PR the digest already showed
 out until something happens to it. Without it every PR in the window reads as new.
 
 Who is a maintainer comes from maintainers.txt, one login per line; bot accounts are
-dropped on GitHub's own account type rather than by name. Forks and archived repos
-are excluded by checking the search results against the org's repository list, so a
-repo created today is covered today.
+dropped on GitHub's own account type rather than by name. Forks, archived and private
+repos are excluded by checking the search results against the org's repository list,
+so a repo created today is covered today.
 
 One search fetches every open PR in the org, and the window is applied to the result
 here rather than in the query. That is what lets the header carry the total open
@@ -24,9 +24,8 @@ than importing them: the two jobs run under different users from different env
 files, and a shared module would make either one's dependencies the other's.
 
 Config (env vars, or flags for local runs):
-    GITHUB_PRS_TOKEN      GitHub token, read-only. Needs no scope at all for the
-                          public repos; add `repo` if the digest should also see
-                          the org's private ones.
+    GITHUB_PRS_TOKEN      GitHub token, read-only. Needs no scope at all: the
+                          digest reads public repositories only.
     GITHUB_PRS_DISCORD_WEBHOOK_URL
                           Discord incoming webhook for the channel this posts to
                           (not needed with --dry-run)
@@ -168,12 +167,18 @@ def fetch_json(session, url, **kwargs):
 
 
 def fetch_repos(session, org, include_forks=False, include_archived=False):
-    """Names of the org's repositories the digest is willing to report on."""
+    """Names of the org's repositories the digest is willing to report on.
+
+    Private repositories are never reported, whatever the token can see: the digest
+    posts to Discord, and nothing about them belongs there.
+    """
     names, page = set(), 1
     while True:
         batch = fetch_json(session, f"{API}/orgs/{org}/repos",
                            params={"per_page": PER_PAGE, "page": page, "type": "all"})
         for repo in batch:
+            if repo.get("private"):
+                continue
             if repo.get("fork") and not include_forks:
                 continue
             if repo.get("archived") and not include_archived:

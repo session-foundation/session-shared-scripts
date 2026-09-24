@@ -216,8 +216,8 @@ Mode `640`, `root:ghdigest`, and separate from the Zendesk file rather than merg
 into it — see above.
 
 ```sh
-# Read-only. No scope at all is needed for the org's public repositories; add `repo`
-# to have the digest also see the private ones. Nothing here ever writes to GitHub.
+# Read-only, and no scope at all: the digest reads public repositories only. Nothing
+# here ever writes to GitHub.
 GITHUB_PRS_TOKEN=
 
 # The channel the digest posts to. A webhook is bound to the channel it was created
