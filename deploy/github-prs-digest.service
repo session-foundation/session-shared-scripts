@@ -1,0 +1,36 @@
+[Unit]
+Description=Daily digest of contributor pull requests
+Documentation=https://github.com/session-foundation/session-shared-scripts
+After=network-online.target
+Wants=network-online.target
+OnFailure=github-prs-alert@%n.service
+
+[Service]
+Type=oneshot
+User=ghdigest
+Group=ghdigest
+WorkingDirectory=/opt/zendesk/github_prs
+EnvironmentFile=/etc/github-prs/env
+
+ExecStart=/opt/github-prs/venv/bin/python digest.py --window-hours 72 \
+    --state /var/lib/github-prs/seen.json
+
+# A dozen API calls. Anything near this is GitHub rate-limiting the run rather than
+# a large result set.
+TimeoutStartSec=15min
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+# The dedup state, and the only thing this job writes anywhere. Losing it re-reports
+# the window once: noisy, never wrong, so it needs persisting rather than backing up.
+ReadWritePaths=/var/lib/github-prs
+StateDirectory=github-prs

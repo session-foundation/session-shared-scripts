@@ -1,0 +1,20 @@
+# GitHub logins whose pull requests the digest does not report: the people already in
+# the review loop. Everyone else opening a PR in session-foundation's repos is a
+# contributor and gets a line.
+#
+# Matched case-insensitively against the PR author's login. Bot accounts need no
+# entry — the digest drops every account GitHub types as a Bot.
+#
+# Neither org membership nor push access is a usable substitute for this list. The org
+# has six members, two of whom are not in the review loop, and push access is held by
+# a dozen more as outside collaborators. Both would report a maintainer's PR as a
+# stranger's, or leave a contractor's PR out of the digest entirely.
+#
+# The list goes stale silently: until a new maintainer is added, their PRs are
+# reported as if they came from an outside contributor. That is the failure mode to
+# watch for when someone joins.
+
+Bilb
+jagerman
+mpretty-cyro
+stfsession

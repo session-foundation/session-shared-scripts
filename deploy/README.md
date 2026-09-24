@@ -1,17 +1,20 @@
 # Self-hosted deployment
 
-The Zendesk triage digest and the `claude:` note webhook, both running on one
-machine.
-
-Two things run here:
+The Zendesk triage digest, the `claude:` note webhook and the contributor pull request
+digest, all on one machine.
 
 | Unit | What it is |
 | --- | --- |
 | `zendesk-relay.service` | Always on. The HTTPS endpoint Zendesk posts note webhooks to. |
 | `zendesk-digest.timer` → `.service` | Weekday mornings. Resolves positive reviews, then posts the digest. |
+| `github-prs-digest.timer` → `.service` | Weekday mornings. Posts the contributor pull request digest. |
 
-`zendesk-alert@.service` is pulled in by `OnFailure=` on both, and reports the failed
-unit to the triage channel.
+`zendesk-alert@.service` and `github-prs-alert@.service` are pulled in by `OnFailure=`
+and report the failed unit to the channel that job posts to.
+
+One clone at `/opt/zendesk` holds all of it — the directory is named after its first
+tenant, not its contents. The venvs are separate, because the two jobs pin `requests`
+differently and a shared one would silently be whichever was installed last.
 
 ## Host requirements
 
@@ -30,7 +33,8 @@ unit to the triage channel.
 - **nginx already installed**, with certbot managing its certificates. This adds one
   server block to it rather than a second web server; two would fight over :443 and
   take the host's other sites down with them.
-- Persistent `/var/lib/zendesk` — it holds the dedup state, the only thing on disk.
+- Persistent `/var/lib/zendesk` and `/var/lib/github-prs` — they hold the two digests'
+  dedup state, the only thing on disk. `StateDirectory=` creates the second one.
 
 Note who else holds root. This box becomes custodian of a Zendesk API token that can
 write a public comment to any ticket, and of a logged-in Claude Code session.
@@ -107,6 +111,39 @@ nginx -t && systemctl reload nginx                # validate what certbot wrote
 > nginx -t && systemctl reload nginx
 > ```
 
+### Adding the pull request digest
+
+Its own user, its own environment file and its own venv, out of the same clone. A
+token that can read the org's repositories has no business in the environment of the
+relay, which is the one process here reachable from the internet.
+
+The account needs no home of its own: nothing in this job shells out to the Claude
+CLI, so the `$HOME` that the Zendesk units bend over backwards to preserve is not
+wanted here at all.
+
+```bash
+useradd --system --no-create-home --home /nonexistent --shell /usr/sbin/nologin ghdigest
+python3 -m venv /opt/github-prs/venv
+/opt/github-prs/venv/bin/pip install -r /opt/zendesk/github_prs/requirements.txt
+chown -R ghdigest:ghdigest /opt/github-prs
+
+install -d -m 750 -o root -g ghdigest /etc/github-prs
+[ -e /etc/github-prs/env ] || install -m 640 -o root -g ghdigest /dev/null /etc/github-prs/env
+"${EDITOR:-nano}" /etc/github-prs/env             # contents under Secrets, below
+
+cp /opt/zendesk/deploy/github-prs-*.service /opt/zendesk/deploy/github-prs-*.timer \
+   /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now github-prs-digest.timer
+```
+
+The clone stays owned by `zendesk` and world-readable, which is what lets `ghdigest`
+run out of it. Nothing secret lives there — every secret is under `/etc`.
+
+`/var/lib/github-prs` needs no `install` step: `StateDirectory=github-prs` on the unit
+creates it with the right owner on first start. It holds the dedup state that keeps the
+72-hour window from re-reporting the same PR every weekday morning.
+
 ## Secrets
 
 `/etc/zendesk/env`, mode `640`, `root:zendesk` — readable by the service, not by
@@ -172,6 +209,26 @@ systemctl show zendesk-digest.service -p Environment | tr ' ' '\n' | grep -vi to
 Set `RELAY_DRY_RUN=1` for the first deployment. The whole `claude:` note path runs —
 webhook, command parsing, composing, translation — and the Zendesk writes are
 skipped.
+
+### `/etc/github-prs/env`
+
+Mode `640`, `root:ghdigest`, and separate from the Zendesk file rather than merged
+into it — see above.
+
+```sh
+# Read-only. No scope at all is needed for the org's public repositories; add `repo`
+# to have the digest also see the private ones. Nothing here ever writes to GitHub.
+GITHUB_PRS_TOKEN=
+
+# The channel the digest posts to. A webhook is bound to the channel it was created
+# in, so this one value decides where the digest goes.
+GITHUB_PRS_DISCORD_WEBHOOK_URL=
+
+# Required, and normally the same webhook: without it alert.py falls back to
+# ZENDESK_DISCORD_WEBHOOK_URL, which is not in this file, and the failure notifier
+# fails instead of reporting.
+ALERT_DISCORD_WEBHOOK_URL=
+```
 
 ## Verifying, in order
 
@@ -255,12 +312,39 @@ else: the alert still sends, with the message it always sent.
 ```sh
 cd deploy && python -m unittest discover     # the alert's own tests
 ```
+**6. The pull request digest.** A dry run under the unit's own confinement renders the
+digest and posts nothing. `systemd-run` rather than `runuser` because the token then
+comes from the environment file rather than an argument every process on the box can
+read out of `ps`:
+
+```bash
+systemd-run --pty --uid=ghdigest -p EnvironmentFile=/etc/github-prs/env \
+  -p WorkingDirectory=/opt/zendesk/github_prs \
+  /opt/github-prs/venv/bin/python digest.py --dry-run
+```
+
+Then for real: `systemctl start github-prs-digest.service`,
+`systemctl list-timers github-prs-digest` (expect the next weekday, not tomorrow), and
+`systemctl start github-prs-alert@test.service` for its failure path.
+
+Start it twice. The second run is the one that proves the dedup state: it should report
+everything, then nothing, and say so.
+
+```bash
+journalctl -u github-prs-digest -n 5 --no-pager   # "N new, 0 changed, N unchanged"
+ls -l /var/lib/github-prs/seen.json
+```
+
+A second run that reports everything again means the state was not written — check that
+`StateDirectory=` reached systemd with
+`systemctl show github-prs-digest -p StateDirectory`.
 
 ## Updating
 
 ```bash
 runuser -u zendesk -- git -C /opt/zendesk pull
 /opt/zendesk/venv/bin/pip install -r /opt/zendesk/zendesk_triage/requirements.txt
+/opt/github-prs/venv/bin/pip install -r /opt/zendesk/github_prs/requirements.txt
 systemctl restart zendesk-relay
 ```
 
@@ -321,8 +405,10 @@ What that costs, in order of how much it matters:
 - **The digest is late, not lost.** `Persistent=yes` on the timer means a host that
   was down at 10:00 runs the digest once when it comes back, and the 72-hour window
   covers the gap.
-- **The dedup state may be stale.** Losing `/var/lib/zendesk/seen.json` re-reports the
+- **The dedup state may be stale.** Losing either `seen.json` re-reports that digest's
   window once: noisy, never wrong.
+- **The pull request digest is late, not lost**, on the same `Persistent=yes` as the
+  Zendesk one, and its 72-hour window already covers a weekend's gap.
 
 Failures that are not a whole-host outage report themselves — `OnFailure=` on both
 units posts the failed unit and a `journalctl` line to the triage channel.
