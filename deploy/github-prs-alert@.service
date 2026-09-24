@@ -1,0 +1,22 @@
+[Unit]
+Description=Report a failed pull request digest unit to Discord
+Documentation=https://github.com/session-foundation/session-shared-scripts
+
+[Service]
+Type=oneshot
+User=ghdigest
+Group=ghdigest
+EnvironmentFile=/etc/github-prs/env
+
+# Same script as zendesk-alert@, run under this job's environment so the failure
+# lands in the channel the job posts to rather than the triage one.
+ExecStart=/opt/github-prs/venv/bin/python /opt/zendesk/deploy/alert.py %i
+
+# See zendesk-alert@.service: read-only access to the failed unit's journal, which is
+# the line the alert quotes.
+SupplementaryGroups=systemd-journal
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes

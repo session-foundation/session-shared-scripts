@@ -9,7 +9,8 @@ the job, whereas %n comes from the failing unit itself and cannot drift.
 
 Posts over ZENDESK_DISCORD_WEBHOOK_URL rather than the bot token, deliberately. This
 is one line of text needing no components, and a failure notifier should depend on as
-little as possible of whatever just broke.
+little as possible of whatever just broke. ALERT_DISCORD_WEBHOOK_URL overrides it, so
+a job that posts to a channel of its own reports its failures there too.
 
 The failed unit's last journal line comes with it, so the channel says what broke
 rather than only that something did. Reading the journal needs the unit to carry
@@ -102,7 +103,8 @@ def main():
     args = [arg.strip() for arg in sys.argv[1:]]
     if not args or len(args) > 2 or not args[0]:
         sys.exit("usage: alert.py <name> [journal-unit]")
-    webhook = triage.get_env("ZENDESK_DISCORD_WEBHOOK_URL")
+    webhook = (os.environ.get("ALERT_DISCORD_WEBHOOK_URL")
+               or triage.get_env("ZENDESK_DISCORD_WEBHOOK_URL"))
     detail = last_job_line(journal_tail(args[-1]))
     message = build_message(args[0], socket.gethostname(), *args[1:], detail=detail)
     # A fresh session, never a Zendesk one — that carries the API-token auth header,

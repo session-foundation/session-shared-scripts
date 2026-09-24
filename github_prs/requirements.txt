@@ -1,0 +1,2 @@
+# What the deployment runs. The suite is stdlib unittest and imports nothing else.
+requests==2.34.2
