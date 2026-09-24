@@ -851,8 +851,14 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
         print(f"#{ticket_id}: grounded in {group}/{covering} "
               f"({cell['n']} solved, {cell['consistency']} consistency).")
 
-    result = compose(model, triage.clip(sample, CUSTOMER_SAMPLE_CHARS), brief,
-                     previous, precedent)
+    try:
+        result = compose(model, triage.clip(sample, CUSTOMER_SAMPLE_CHARS), brief,
+                         previous, precedent)
+    except SystemExit as exc:
+        say(session, subdomain, ticket_id, comment_id,
+            f"The draft could not be written: {exc} Nothing was sent. To try again, "
+            "add a new private note reading claude: draft <the brief>.", dry_run)
+        return
     print(f"#{ticket_id}: {'revised' if previous else 'drafted'} "
           f"{len(result['options'])} option(s); requester writes "
           f"{result['language']!r} ({result['language_code']}).")
@@ -1046,10 +1052,16 @@ def run_english(session, subdomain, model, ticket, comments, command, dry_run):
 
     payload = json.dumps([{"index": t["index"], "speaker": t["who"], "text": t["body"]}
                           for t in turns], ensure_ascii=False)
-    rendered = triage.claude_cli_json(
-        model, "medium", triage.TRANSCRIPT_SYSTEM_PROMPT, triage.TRANSCRIPT_SCHEMA,
-        triage.clip(payload, triage.TRANSCRIPT_INPUT_CHARS),
-        triage.ENGLISH_TIMEOUT_SECONDS, f"the English transcript of #{ticket_id}")
+    try:
+        rendered = triage.claude_cli_json(
+            model, "medium", triage.TRANSCRIPT_SYSTEM_PROMPT, triage.TRANSCRIPT_SCHEMA,
+            triage.clip(payload, triage.TRANSCRIPT_INPUT_CHARS),
+            triage.ENGLISH_TIMEOUT_SECONDS, f"the English transcript of #{ticket_id}")
+    except SystemExit as exc:
+        say(session, subdomain, ticket_id, command["id"],
+            f"The English transcript could not be produced: {exc} To try again, add "
+            "a new private note reading claude: english.", dry_run)
+        return
     if already_english(turns, rendered.get("turns")):
         # A transcript of English text repeats what is already a few comments above
         # it. Say so rather than posting the same words back.
