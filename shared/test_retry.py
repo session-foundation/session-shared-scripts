@@ -5,6 +5,8 @@ import os
 import sys
 import time
 import unittest
+from email.utils import format_datetime
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -80,16 +82,24 @@ class TestRequestWithRetry(unittest.TestCase):
             retry.request_with_retry(session, "GET", "https://x", attempts=3)
         self.assertEqual(clock.slept, [60])
 
-    def test_http_date_retry_after_falls_back_instead_of_crashing(self):
-        """RFC 9110 allows an HTTP-date here; float() on it used to raise ValueError."""
+    def test_an_http_date_retry_after_is_honoured(self):
+        """RFC 9110 allows an HTTP-date here as well as a count of seconds."""
+        soon = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=20), usegmt=True)
         session = FakeSession([
-            FakeResponse({}, status_code=503, retry_after="Wed, 21 Oct 2026 07:28:00 GMT"),
+            FakeResponse({}, status_code=503, retry_after=soon),
             FakeResponse({"ok": True}),
         ])
         with NoSleep() as clock:
             resp = retry.request_with_retry(session, "GET", "https://x", attempts=3)
         self.assertEqual(resp.json(), {"ok": True})
-        self.assertEqual(clock.slept, [1.0])  # fell back to the backoff delay
+        self.assertEqual(len(clock.slept), 1)
+        self.assertTrue(15 <= clock.slept[0] <= 21, clock.slept)
+
+    def test_the_timeout_is_forwarded_and_defaults_to_thirty_seconds(self):
+        session = FakeSession([FakeResponse({}), FakeResponse({})])
+        retry.request_with_retry(session, "GET", "https://x")
+        retry.request_with_retry(session, "GET", "https://x", timeout=60)
+        self.assertEqual([kw["timeout"] for _, _, kw in session.calls], [30, 60])
 
     def test_zero_attempts_is_rejected_rather_than_unbound(self):
         with self.assertRaises(ValueError):
@@ -119,8 +129,16 @@ class TestRetryAfterSeconds(unittest.TestCase):
         self.assertEqual(self.seconds({"retry-after": "12"}), 12.0)
 
     def test_unparseable_header_uses_the_default(self):
-        for raw in ("Wed, 21 Oct 2026 07:28:00 GMT", "", "soon", "12s"):
-            self.assertEqual(self.seconds({"retry-after": raw}), 4.0)
+        for raw in ("", "soon", "12s", "Wed, 32 Oct 2026 07:28:00 GMT"):
+            self.assertEqual(self.seconds({"retry-after": raw}), 4.0, msg=f"retry-after={raw!r}")
+
+    def test_an_http_date_in_the_past_uses_the_default(self):
+        """A date already gone means a negative wait, which time.sleep() rejects."""
+        self.assertEqual(self.seconds({"retry-after": "Wed, 21 Oct 2015 07:28:00 GMT"}), 4.0)
+
+    def test_an_http_date_is_the_seconds_until_it(self):
+        soon = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=30), usegmt=True)
+        self.assertTrue(25 <= self.seconds({"retry-after": soon}) <= 31)
 
     def test_negative_and_non_finite_values_use_the_default(self):
         """time.sleep() rejects a negative or NaN duration, so passing one through
