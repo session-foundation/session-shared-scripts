@@ -183,6 +183,24 @@ class EnglishTranscript(unittest.TestCase):
         self.assertIn("already in English", body)
         self.assertEqual(session.calls[0][2]["json"]["ticket"].get("additional_tags", []), [])
 
+    def test_a_failed_transcript_is_reported_in_a_private_note(self):
+        turns = [{"index": 0, "who": "Customer", "when": "t", "body": "Hallo"}]
+        def fail(*a, **k):
+            raise SystemExit("claude exited 1 on the English transcript of #7: 529.")
+        session = fake_session(*[FakeResponse({"ticket": {}}), FakeResponse({}),
+                               FakeResponse({})])
+        with Patched(triage, conversation_turns=lambda *a: turns, claude_cli_json=fail):
+            note_reply.run_english(session, "sub", "model", {"id": 7},
+                                   [comment("claude: english", cid=9)],
+                                   {"id": 9, "author": AGENT, "action": "english",
+                                    "brief": ""}, dry_run=False)
+        note = session.calls[0][2]["json"]["ticket"]["comment"]
+        self.assertIs(note["public"], False)
+        self.assertIn("529", note["html_body"])
+        added = [kw["json"]["tags"] for m, u, kw in session.calls
+                 if m == "PUT" and "/tags.json" in u]
+        self.assertEqual(added, [[note_reply.TAG_ERROR]])
+
     def test_unaccented_german_is_still_translated(self):
         """The reason this is checked after the call, not guessed before it:
         "Hallo, ich habe ein Problem" is pure ASCII, and a character test would have
@@ -827,6 +845,28 @@ class Composition(unittest.TestCase):
         self.assertIn("Erster Entwurf", seen["previous"])
         self.assertIn("revised",
                       session.calls[0][2]["json"]["ticket"]["comment"]["html_body"])
+
+    def test_a_failed_compose_is_reported_in_a_private_note(self):
+        """A Claude failure otherwise dies in the journal, where the agent who wrote
+        the brief never looks. The ticket is where they are."""
+        def fail(*a, **k):
+            raise SystemExit("claude exited 1 on the reply draft: overloaded.")
+        with Patched(note_reply, compose=fail):
+            session = fake_session(*[FakeResponse({"ticket": {}}), FakeResponse({}),
+                                   FakeResponse({})])
+            note_reply.run_draft(
+                session, "sub", "model", {"id": 7, "requester_id": 42},
+                [comment("claude: draft - x", cid=11)],
+                {"id": 11, "author": AGENT, "action": "draft", "brief": "x"},
+                API_USER, dry_run=False)
+        note = session.calls[0][2]["json"]["ticket"]["comment"]
+        self.assertIs(note["public"], False)
+        self.assertIn("overloaded", note["html_body"])
+        self.assertIn(note_reply.done_marker(11), note["html_body"])
+        tag_calls = [(m, kw["json"]["tags"]) for m, u, kw in session.calls[1:]
+                     if "/tags.json" in u]
+        self.assertEqual(tag_calls, [("PUT", [note_reply.TAG_ERROR]),
+                                     ("DELETE", [note_reply.TAG_QUEUED])])
 
     def test_a_first_draft_has_nothing_to_amend(self):
         seen = {}
