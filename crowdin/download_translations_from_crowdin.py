@@ -1,229 +1,173 @@
-import os
-import json
-import sys
+#!/usr/bin/env python3
+"""Download every language of a Crowdin project as XLIFF, plus its non-translatable terms.
+
+Usage:
+    download_translations_from_crowdin.py <api_token> <project_id> <download_directory>
+        [--glossary_id ID --concept_id ID] [--skip-untranslated-strings]
+        [--force-allow-unapproved] [--max-workers N] [-v]
+"""
 import argparse
-import requests
-import time
+import json
+import os
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock, Semaphore
 
-from colorama import Fore, Style, init
+import requests
 
-# Initialize colorama
-init(autoreset=True)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from generate_shared import print_error, print_progress, print_success, run_main  # noqa: E402
+from shared.retry import request_with_retry  # noqa: E402
 
-# Parse command-line arguments
-parser = argparse.ArgumentParser(description='Download translations from Crowdin.')
-parser.add_argument('api_token', help='Crowdin API token')
-parser.add_argument('project_id', help='Crowdin project ID')
-parser.add_argument('download_directory', help='Directory to save the initial downloaded files')
-parser.add_argument('--glossary_id', help='Crowdin glossary ID (optional)', default=None)
-parser.add_argument('--concept_id', help='Crowdin non-translatable terms concept ID (optional)', default=None)
-parser.add_argument('--skip-untranslated-strings', action='store_true', help='Exclude strings which have not been translated from the translation files')
-parser.add_argument('--force-allow-unapproved', action='store_true', help='Include unapproved translations in the translation files')
-parser.add_argument('--max-workers', type=int, default=10, help='Maximum number of parallel downloads (default: 10, max: 20 due to Crowdin API limits)')
-parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
-args = parser.parse_args()
-
-CROWDIN_API_BASE_URL = "https://api.crowdin.com/api/v2"
-CROWDIN_API_TOKEN = args.api_token
-CROWDIN_PROJECT_ID = args.project_id
-CROWDIN_GLOSSARY_ID = args.glossary_id
-CROWDIN_CONCEPT_ID = args.concept_id
-DOWNLOAD_DIRECTORY = args.download_directory
-SKIP_UNTRANSLATED_STRINGS = args.skip_untranslated_strings
-FORCE_ALLOW_UNAPPROVED = args.force_allow_unapproved
-VERBOSE = args.verbose
-# Crowdin API limit is 20 simultaneous requests per account
-MAX_WORKERS = min(args.max_workers, 20)
-# Semaphore ensures we don't exceed the concurrent requests limit
-api_semaphore = Semaphore(MAX_WORKERS)
-
+API = "https://api.crowdin.com/api/v2"
+# Crowdin allows 20 simultaneous requests per account.
+MAX_CONCURRENT_REQUESTS = 20
 REQUEST_TIMEOUT_S = 30
-MAX_RETRIES = 5
-INITIAL_RETRY_DELAY_S = 0.5
-
-progress_lock = Lock()
-completed_count = 0
-total_count = 0
+MAX_ATTEMPTS = 5
 
 
-def make_request_with_retry(method: str, url: str, **kwargs) -> requests.Response:
-    last_exception = None
-
-    for attempt in range(MAX_RETRIES):
-        try:
-            with api_semaphore:
-                if method.upper() == 'GET':
-                    response = requests.get(
-                        url, timeout=REQUEST_TIMEOUT_S, **kwargs)
-                elif method.upper() == 'POST':
-                    response = requests.post(
-                        url, timeout=REQUEST_TIMEOUT_S, **kwargs)
-                else:
-                    raise ValueError(f"Unsupported HTTP method: {method}")
-
-                # Handle rate limiting
-                if response.status_code == 429:
-                    retry_after = int(response.headers.get(
-                        'Retry-After', INITIAL_RETRY_DELAY_S * (2 ** attempt)))
-                    if VERBOSE:
-                        print(f"\n{Fore.YELLOW}⚠️  Rate limited, waiting {
-                              retry_after}s before retry...{Style.RESET_ALL}")
-                    time.sleep(retry_after)
-                    continue
-
-                return response
-
-        except requests.exceptions.RequestException as e:
-            last_exception = e
-            delay = INITIAL_RETRY_DELAY_S * (2 ** attempt)
-            if VERBOSE:
-                print(f"\n{Fore.YELLOW}⚠️  Request failed, retrying in {
-                      delay}s... ({e}){Style.RESET_ALL}")
-            time.sleep(delay)
-
-    raise last_exception or Exception(
-        f"Request failed after {MAX_RETRIES} retries")
+class CrowdinError(Exception):
+    pass
 
 
-def check_error(response, context=""):
-    if response.status_code != 200:
-        error_msg = response.json().get('error', {}).get('message', 'Unknown error')
-        raise Exception(
-            f"{context}: {error_msg} (Code: {response.status_code})")
+def error_message(response):
+    """Crowdin's error message, or the start of the body when it is not that envelope."""
+    try:
+        return response.json().get("error", {}).get("message", "Unknown error")
+    except ValueError:
+        return response.text[:200] or "Unknown error"
 
 
-def download_file(url: str, output_path: str):
-    response = requests.get(url, stream=True, timeout=REQUEST_TIMEOUT_S)
-    response.raise_for_status()
+class Crowdin:
+    """One project's API, gated to Crowdin's concurrency limit across the worker threads."""
 
-    with open(output_path, 'wb') as f:
-        for chunk in response.iter_content(chunk_size=8192):
-            f.write(chunk)
+    def __init__(self, token, project_id, max_workers):
+        self.project_id = project_id
+        self.session = requests.Session()
+        self.session.headers["Authorization"] = f"Bearer {token}"
+        # Exports are served from a signed URL on another host, which must not see the token.
+        self.downloads = requests.Session()
+        self.gate = Semaphore(min(max_workers, MAX_CONCURRENT_REQUESTS))
+
+    def request(self, method, path, context, **kwargs):
+        """One API response's JSON, or CrowdinError naming `context`."""
+        with self.gate:
+            response = request_with_retry(self.session, method, f"{API}/{path}",
+                                          attempts=MAX_ATTEMPTS, timeout=REQUEST_TIMEOUT_S,
+                                          **kwargs)
+        if response.status_code != 200:
+            raise CrowdinError(f"{context}: {error_message(response)} "
+                               f"(Code: {response.status_code})")
+        return response.json()
+
+    def download(self, url, output_path):
+        response = request_with_retry(self.downloads, "GET", url, attempts=MAX_ATTEMPTS,
+                                      timeout=REQUEST_TIMEOUT_S, stream=True)
+        response.raise_for_status()
+        with open(output_path, "wb") as handle:
+            for chunk in response.iter_content(chunk_size=8192):
+                handle.write(chunk)
 
 
-def export_and_download_language(language: dict, is_source: bool = False) -> str:
-    global completed_count
+class Progress:
+    def __init__(self, total):
+        self.total, self.done, self.lock = total, 0, Lock()
 
-    lang_id = language['id']
-    lang_locale = language['locale']
-    export_payload = {
-        "targetLanguageId": lang_id,
+    def tick(self):
+        with self.lock:
+            self.done += 1
+            print_progress(f"Downloaded {self.done}/{self.total} translations...")
+
+
+def export_and_download_language(client, language, directory, is_source, skip_untranslated,
+                                 allow_unapproved):
+    """Export one language and save it as <locale>.xliff. Returns the locale."""
+    locale = language["locale"]
+    payload = {
+        "targetLanguageId": language["id"],
         "format": "xliff",
-        "skipUntranslatedStrings": False if is_source else SKIP_UNTRANSLATED_STRINGS,
-        "exportApprovedOnly": False if is_source else (not FORCE_ALLOW_UNAPPROVED)
+        "skipUntranslatedStrings": False if is_source else skip_untranslated,
+        "exportApprovedOnly": False if is_source else not allow_unapproved,
     }
+    export = client.request("POST", f"projects/{client.project_id}/translations/exports",
+                            f"Export failed for {locale}", json=payload)
+    client.download(export["data"]["url"], os.path.join(directory, f"{locale}.xliff"))
+    return locale
 
-    export_response = make_request_with_retry(
-        'POST',
-        f"{CROWDIN_API_BASE_URL}/projects/{CROWDIN_PROJECT_ID}/translations/exports",
-        headers={"Authorization": f"Bearer {CROWDIN_API_TOKEN}",
-                 "Content-Type": "application/json"},
-        data=json.dumps(export_payload)
-    )
-    check_error(export_response, f"Export failed for {lang_locale}")
 
-    download_url = export_response.json()['data']['url']
-    download_path = os.path.join(DOWNLOAD_DIRECTORY, f"{lang_locale}.xliff")
-    download_file(download_url, download_path)
-
-    with progress_lock:
-        completed_count += 1
-        print(f"\033[2K{Fore.WHITE}⏳ Downloaded {
-              completed_count}/{total_count} translations...{Style.RESET_ALL}", end='\r')
-
-    return lang_locale
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Download translations from Crowdin.")
+    parser.add_argument("api_token", help="Crowdin API token")
+    parser.add_argument("project_id", help="Crowdin project ID")
+    parser.add_argument("download_directory", help="Directory to save the downloaded files")
+    parser.add_argument("--glossary_id", help="Crowdin glossary ID (optional)")
+    parser.add_argument("--concept_id", help="Crowdin non-translatable terms concept ID (optional)")
+    parser.add_argument("--skip-untranslated-strings", action="store_true",
+                        help="Exclude strings which have not been translated")
+    parser.add_argument("--force-allow-unapproved", action="store_true",
+                        help="Include unapproved translations")
+    parser.add_argument("--max-workers", type=int, default=10,
+                        help=f"Parallel downloads (default: 10, at most {MAX_CONCURRENT_REQUESTS})")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Print the API responses")
+    return parser.parse_args(argv)
 
 
 def main():
-    global total_count, completed_count
-    # Retrieve the list of languages
-    print(f"{Fore.WHITE}⏳ Retrieving project details...{Style.RESET_ALL}", end='\r')
-    project_response = make_request_with_retry(
-        'GET',
-        f"{CROWDIN_API_BASE_URL}/projects/{CROWDIN_PROJECT_ID}",
-        headers={"Authorization": f"Bearer {CROWDIN_API_TOKEN}"}
-    )
-    check_error(project_response, "Failed to retrieve project details")
-    project_details = project_response.json()['data']
-    source_language = project_details['sourceLanguage']
-    target_languages = project_details['targetLanguages']
-    num_languages = len(target_languages)
-    print(f"\033[2K{Fore.GREEN}✅ Project details retrieved, found {num_languages} translations{Style.RESET_ALL}")
+    args = parse_args()
+    client = Crowdin(args.api_token, args.project_id, args.max_workers)
 
-    if VERBOSE:
-        print(f"{Fore.BLUE}Response: {json.dumps(project_response.json(), indent=2)}{Style.RESET_ALL}")
+    print_progress("Retrieving project details...")
+    project = client.request("GET", f"projects/{args.project_id}",
+                             "Failed to retrieve project details")
+    if args.verbose:
+        print(json.dumps(project, indent=2))
+    source_language = project["data"]["sourceLanguage"]
+    target_languages = sorted(project["data"]["targetLanguages"], key=lambda x: x["locale"])
+    print_success(f"Project details retrieved, found {len(target_languages)} translations")
 
-    if not os.path.exists(DOWNLOAD_DIRECTORY):
-        os.makedirs(DOWNLOAD_DIRECTORY)
+    os.makedirs(args.download_directory, exist_ok=True)
+    with open(os.path.join(args.download_directory, "_project_info.json"), "w",
+              encoding="utf-8") as handle:
+        json.dump(project, handle, indent=2)
 
-    project_info_file = os.path.join(DOWNLOAD_DIRECTORY, "_project_info.json")
-    with open(project_info_file, 'w', encoding='utf-8') as file:
-        json.dump(project_response.json(), file, indent=2)
-
-    all_languages = [{'language': source_language, 'is_source': True}]
-    for lang in sorted(target_languages, key=lambda x: x['locale']):
-        all_languages.append({'language': lang, 'is_source': False})
-
-    total_count = len(all_languages)
-    completed_count = 0
-
-    print(f"{Fore.WHITE}⏳ Downloading {total_count} translations (using {MAX_WORKERS} parallel workers)...{Style.RESET_ALL}")
-    failed_languages = []
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_to_lang = {
-            executor.submit(
-                export_and_download_language,
-                item['language'],
-                item['is_source']
-            ): item['language']['locale']
-            for item in all_languages
-        }
-
-        for future in as_completed(future_to_lang):
-            lang_locale = future_to_lang[future]
+    languages = [(source_language, True)] + [(lang, False) for lang in target_languages]
+    workers = min(args.max_workers, MAX_CONCURRENT_REQUESTS)
+    print(f"⏳ Downloading {len(languages)} translations (using {workers} parallel workers)...")
+    progress = Progress(len(languages))
+    failed = []
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(export_and_download_language, client, language,
+                            args.download_directory, is_source, args.skip_untranslated_strings,
+                            args.force_allow_unapproved): language["locale"]
+            for language, is_source in languages}
+        for future in as_completed(futures):
             try:
                 future.result()
-            except Exception as e:
-                failed_languages.append((lang_locale, str(e)))
-                if VERBOSE:
-                    print(f"\n{Fore.RED}❌ Failed: {lang_locale} - {e}{Style.RESET_ALL}")
-
-    if failed_languages:
-        print(f"\033[2K{Fore.RED}❌ {len(failed_languages)} downloads failed:{Style.RESET_ALL}")
-        for locale, error in failed_languages:
+                progress.tick()
+            except Exception as exc:  # one language's failure must not hide the others'
+                failed.append((futures[future], str(exc)))
+    if failed:
+        print_error(f"{len(failed)} downloads failed:")
+        for locale, error in sorted(failed):
             print(f"  - {locale}: {error}")
         sys.exit(1)
-    else:
-        print(f"\033[2K{Fore.GREEN}✅ Downloaded {total_count} translations complete{Style.RESET_ALL}")
+    print_success(f"Downloaded {len(languages)} translations complete")
 
-    # Download non-translatable terms (if requested)
-    if CROWDIN_GLOSSARY_ID is not None and CROWDIN_CONCEPT_ID is not None:
-        print(f"{Fore.WHITE}⏳ Retrieving non-translatable strings...{Style.RESET_ALL}", end='\r')
-        static_string_response = make_request_with_retry(
-            'GET',
-            f"{CROWDIN_API_BASE_URL}/glossaries/{CROWDIN_GLOSSARY_ID}/terms?conceptId={CROWDIN_CONCEPT_ID}&limit=500",
-            headers={"Authorization": f"Bearer {CROWDIN_API_TOKEN}"}
-        )
-        check_error(static_string_response, "Failed to retrieve non-translatable strings")
-
-        if VERBOSE:
-            print(f"{Fore.BLUE}Response: {json.dumps(static_string_response.json(), indent=2)}{Style.RESET_ALL}")
-
-        non_translatable_strings_file = os.path.join(DOWNLOAD_DIRECTORY, "_non_translatable_strings.json")
-        with open(non_translatable_strings_file, 'w', encoding='utf-8') as file:
-            json.dump(static_string_response.json(), file, indent=2)
-
-        print(f"\033[2K{Fore.GREEN}✅ Downloading non-translatable complete{Style.RESET_ALL}")
+    if args.glossary_id is not None and args.concept_id is not None:
+        print_progress("Retrieving non-translatable strings...")
+        terms = client.request(
+            "GET", f"glossaries/{args.glossary_id}/terms",
+            "Failed to retrieve non-translatable strings",
+            params={"conceptId": args.concept_id, "limit": 500})
+        if args.verbose:
+            print(json.dumps(terms, indent=2))
+        with open(os.path.join(args.download_directory, "_non_translatable_strings.json"), "w",
+                  encoding="utf-8") as handle:
+            json.dump(terms, handle, indent=2)
+        print_success("Downloading non-translatable complete")
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print(f"\n{Fore.RED}Process interrupted by user{Style.RESET_ALL}")
-        sys.exit(0)
-    except Exception as e:
-        print(f"\033[2K{Fore.RED}❌ An error occurred: {e}{Style.RESET_ALL}")
-        sys.exit(1)
+    run_main(main)
