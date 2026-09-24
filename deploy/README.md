@@ -257,6 +257,25 @@ it does not, every note logs a 401 and nothing happens.
 **5. The failure path.** `systemctl start zendesk-alert@test.service` should put
 a line in the triage channel.
 
+The alert quotes the failed unit's last journal line, which is what tells the channel
+whether the job broke or the Claude Code login simply expired — the two look identical
+otherwise, and only one of them is fixed by re-running anything. That needs
+`SupplementaryGroups=systemd-journal` on the alert unit, so check it reached systemd
+and that the account can actually read a journal:
+
+```bash
+systemctl show zendesk-alert@test.service -p SupplementaryGroups
+runuser -u zendesk -- journalctl -u zendesk-digest.service -n 1 --no-pager
+```
+
+An empty `SupplementaryGroups=` means the installed unit is the old copy — see
+Updating. A permission error from the second command costs the excerpt and nothing
+else: the alert still sends, with the message it always sent.
+
+```sh
+cd deploy && python -m unittest discover     # the alert's own tests
+```
+
 ## Updating
 
 ```bash
