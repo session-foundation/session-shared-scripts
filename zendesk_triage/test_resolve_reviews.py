@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import resolve_reviews  # noqa: E402
 import triage  # noqa: E402
+import zendesk  # noqa: E402
 from shared.testing import FakeResponse, FakeSession, NoSleep, Patched  # noqa: E402
 from test_triage import ROOT, unit_commands  # noqa: E402
 
@@ -103,7 +104,7 @@ class TestSelection(unittest.TestCase):
         self.assertEqual([t["id"] for t in resolvable], [1])
 
     def test_a_star_subject_counts_even_off_channel(self):
-        """triage.is_store_review accepts either signal; the rating still decides."""
+        """zendesk.is_store_review accepts either signal; the rating still decides."""
         resolvable, _ = self.select([review(1, stars=5, channel="email")])
         self.assertEqual([t["id"] for t in resolvable], [1])
 
@@ -364,8 +365,8 @@ class TestSharedDetectionIsNotReimplemented(unittest.TestCase):
     triage's, so both scripts must call the same functions."""
 
     def test_detection_comes_from_triage(self):
-        self.assertIs(resolve_reviews.triage.is_store_review, triage.is_store_review)
-        self.assertIs(resolve_reviews.triage.review_stars, triage.review_stars)
+        self.assertIs(resolve_reviews.zendesk.is_store_review, zendesk.is_store_review)
+        self.assertIs(resolve_reviews.zendesk.review_stars, zendesk.review_stars)
 
     def test_the_star_floor_matches_what_the_triage_skips(self):
         """The triage counts reviews above its floor without classifying them; this

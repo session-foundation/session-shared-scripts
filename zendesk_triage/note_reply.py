@@ -69,10 +69,12 @@ import textwrap
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import triage  # noqa: E402  (needs the path inserts above)
 from shared.env import get_env  # noqa: E402
-from shared.retry import request_with_retry  # noqa: E402
-from shared.text import clip, squash  # noqa: E402
+from shared.text import clip, squash, undash_english  # noqa: E402
+
+import claude_cli  # noqa: E402
+import transcript  # noqa: E402
+import zendesk  # noqa: E402
 
 DEFAULT_MODEL = "claude-sonnet-5"
 COMPOSE_TIMEOUT_SECONDS = 240
@@ -145,12 +147,12 @@ def done_marker(comment_id):
     emailed twice. Keyed on the commanding comment because that is what is unique
     per instruction; the ticket id is not.
     """
-    return triage.marker("claude:done", comment_id)
+    return zendesk.marker("claude:done", comment_id)
 
 
 def draft_marker(comment_id):
     """Marks a note as carrying a sendable draft, and says which brief produced it."""
-    return triage.marker("claude:draft", comment_id)
+    return zendesk.marker("claude:draft", comment_id)
 
 
 def english_marker(latest_public_id):
@@ -160,7 +162,7 @@ def english_marker(latest_public_id):
     twice with nothing said in between should cost nothing, and asking again after
     the customer writes back should produce a fresh transcript.
     """
-    return triage.marker("claude:english", latest_public_id)
+    return zendesk.marker("claude:english", latest_public_id)
 
 
 # Anchored to the start of a line so that prose mentioning the command in passing —
@@ -201,20 +203,6 @@ def comment_text(comment):
 # ---- Zendesk ----------------------------------------------------------------
 
 
-def api_user_id(session, subdomain):
-    """The user the API token authenticates as.
-
-    Its own notes are skipped when looking for a command, which is the in-code half
-    of the loop guard. The other half is the Zendesk trigger, which should exclude
-    this same user so a draft never fires the webhook at all — see the README.
-    """
-    url = f"https://{subdomain}.zendesk.com/api/v2/users/me.json"
-    resp = request_with_retry(session, "GET", url)
-    if resp.status_code >= 400:
-        sys.exit(f"Zendesk refused to identify the API user ({resp.status_code}).")
-    return ((resp.json() or {}).get("user") or {}).get("id")
-
-
 def may_command(user):
     """Whether this Zendesk user may drive the command.
 
@@ -230,29 +218,6 @@ def may_command(user):
     return not allowed or str(user.get("id")) in allowed
 
 
-def change_tags(session, subdomain, ticket_id, add=(), drop=()):
-    """Add and remove tags, through the tags sub-resource.
-
-    NOT `additional_tags`/`remove_tags` on the ticket update: those are update_many
-    fields. A single-ticket update accepts them with a 200 and silently ignores them,
-    which is how every tag this tool set went missing while every call reported
-    success. Measured against the live API, not assumed.
-
-    The sub-resource is also additive rather than read-modify-write, so two runs on
-    one ticket cannot clobber each other's tags.
-    """
-    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}/tags.json"
-    for method, names in (("PUT", [t for t in add if t]),
-                          ("DELETE", [t for t in drop if t])):
-        if not names:
-            continue
-        resp = request_with_retry(session, method, url, json={"tags": names})
-        if resp.status_code >= 400:
-            # Never worth failing a run over: tags are a dashboard light, not the work.
-            print(f"Note: could not {method.lower()} tags on #{ticket_id} "
-                  f"({resp.status_code}).")
-
-
 def clear_queued(session, subdomain, ticket_id, dry_run=False):
     """Take the ticket out of the "waiting on Claude" queue, writing no comment.
 
@@ -265,7 +230,7 @@ def clear_queued(session, subdomain, ticket_id, dry_run=False):
     """
     if dry_run:
         return
-    change_tags(session, subdomain, ticket_id, drop=[TAG_QUEUED])
+    zendesk.change_tags(session, subdomain, ticket_id, drop=[TAG_QUEUED])
 
 
 def para(text):
@@ -281,12 +246,12 @@ def para(text):
     whitespace has to survive intact. quoted_para() carries what the customer said and
     what the agent gave as a solve reason, which are theirs and may not be English.
     """
-    return f"<p>{html.escape(triage.undash_english(text))}</p>"
+    return f"<p>{html.escape(undash_english(text))}</p>"
 
 
 def bold_para(text):
     """A paragraph that leads a section, such as a speaker line in a transcript."""
-    return f"<p><strong>{html.escape(triage.undash_english(text))}</strong></p>"
+    return f"<p><strong>{html.escape(undash_english(text))}</strong></p>"
 
 
 def quoted_para(text):
@@ -308,7 +273,7 @@ def quoted_para(text):
 def transcript_blocks(turns, translated):
     """One turn at a time, as readable paragraphs.
 
-    Deliberately not triage.render_transcript's output re-split on blank lines: a
+    Deliberately not transcript.render_transcript's output re-split on blank lines: a
     turn whose own text contains a blank line gets torn into several pieces that
     way, which is what made the first version render as a row of disconnected code
     boxes. The speaker line leads each turn and the body follows as prose — nothing
@@ -357,13 +322,12 @@ def write_to_ticket(session, subdomain, ticket_id, body, public,
     fields = {"comment": {("html_body" if as_html else "body"): body, "public": public}}
     if status:
         fields["status"] = status
-    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}.json"
-    resp = request_with_retry(session, "PUT", url, json={"ticket": fields})
+    resp = zendesk.update_ticket(session, subdomain, ticket_id, fields)
     if resp.status_code >= 400:
         sys.exit(f"Zendesk rejected the {'reply' if public else 'note'} on "
                  f"#{ticket_id} ({resp.status_code}).")
     # After the comment, so a tag failure cannot lose the thing that mattered.
-    change_tags(session, subdomain, ticket_id, add_tags, drop_tags)
+    zendesk.change_tags(session, subdomain, ticket_id, add_tags, drop_tags)
 
 
 # ---- What we usually reply ---------------------------------------------------
@@ -453,16 +417,15 @@ def place_ticket(model, book, ticket, sample):
     """Which group and platform this ticket belongs to. (None, None) if unplaceable."""
     catalogue = "\n".join(f"- {g['key']}: {g['title']}" for g in book["groups"])
     body = clip(sample, CUSTOMER_SAMPLE_CHARS)
-    try:
-        found = triage.claude_cli_json(
-            model, "medium", PLACEMENT_SYSTEM, PLACEMENT_SCHEMA,
-            f"GROUP CATALOGUE:\n{catalogue}\n\nTHE TICKET:\n"
-            f"{(ticket.get('subject') or '')[:200]}\n\n{body}",
-            PLACEMENT_TIMEOUT_SECONDS, f"the placement of #{ticket['id']}")
-    except SystemExit as exc:
-        # Grounding is an enrichment. A failed classification costs a thinner draft,
-        # not the draft — the same call triage.py makes about its transcripts.
-        print(f"Note: could not place #{ticket['id']} ({exc}); drafting without "
+    found, failure = claude_cli.try_run_json(
+        model, "medium", PLACEMENT_SYSTEM, PLACEMENT_SCHEMA,
+        f"GROUP CATALOGUE:\n{catalogue}\n\nTHE TICKET:\n"
+        f"{(ticket.get('subject') or '')[:200]}\n\n{body}",
+        PLACEMENT_TIMEOUT_SECONDS, f"the placement of #{ticket['id']}")
+    if failure:
+        # Grounding is an enrichment: a failed placement costs a thinner draft, not
+        # the draft.
+        print(f"Note: could not place #{ticket['id']} ({failure}); drafting without "
               f"the house answer.")
         return None, None
     group = found.get("group")
@@ -684,19 +647,19 @@ def validate_composition(result):
         sys.exit("Claude returned no usable reply option.")
     # `reply_en` and `back_translation` are English by construction, so the failsafe
     # always applies. `translated` is the customer's language, where a long dash may be
-    # grammar rather than decoration — see triage.undash_english — so it is cleaned only
+    # grammar rather than decoration — see undash_english — so it is cleaned only
     # when that language is English, and left alone otherwise.
     for option in options:
         for field in ("reply_en", "back_translation"):
-            option[field] = triage.undash_english(option.get(field))
+            option[field] = undash_english(option.get(field))
         if result["is_english"]:
-            option["translated"] = triage.undash_english(option.get("translated"))
+            option["translated"] = undash_english(option.get("translated"))
     result["options"] = options[:MAX_OPTIONS]
     return result
 
 
 def compose(model, sample, brief, previous=None, precedent=None):
-    return validate_composition(triage.claude_cli_json(
+    return validate_composition(claude_cli.run_json(
         model, "medium", COMPOSE_SYSTEM, COMPOSE_SCHEMA,
         build_compose_prompt(sample, brief, previous, precedent),
         COMPOSE_TIMEOUT_SECONDS, "the reply draft"))
@@ -756,7 +719,7 @@ def find_draft(comments, api_user):
     so a human pasting the delimiters into a note of their own cannot smuggle text
     past the review.
 
-    triage.fetch_comments returns newest first, so this walks the list as it comes.
+    zendesk.fetch_comments returns newest first, so this walks the list as it comes.
     """
     for comment in comments:
         if comment.get("public") or comment.get("author_id") != api_user:
@@ -836,7 +799,7 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
     shown = find_draft(comments, api_user)
     previous = "\n\n".join(f"Option {n}:\n{shown[n]}" for n in sorted(shown)) or None
 
-    sample = triage.customer_text(session, subdomain, ticket, comments,
+    sample = zendesk.customer_text(session, subdomain, ticket, comments,
                                      CUSTOMER_SAMPLE_CHARS)
     book = load_house()
     group, platform = tagged_placement(ticket)
@@ -893,7 +856,7 @@ def run_solve(session, subdomain, ticket, command, dry_run):
         say(session, subdomain, ticket_id, command["id"],
             "This ticket is already solved.", dry_run, error=False)
         return
-    author = triage.fetch_user(session, subdomain, command["author"])
+    author = zendesk.fetch_user(session, subdomain, command["author"])
     who = author.get("name") or f"user {command['author']}"
     if dry_run:
         print(f"#{ticket_id}: dry run, would solve on behalf of {who}.")
@@ -932,7 +895,7 @@ def run_explain(session, subdomain, model, ticket, comments, command, dry_run):
     new_tags = []
     if not group:
         group, platform = place_ticket(
-            model, book, ticket, triage.customer_text(session, subdomain, ticket, comments,
+            model, book, ticket, zendesk.customer_text(session, subdomain, ticket, comments,
                                      CUSTOMER_SAMPLE_CHARS))
         new_tags = ([f"{TAG_GROUP_PREFIX}{group}"] if group else []) + \
                    ([f"{TAG_PLATFORM_PREFIX}{platform}"] if platform else [])
@@ -985,7 +948,7 @@ def run_reply(session, subdomain, ticket, comments, command, api_user, dry_run):
     if complaint:
         say(session, subdomain, ticket_id, comment_id, complaint, dry_run, error=False)
         return
-    author = triage.fetch_user(session, subdomain, command["author"])
+    author = zendesk.fetch_user(session, subdomain, command["author"])
     who = author.get("name") or f"user {command['author']}"
     if dry_run:
         print(f"#{ticket_id}: dry run, would send an option on behalf of {who}.")
@@ -1034,38 +997,30 @@ def run_english(session, subdomain, model, ticket, comments, command, dry_run):
     Reads both sides, not just the customer's: their second message is usually an
     answer to a reply, and without the reply it reads as a complaint about nothing.
 
-    Python owns the speaker labels and timestamps and the model only translates —
-    the same split triage.py makes, for the same reason: a model asked to format the
-    transcript can drop a turn, merge two, or date one it was never given, and each
-    of those is invisible in the output.
+    Python owns the speaker labels and timestamps and the model only translates; see
+    transcript.translate for why.
     """
     ticket_id = ticket["id"]
     latest = next((c.get("id") for c in comments if c.get("public")), None)
-    if latest is not None and triage.has_marker(comments, english_marker(latest)):
+    if latest is not None and zendesk.has_marker(comments, english_marker(latest)):
         say(session, subdomain, ticket_id, command["id"],
             "The English transcript on this ticket is already up to date — nothing "
             "has been said since it was written.", dry_run, error=False)
         return
-    turns = triage.conversation_turns(session, subdomain, ticket)
+    turns = zendesk.conversation_turns(session, subdomain, ticket)
     if not turns:
         say(session, subdomain, ticket_id, command["id"],
             "There are no public comments on this ticket to translate.", dry_run,
             error=False)
         return
 
-    payload = json.dumps([{"index": t["index"], "speaker": t["who"], "text": t["body"]}
-                          for t in turns], ensure_ascii=False)
-    try:
-        rendered = triage.claude_cli_json(
-            model, "medium", triage.TRANSCRIPT_SYSTEM_PROMPT, triage.TRANSCRIPT_SCHEMA,
-            clip(payload, triage.TRANSCRIPT_INPUT_CHARS),
-            triage.ENGLISH_TIMEOUT_SECONDS, f"the English transcript of #{ticket_id}")
-    except SystemExit as exc:
+    rendered, failure = transcript.translate(model, turns, ticket_id)
+    if failure:
         say(session, subdomain, ticket_id, command["id"],
-            f"The English transcript could not be produced: {exc} To try again, add "
+            f"The English transcript could not be produced: {failure} To try again, add "
             "a new private note reading claude: english.", dry_run)
         return
-    if already_english(turns, rendered.get("turns")):
+    if already_english(turns, rendered):
         # A transcript of English text repeats what is already a few comments above
         # it. Say so rather than posting the same words back.
         say(session, subdomain, ticket_id, command["id"],
@@ -1079,7 +1034,7 @@ def run_english(session, subdomain, model, ticket, comments, command, dry_run):
     note = "".join(
         [para(f"This conversation in English — {len(turns)} turn(s), both sides."),
          para("Translated for reading; the customer has not seen this.")]
-        + transcript_blocks(turns, rendered.get("turns"))
+        + transcript_blocks(turns, rendered)
         + [para(f"{done_marker(command['id'])} {english_marker(latest)}")])
     write_to_ticket(session, subdomain, ticket_id, note, public=False, as_html=True,
                     drop_tags=[TAG_QUEUED, TAG_ERROR])
@@ -1111,7 +1066,7 @@ def say(session, subdomain, ticket_id, comment_id, text, dry_run, error=True):
 def latest_command(comments, api_user, session, subdomain):
     """The newest private note that is a command from someone allowed to give one.
 
-    triage.fetch_comments returns newest first, so the first match is the newest
+    zendesk.fetch_comments returns newest first, so the first match is the newest
     command: older ones have already been handled and carry their own done markers.
 
     An unauthorised author stops the search rather than falling through to an older
@@ -1124,7 +1079,7 @@ def latest_command(comments, api_user, session, subdomain):
         parsed = parse_command(comment_text(comment))
         if not parsed:
             continue
-        user = triage.fetch_user(session, subdomain, comment.get("author_id"))
+        user = zendesk.fetch_user(session, subdomain, comment.get("author_id"))
         if not may_command(user):
             print(f"Ignoring a command from {user.get('role') or 'an unknown user'}.")
             return None
@@ -1140,40 +1095,41 @@ def main():
     parser.add_argument("--dry-run", action="store_true",
                         help="do everything except write to Zendesk")
     args = parser.parse_args()
+    model = claude_cli.resolve_api_model(args.model)
 
     subdomain = get_env("ZENDESK_SUBDOMAIN")
-    session = triage.zendesk_session(get_env("ZENDESK_EMAIL"),
+    session = zendesk.api_session(get_env("ZENDESK_EMAIL"),
                                      get_env("ZENDESK_API_TOKEN"))
-    api_user = api_user_id(session, subdomain)
+    api_user = zendesk.api_user_id(session, subdomain)
 
-    ticket = triage.fetch_ticket(session, subdomain, args.ticket)
+    ticket = zendesk.fetch_ticket(session, subdomain, args.ticket)
     if ticket.get("status") == "closed":
         # Closed is irreversible and takes no comments at all, so there is nowhere to
         # even report the refusal. Say it to the journal and stop.
         print(f"#{args.ticket}: closed, so Zendesk takes no comments. Nothing done.")
         return
-    comments = triage.fetch_comments(session, subdomain, args.ticket)
+    comments = zendesk.fetch_comments(session, subdomain, args.ticket)
 
     command = latest_command(comments, api_user, session, subdomain)
     if not command:
         print(f"#{args.ticket}: no command note to act on.")
         clear_queued(session, subdomain, args.ticket, args.dry_run)
         return
-    if triage.has_marker(comments, done_marker(command["id"])):
+    if zendesk.has_marker(comments, done_marker(command["id"])):
         print(f"#{args.ticket}: this command was already handled; nothing written.")
         clear_queued(session, subdomain, args.ticket, args.dry_run)
         return
 
     if command["action"] == "draft":
-        run_draft(session, subdomain, args.model, ticket, comments, command,
+        run_draft(session, subdomain, model, ticket, comments, command,
                   api_user, args.dry_run)
     elif command["action"] == "solve":
         run_solve(session, subdomain, ticket, command, args.dry_run)
     elif command["action"] == "explain":
-        run_explain(session, subdomain, args.model, ticket, comments, command,
+        run_explain(session, subdomain, model, ticket, comments, command,
                     args.dry_run)
     elif command["action"] == "english":
-        run_english(session, subdomain, args.model, ticket, comments, command, args.dry_run)
+        run_english(session, subdomain, model, ticket, comments, command, args.dry_run)
     else:
         run_reply(session, subdomain, ticket, comments, command, api_user, args.dry_run)
 

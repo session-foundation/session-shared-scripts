@@ -280,7 +280,7 @@ The triage's opening act: it solves the 4-5★ AppFollow reviews that were never
 
 Deliberately narrow, because a mis-aimed bulk status change is not recoverable by re-running:
 
-- **App-store reviews only**, by the same detection the triage uses — `triage.is_store_review`, so the two can't drift apart. Every fetched ticket is re-checked locally, since the query can't express the rating.
+- **App-store reviews only**, by the same detection the triage uses — `zendesk.is_store_review`, so the two can't drift apart. Every fetched ticket is re-checked locally, since the query can't express the rating.
 - **Rated 4★ or better.** A fixed floor (`MIN_STARS`), not a flag — 3★ and below are what the triage reads as bug reports in disguise, so a lower floor would have this job close the reviews most worth looking at. A review whose stars can't be parsed from the subject is skipped, never solved.
 - **`new` or `open`** (`status<pending`). The "Auto Assign to Support" automation fires an hour after a review arrives and gives it a group, which moves it to `open` — so neither the status nor the assignee marks a review a human has handled, and all 628 open 4-5★ reviews share one assignee and one group. `pending` and `hold` are empty on this channel, which makes them where an agent replying to a review puts it, and the bound that keeps this job off it. There is deliberately no flag to widen this further.
 - **`solved`, never `closed`.** Closed is irreversible. Solved is reversible, but only for about four days: the account's *Close ticket 4 days after status is set to solved* automation takes it from there, so a batch can be reviewed and reopened inside that window and not after it.

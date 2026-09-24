@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.join(ROOT, "zendesk_triage"))
 import requests  # noqa: E402
 from shared.discord import post_to_discord  # noqa: E402
 from shared.env import get_env  # noqa: E402
-from triage import CLAUDE_CLI  # noqa: E402
+from claude_cli import CLAUDE_CLI  # noqa: E402
 
 
 # A dead login reads as a broken job unless the alert names it: the job is fine and

@@ -81,10 +81,11 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import triage  # noqa: E402  (needs the path inserts above)
 from shared.discord import post_to_discord  # noqa: E402
 from shared.env import get_env  # noqa: E402
 from shared.retry import request_with_retry  # noqa: E402
+
+import zendesk  # noqa: E402
 
 # Reviews at or above this rating carry nothing to act on. Fixed rather than a flag:
 # 3★ and below are what the triage treats as bug reports in disguise, so lowering the
@@ -136,10 +137,10 @@ def select_resolvable(tickets, min_stars):
     """
     resolvable, skipped = [], []
     for ticket in tickets:
-        if not triage.is_store_review(ticket):
+        if not zendesk.is_store_review(ticket):
             skipped.append((ticket, "not an app-store review"))
             continue
-        stars = triage.review_stars(ticket)
+        stars = zendesk.review_stars(ticket)
         if stars is None:
             skipped.append((ticket, "no star rating in the subject"))
             continue
@@ -252,7 +253,7 @@ def tally_by_stars(tickets):
     counts = {}
     for ticket in tickets:
         # Never None here: select_resolvable drops anything without a parsed rating.
-        stars = triage.review_stars(ticket)
+        stars = zendesk.review_stars(ticket)
         counts[stars] = counts.get(stars, 0) + 1
     return counts
 
@@ -362,12 +363,12 @@ def main():
     needs_webhook = args.apply and not args.no_discord
     webhook = get_env("ZENDESK_DISCORD_WEBHOOK_URL", args.webhook, required=needs_webhook)
 
-    session = triage.zendesk_session(email, api_token)
+    session = zendesk.api_session(email, api_token)
     query = build_query()
     # Every match, not the newest 1000: the tail of this query is held open by
     # low-star reviews the job never solves, so a plain fetch hides the solvable
-    # ones behind them for good. See triage.fetch_every_ticket.
-    tickets, total_matched = triage.fetch_every_ticket(
+    # ones behind them for good. See zendesk.fetch_every_ticket.
+    tickets, total_matched = zendesk.fetch_every_ticket(
         session, subdomain, query, args.max_tickets)
     matched = "?" if total_matched is None else total_matched
     print(f"Fetched {len(tickets)} of {matched} matching tickets (query: {query!r}).")

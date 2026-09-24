@@ -72,8 +72,6 @@ Usage:
 import argparse
 import json
 import os
-import re
-import subprocess
 import sys
 import textwrap
 from datetime import datetime, timedelta, timezone
@@ -85,17 +83,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared import discord, state as dedup  # noqa: E402
 from shared.discord import post_to_discord  # noqa: E402
 from shared.env import get_env  # noqa: E402
-from shared.retry import request_with_retry  # noqa: E402
 from shared.text import clip, squash, window_label  # noqa: E402
 
-# The channel AppFollow imports app-store reviews on. Identified reviews with no
-# false positives in a 3,662-ticket sample; tags did not (only 287 carried one).
-REVIEW_CHANNEL = "any_channel"
+import claude_cli  # noqa: E402
+import transcript  # noqa: E402
+import zendesk  # noqa: E402
+
 # Never analyzed. A store review cannot be answered the way a ticket can: it takes
 # one developer response, replacing any previous one, with no way to ask a follow-up
 # question — so it is not work a digest can queue up for someone. The volume stays
 # visible in the header's review count.
-NO_REVIEWS = f"-via:{REVIEW_CHANNEL}"
+NO_REVIEWS = f"-via:{zendesk.REVIEW_CHANNEL}"
 
 # New and open tickets, newest first. Broad on purpose within that: we want bug
 # reports AND low-star reviews, legal requests, security/legislation questions, and
@@ -110,12 +108,6 @@ DEFAULT_QUERY = f"type:ticket status<pending {NO_REVIEWS} order_by:created_at so
 # The queue awaiting a human, for context in the digest. Not analyzed — just counted,
 # and scoped the same way as the analysis so the header and the body agree.
 BACKLOG_QUERY = "type:ticket status<pending"
-# The Search API hard-caps a query at 1000 results and returns 422 for any page past
-# it (at per_page=100 that is page 11), so pagination stops here rather than walking
-# into that error. Above the cap the digest reports truncation — which it already does
-# for --max-tickets — instead of failing the run.
-# https://developer.zendesk.com/api-reference/ticketing/ticket-management/search/#results-limit
-SEARCH_RESULT_LIMIT = 1000
 STATE_VERSION = 2
 
 
@@ -178,47 +170,17 @@ def drop_quiet_tickets(tickets, cutoff):
 # several languages, and the whole job costs single-digit dollars a month either way.
 # Bumping this is a one-line, deliberate change.
 DEFAULT_MODEL = "claude-opus-5"
-# Shorthands for the override, so ZENDESK_TRIAGE_MODEL=sonnet works for a big
-# backfill without anyone looking up an id. The API takes ids only, so they are
-# mapped here; each is the newest model in its family, and a full id passes through
-# untouched.
-API_MODEL_ALIASES = {
-    "opus": "claude-opus-5",
-    "sonnet": "claude-sonnet-5",
-    "haiku": "claude-haiku-4-5",
-}
 DEFAULT_MAX_TICKETS = 100
 DESCRIPTION_CHARS = 1500  # per-ticket description sent to Claude (triage only)
 # One classification runs ~100 output tokens per ticket, and adaptive thinking draws
 # from the same output budget. 400 keeps a chunk far under the model's 128K output
 # ceiling; batches larger than this are split rather than truncated.
 DEFAULT_BATCH_SIZE = 400
-# The classifier is the local Claude Code CLI rather than the Anthropic SDK, so
-# authentication is whatever `claude` is already logged in as and no key lives here.
-CLAUDE_CLI = "claude"
 
-# Dropped from the CLI's environment. Each one silently outranks whatever `claude` is
-# logged in as, and each is API-backend configuration — a box that once ran that way
-# still has the key in its EnvironmentFile, where it is now dead config that would
-# otherwise pick the credential, and the billing, for every classification.
-#
-# CLAUDE_CODE_OAUTH_TOKEN is deliberately not in this list. It is a subscription
-# credential like the interactive login, not an API key, and it is the only one of
-# these an unattended host can renew on a yearly rather than weekly cadence — see
-# deploy/README.md. Nothing else can set it: it has never been written by anything
-# this repo deploys, so it reaches the CLI only because somebody put it there.
-CLAUDE_AUTH_OVERRIDES = (
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "ANTHROPIC_BASE_URL",
-)
 # A 400-ticket chunk at medium effort is minutes of work. Generous, because being
 # killed mid-batch costs the whole chunk — and bounded, because a wedged CLI would
 # otherwise hold the digest until the unit's own TimeoutStartSec fires.
 CLAUDE_TIMEOUT_SECONDS = 1800
-# How much of a failed call's output reaches the log. The CLI can echo input back and
-# this log must not carry ticket text, so nothing here is ever passed through whole.
-CLI_FAILURE_CHARS = 300
 
 # ---- Taxonomy --------------------------------------------------------------
 #
@@ -383,148 +345,6 @@ _SYSTEM_PROMPT_TEMPLATE = textwrap.dedent(
 SYSTEM_PROMPT = _SYSTEM_PROMPT_TEMPLATE.replace("__CATEGORIES__", CATEGORY_GUIDANCE)
 
 
-def zendesk_session(email, token):
-    session = requests.Session()
-    # Zendesk API-token auth: username is "{email}/token", password is the token.
-    session.auth = (f"{email}/token", token)
-    session.headers["Accept"] = "application/json"
-    return session
-
-
-def fetch_every_ticket(session, subdomain, query, max_tickets):
-    """Fetch past the Search API's 1000-result ceiling, in created_at slices.
-
-    The ceiling is per query, not per account: `created<=` the oldest result so far
-    is a different query with a fresh 1000 of its own. `query` must order by
-    created_at descending for that to hold.
-
-    Without this, a query matching more than 1000 truncates at the newest 1000 and
-    the tail is unreachable at any --max-tickets — permanently, when the surplus is
-    tickets the caller never removes. The positive-review job hit exactly that: 1,036
-    matches held open by 1,030 low-star reviews it will never solve, hiding six 4-5★
-    ones from August 2025 that it would have.
-
-    `created<=`, not `<`: created_at has second granularity, so `<` would skip every
-    ticket sharing the oldest second. The overlap is re-fetched and dropped by id
-    instead, and a slice that adds nothing new ends the walk — which is also what
-    stops a tie group larger than a whole slice from looping forever.
-
-    Returns (tickets, total_matched) like fetch_tickets, with total_matched from the
-    unsliced query so the caller still reports the true gap.
-    """
-    tickets, seen, total_matched, cutoff = [], set(), None, None
-    while len(tickets) < max_tickets:
-        sliced = query if cutoff is None else f"{query} created<={cutoff}"
-        batch, matched = fetch_tickets(session, subdomain, sliced,
-                                       max_tickets - len(tickets))
-        if total_matched is None:
-            total_matched = matched
-        fresh = [t for t in batch if t.get("id") not in seen]
-        if not fresh:
-            break
-        seen.update(t.get("id") for t in fresh)
-        tickets.extend(fresh)
-        stamps = [t.get("created_at") for t in batch if t.get("created_at")]
-        if not stamps or len(batch) < SEARCH_RESULT_LIMIT:
-            break
-        cutoff = min(stamps)
-    return tickets[:max_tickets], total_matched
-
-
-def fetch_tickets(session, subdomain, query, max_tickets):
-    """Fetch tickets via the Zendesk Search API, following pagination.
-
-    Returns (tickets, total_matched). total_matched is the full result count
-    reported by Zendesk, which can exceed len(tickets) when max_tickets — or
-    SEARCH_RESULT_LIMIT — caps the batch; the caller surfaces that gap so the
-    truncation isn't silent.
-    """
-    base = f"https://{subdomain}.zendesk.com/api/v2/search.json"
-    url = base
-    params = {"query": query, "per_page": 100}
-    tickets = []
-    total_matched = None
-    # Whichever bites first: our own runaway guard or Zendesk's hard result limit.
-    cap = min(max_tickets, SEARCH_RESULT_LIMIT)
-    while url and len(tickets) < cap:
-        resp = request_with_retry(session, "GET", url, params=params)
-        params = None  # next_page already carries the query
-        if resp.status_code == 403:
-            sys.exit("Zendesk returned 403 — the API token/email may lack search access.")
-        # 422 past the result limit: `cap` should have stopped us first, so this only
-        # fires if the account's effective limit is lower than documented. Keep the
-        # tickets already in hand — a partial digest beats no digest — and let the
-        # caller report the gap. With nothing in hand there is nothing to salvage.
-        if resp.status_code == 422 and tickets:
-            print(f"Note: Zendesk stopped paginating at {len(tickets)} results "
-                  f"(search result limit); analyzing what was fetched.")
-            break
-        if resp.status_code >= 400:
-            sys.exit(f"Zendesk search failed ({resp.status_code}): {resp.text[:300]}")
-        payload = resp.json()
-        if total_matched is None:
-            total_matched = payload.get("count")
-        for row in payload.get("results", []):
-            if row.get("result_type") != "ticket":
-                continue
-            tickets.append(row)
-            if len(tickets) >= cap:
-                break
-        url = payload.get("next_page")
-    return tickets, total_matched
-
-
-def fetch_ticket(session, subdomain, ticket_id):
-    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}.json"
-    resp = request_with_retry(session, "GET", url)
-    if resp.status_code == 404:
-        sys.exit(f"Ticket #{ticket_id} does not exist.")
-    if resp.status_code >= 400:
-        # A read error's body describes the error, not the ticket, so it is safe to
-        # print here. The write path deliberately prints no body at all.
-        sys.exit(f"Could not read ticket #{ticket_id} ({resp.status_code}): "
-                 f"{resp.text[:200]}")
-    return (resp.json() or {}).get("ticket") or {}
-
-
-def fetch_comments(session, subdomain, ticket_id):
-    """The ticket's comments, newest first.
-
-    Newest first because the marker that stops a re-run from writing twice will be on
-    the most recent comment, and one page of a busy ticket would otherwise be all
-    opening back-and-forth.
-    """
-    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}/comments.json"
-    resp = request_with_retry(
-        session, "GET", url, params={"per_page": 100, "sort_order": "desc"})
-    if resp.status_code >= 400:
-        sys.exit(f"Could not read the comments on #{ticket_id} ({resp.status_code}).")
-    return (resp.json() or {}).get("comments") or []
-
-
-def fetch_total_unsolved(session, subdomain, query=BACKLOG_QUERY):
-    """Count an unsolved backlog. Best effort: returns None on failure.
-
-    Context for the digest, not something to hold the run up for — hence the
-    short retry budget.
-    """
-    url = f"https://{subdomain}.zendesk.com/api/v2/search/count.json"
-    try:
-        resp = request_with_retry(
-            session, "GET", url, attempts=2, params={"query": query}
-        )
-        if resp.status_code >= 400:
-            print(f"Note: could not count the unsolved backlog ({resp.status_code}).")
-            return None
-        return resp.json().get("count")
-    except (requests.RequestException, ValueError) as exc:
-        # request_with_retry re-raises the transport error once its (short) budget is
-        # spent, and .json() raises on a non-JSON body — neither is a reason to lose
-        # the digest over one context number, so both land on the documented None.
-        print(f"Note: could not count the unsolved backlog ({exc}).")
-        return None
-
-
 # ---- Dedup state -----------------------------------------------------------
 #
 # Maps ticket id -> {requester_updated_at, last_reported}. A ticket is re-reported
@@ -550,42 +370,6 @@ def activity_key(ticket):
     return ticket.get("requester_updated_at") or ticket.get("updated_at")
 
 
-def hydrate_requester_activity(session, subdomain, tickets):
-    """Fill `requester_updated_at` from each ticket's metric set. Returns the count.
-
-    Sideloaded through show_many, so this is one request per 100 tickets rather than
-    one per ticket.
-    """
-    hydrated = 0
-    ids = [t["id"] for t in tickets if t.get("id") is not None]
-    for start in range(0, len(ids), 100):
-        chunk = ids[start : start + 100]
-        url = f"https://{subdomain}.zendesk.com/api/v2/tickets/show_many.json"
-        try:
-            resp = request_with_retry(session, "GET", url, attempts=2, params={
-                "ids": ",".join(str(i) for i in chunk), "include": "metric_sets"})
-        except requests.RequestException as exc:
-            print(f"Note: could not fetch ticket metrics ({exc}); "
-                  f"falling back to updated_at for {len(chunk)} ticket(s).")
-            continue
-        if resp.status_code >= 400:
-            print(f"Note: ticket metrics returned {resp.status_code}; "
-                  f"falling back to updated_at for {len(chunk)} ticket(s).")
-            continue
-        try:
-            metric_sets = resp.json().get("metric_sets", [])
-        except ValueError as exc:
-            print(f"Note: unreadable ticket metrics ({exc}); falling back to updated_at.")
-            continue
-        by_id = {m.get("ticket_id"): m.get("requester_updated_at") for m in metric_sets}
-        for ticket in tickets:
-            stamp = by_id.get(ticket.get("id"))
-            if stamp:
-                ticket["requester_updated_at"] = stamp
-                hydrated += 1
-    return hydrated
-
-
 STATE = dedup.Tracker(STATE_VERSION, "ticket", lambda t: str(t.get("id")), activity_key,
                       "requester_updated_at")
 
@@ -599,175 +383,8 @@ STATE = dedup.Tracker(STATE_VERSION, "ticket", lambda t: str(t.get("id")), activ
 # actionable, so counting them beats paying tokens to classify them.
 # The same backlog minus store reviews. 92% of unsolved tickets are AppFollow
 # reviews, so the unqualified number reads as ~13x the queue that needs a human.
-BACKLOG_NON_REVIEW_QUERY = f"{BACKLOG_QUERY} -via:{REVIEW_CHANNEL}"
-STAR_SUBJECT = re.compile(r"^\s*([★☆]{1,10})")
+BACKLOG_NON_REVIEW_QUERY = f"{BACKLOG_QUERY} -via:{zendesk.REVIEW_CHANNEL}"
 DEFAULT_REVIEW_STAR_FLOOR = 3
-
-
-# A long dash is the clearest tell that text was machine-written, and no reply this
-# team has sent uses one. The prompts that write for customers forbid it; this is the
-# failsafe, because a prompt rule is advisory and the text reaches a real person.
-# The spaced form is punctuation and becomes a comma; anything left is joining two
-# things, like a range, and becomes the hyphen a person would have typed.
-PUNCTUATING_DASH = re.compile(r"(?:\s+[—–]\s*|\s*[—–]\s+)")
-ANY_LONG_DASH = re.compile(r"[—–]")
-
-
-def undash_english(text):
-    """Replace every em and en dash: punctuation with a comma, the rest with a hyphen.
-
-    ENGLISH ONLY, and the name says so because passing anything else corrupts it. In
-    Russian and the other East Slavic languages the long dash carries the present-tense
-    copula that the grammar omits: "Москва — столица России" IS the verb, and the comma
-    this produces leaves a subject with no predicate. Spanish, French, Polish and
-    Chinese give it dialogue and parenthetical duty that a comma does not carry either.
-
-    Only for text a model wrote. Rewriting punctuation somebody typed themselves would
-    be wrong even in English.
-
-    A failsafe, not a style pass: the substitution is blunt enough to turn a legitimate
-    strong break into a comma splice ("I checked the logs — nothing was uploaded"), so
-    the prompt is what should keep dashes out and this is what catches the misses.
-    """
-    return ANY_LONG_DASH.sub("-", PUNCTUATING_DASH.sub(", ", text or ""))
-
-
-def marker(kind, value):
-    """A machine-readable marker for a ticket comment.
-
-    One shape for all of them: `[kind:value]`, matched by has_marker. What it is for
-    is idempotency — a marker on the ticket says the work behind it is already done,
-    so a replayed webhook or a re-run writes nothing a second time.
-
-    The kind carries its own namespace (`discord`, `claude:done`) so the strings are
-    byte-identical to the four hand-rolled versions this replaces. That matters:
-    markers are already written into real tickets, and a changed format would stop
-    matching them and let a replay send twice.
-    """
-    return f"[{kind}:{value}]"
-
-
-def has_marker(comments, wanted):
-    """Whether any comment already carries this marker."""
-    return any(wanted in (comment.get("body") or "") for comment in comments)
-
-
-AGENT_ROLES = ("agent", "admin")
-
-
-def fetch_user(session, subdomain, user_id):
-    """One Zendesk user, or {} when it cannot be read.
-
-    An author we cannot resolve is treated as a customer by customer_authors, so a
-    failed lookup widens the sample rather than silencing it.
-    """
-    url = f"https://{subdomain}.zendesk.com/api/v2/users/{user_id}.json"
-    resp = request_with_retry(session, "GET", url, attempts=2)
-    if resp.status_code >= 400:
-        return {}
-    return (resp.json() or {}).get("user") or {}
-
-
-def customer_authors(session, subdomain, ticket, comments):
-    """The author ids on the customer's side of this ticket.
-
-    Deciding by `requester_id` alone is right for email and web tickets and wrong for
-    every channel integration: on a Twitter or Sunshine DM the integration authors the
-    customer's own message under its id, so the requester appears to have written
-    nothing. That dropped every word a Chinese reviewer wrote and had them answered in
-    English, and it labelled their message "Support" in the English transcript.
-
-    So: the requester when they wrote anything, and otherwise everyone who is not an
-    agent here. Roles are looked up rather than inferred from the id, because the
-    integration's id is an account detail and an author we cannot resolve is a
-    customer, not an agent.
-
-    Ordinary tickets cost no extra API calls at all — the requester wrote something,
-    and the lookup never happens.
-    """
-    requester = ticket.get("requester_id")
-    if any(c.get("author_id") == requester for c in comments):
-        return {requester}
-    roles, customers = {}, set()
-    for comment in comments:
-        author = comment.get("author_id")
-        if author not in roles:
-            roles[author] = (fetch_user(session, subdomain, author) or {}).get("role")
-        if roles[author] not in AGENT_ROLES:
-            customers.add(author)
-    return customers or {requester}
-
-
-def customer_text(session, subdomain, ticket, comments, limit):
-    """What the customer wrote, as the signal for which language to reply in.
-
-    Their words only. An agent's earlier English reply is still text on the ticket,
-    and including it would drag detection towards English on exactly the tickets this
-    exists for.
-    """
-    # Public only. A private note is internal annotation — including the `claude:`
-    # commands and the drafts this tool writes — and never the customer speaking.
-    comments = [c for c in comments if c.get("public")]
-    authors = customer_authors(session, subdomain, ticket, comments)
-    subject = squash(ticket.get("subject"))
-    parts = []
-    description = (ticket.get("description") or "").strip()
-    # A channel integration puts "Conversation with <handle>" here, which is the
-    # ticket's own boilerplate rather than anything the customer typed.
-    if description and squash(description) != subject:
-        parts.append(description)
-    for comment in reversed(comments):          # oldest first, so it reads in order
-        if comment.get("author_id") not in authors:
-            continue
-        body = (comment.get("body") or "").strip()
-        if body and squash(body) != subject and body not in parts:
-            parts.append(body)
-    # A ticket can carry no text at all — an attachment, or an import that lost its
-    # body. Say so rather than sending an empty sample, which reads as a blank
-    # question the model has to answer anyway.
-    return clip("\n\n".join(parts), limit) or "(no text)"
-
-
-def review_stars(ticket):
-    """Star count from an AppFollow review subject, or None if not a review subject."""
-    match = STAR_SUBJECT.match(ticket.get("subject") or "")
-    return match.group(1).count("★") if match else None
-
-
-def is_store_review(ticket):
-    return (((ticket.get("via") or {}).get("channel") == REVIEW_CHANNEL)
-            or STAR_SUBJECT.match(ticket.get("subject") or "") is not None)
-
-
-# Zendesk names the integration that imported a review under `via.source.from`, and
-# that name is the store it came from. Both names are searched because the two
-# integrations put the store in different ones: Google Play is the registered
-# service name itself, while the App Store's registered name is the generic
-# "AppFollow: Review Monitor" and only the instance name — "AppFollow (Session -
-# Private Messenger, App Store)" — says which store. Across 5,113 sampled reviews
-# spanning 2022-2026 these were the only two integrations, and both named the store
-# on every ticket.
-REVIEW_SOURCE_PLATFORMS = (("google play", "android"), ("app store", "ios"))
-REVIEW_SOURCE_NAME_FIELDS = ("registered_integration_service_name",
-                             "integration_service_instance_name")
-
-
-def review_platform(ticket):
-    """Store an app-store review was imported from, as a PLATFORMS value.
-
-    None when the ticket is not a review or its source names no store we know, which
-    leaves the model's guess in place rather than replacing it with 'unknown'.
-    """
-    if not is_store_review(ticket):
-        return None
-    source = ((ticket.get("via") or {}).get("source") or {}).get("from") or {}
-    service = source.get("service_info") or {}
-    names = " ".join(str(service.get(field) or "")
-                     for field in REVIEW_SOURCE_NAME_FIELDS).lower()
-    for needle, platform in REVIEW_SOURCE_PLATFORMS:
-        if needle in names:
-            return platform
-    return None
 
 
 def apply_review_platform(findings, tickets):
@@ -778,7 +395,7 @@ def apply_review_platform(findings, tickets):
     often a few words in another language — only invents a disagreement. Returns how
     many findings this corrected.
     """
-    platforms = {ticket.get("id"): review_platform(ticket) for ticket in tickets}
+    platforms = {ticket.get("id"): zendesk.review_platform(ticket) for ticket in tickets}
     corrected = 0
     for finding in findings:
         platform = platforms.get(finding.get("id"))
@@ -798,8 +415,8 @@ def partition_reviews(tickets, star_floor):
     """
     keep, skipped = [], []
     for ticket in tickets:
-        stars = review_stars(ticket)
-        if is_store_review(ticket) and stars is not None and stars > star_floor:
+        stars = zendesk.review_stars(ticket)
+        if zendesk.is_store_review(ticket) and stars is not None and stars > star_floor:
             skipped.append(ticket)
         else:
             keep.append(ticket)
@@ -825,22 +442,11 @@ def hydrate_descriptions(session, subdomain, tickets):
     for ticket in tickets:
         if not is_content_free(ticket):
             continue
-        url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket['id']}/comments.json"
-        try:
-            resp = request_with_retry(session, "GET", url, attempts=2, params={"per_page": 10})
-        except requests.RequestException as exc:
-            # Hydration is an enrichment, never a reason to abort the digest: an
-            # unreachable comments endpoint just leaves the description as-is.
-            print(f"Note: could not fetch comments for #{ticket['id']} ({exc}).")
-            continue
-        if resp.status_code >= 400:
-            continue
-        try:
-            comments = resp.json().get("comments", [])
-        except ValueError as exc:
-            # A 200 carrying an HTML error page (proxy, maintenance) is the same kind
-            # of non-event as an HTTP error here — enrich what we can, skip the rest.
-            print(f"Note: unreadable comments payload for #{ticket['id']} ({exc}).")
+        # An enrichment, never a reason to abort the digest: a ticket whose comments
+        # cannot be read keeps the description it has.
+        comments = zendesk.fetch_comments(session, subdomain, ticket["id"], newest_first=False,
+                                          per_page=10, attempts=2, required=False)
+        if comments is None:
             continue
         subject = squash(ticket.get("subject"))
         bodies = [squash(c.get("body")) for c in comments]
@@ -851,250 +457,6 @@ def hydrate_descriptions(session, subdomain, tickets):
     if hydrated:
         print(f"Recovered {hydrated} content-free description(s) from ticket comments.")
     return hydrated
-
-
-# ---- English transcript, for the reply dialog -------------------------------
-
-# Optional, and absent until the field exists in Zendesk. Everything below is a
-# no-op without it: the digest posts exactly as it did before and relay.py falls
-# back to the ticket's own comments, which is what it showed all along.
-ENGLISH_FIELD_ENV = "ZENDESK_ENGLISH_FIELD_ID"
-ENGLISH_TIMEOUT_SECONDS = 180
-# The transcript is a whole conversation rather than one description, so both budgets
-# are larger than the classifier's. The field holds well past the 1,200 relay.py
-# shows, so the field is never why the dialog is missing a sentence.
-TRANSCRIPT_INPUT_CHARS = 8000
-TRANSCRIPT_CHARS = 12000
-# Private notes are left out. They are internal annotation rather than conversation,
-# they are already English — note_reply.py's own attribution notes among them — and
-# translating its `[discord:…]` markers back would put bookkeeping in front of an
-# agent as if the customer had said it.
-CUSTOMER_TURN = "Customer"
-SUPPORT_TURN = "Support"
-
-TRANSCRIPT_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["turns"],
-    "properties": {
-        "turns": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["index", "english"],
-                "properties": {
-                    "index": {
-                        "type": "integer",
-                        "description": "The turn's index, echoed back unchanged.",
-                    },
-                    "english": {
-                        "type": "string",
-                        "description": "That turn in English, or the original text unchanged if it was already English.",
-                    },
-                },
-            },
-        }
-    },
-}
-
-TRANSCRIPT_SYSTEM_PROMPT = (
-    "You translate support conversations into English for an agent who does not read "
-    "the original language.\n\n"
-    "You are given the turns of one ticket as JSON, each with an index. Return one "
-    "object per input turn, echoing its index back unchanged.\n\n"
-    "Translate faithfully and completely. Keep the speaker's meaning, their order of "
-    "events and their tone — an angry turn must still read as angry. Do not "
-    "summarise, do not answer, do not merge turns, do not add notes of your own.\n\n"
-    "A turn already in English is returned unchanged, word for word. Do not "
-    "paraphrase it and do not 'improve' it.\n\n"
-    "Leave Session IDs, version numbers, URLs and error strings exactly as written."
-)
-
-
-def is_english(finding):
-    """Whether the classifier called this ticket English.
-
-    Unknown counts as English: the field is only worth writing when it says
-    something the agent cannot already read, and a blank `language` is far more
-    likely to be a classification that came back thin than a ticket nobody could
-    read. Guessing wrong this way costs a transcript nobody needed; the other way
-    puts a machine translation over the top of words everyone could already read.
-    """
-    language = (finding.get("language") or "").strip().lower()
-    return not language or language.startswith(("english", "en"))
-
-
-def conversation_turns(session, subdomain, ticket):
-    """One ticket's public comments as turns, oldest first. None on any failure.
-
-    Both sides, not just the requester's. A customer's second message is usually an
-    answer to a reply, and dropping the reply leaves "still broken" sitting under the
-    original complaint with nothing visible for it to be answering.
-
-    Who spoke is decided by customer_authors, not by `requester_id` alone: on a
-    Twitter or Sunshine DM the integration authors the customer's message under its
-    own id, and comparing against the requester labelled their words "Support" in the
-    transcript an agent then read. A transcript that mislabels who spoke is worse than
-    none.
-    """
-    requester = ticket.get("requester_id")
-    if requester is None:
-        print(f"Note: #{ticket['id']} has no requester_id; skipping its transcript.")
-        return None
-    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket['id']}/comments.json"
-    try:
-        resp = request_with_retry(session, "GET", url, attempts=2,
-                                  params={"per_page": 100, "sort_order": "asc"})
-    except requests.RequestException as exc:
-        print(f"Note: could not fetch comments for #{ticket['id']} ({exc}).")
-        return None
-    if resp.status_code >= 400:
-        print(f"Note: comments for #{ticket['id']} returned {resp.status_code}.")
-        return None
-    try:
-        comments = resp.json().get("comments", [])
-    except ValueError as exc:
-        print(f"Note: unreadable comments payload for #{ticket['id']} ({exc}).")
-        return None
-    public = [c for c in comments if c.get("public")]
-    authors = customer_authors(session, subdomain, ticket, public)
-    turns = []
-    for comment in public:
-        body = (comment.get("body") or "").strip()
-        if not body:
-            continue
-        turns.append({
-            "index": len(turns),
-            "who": (CUSTOMER_TURN if comment.get("author_id") in authors
-                    else SUPPORT_TURN),
-            "when": stamp_minutes(comment.get("created_at")),
-            "body": body,
-        })
-    return turns or None
-
-
-def stamp_minutes(created_at):
-    """Zendesk's ISO timestamp as `2026-08-28 01:31 UTC`, or '' if unparseable.
-
-    Minutes, not seconds: this dates a turn for somebody reading a conversation, and
-    the extra precision is noise in front of every paragraph.
-    """
-    try:
-        when = datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ")
-    except (TypeError, ValueError):
-        return ""
-    return when.strftime("%Y-%m-%d %H:%M UTC")
-
-
-def render_transcript(turns, translated):
-    """Turns plus their translations as the text that goes on the ticket.
-
-    Python owns the timestamps and the speaker labels rather than the model. Asked to
-    format the transcript itself, a model can drop a turn, merge two, or date one it
-    was never given — and every one of those is invisible in the output. Translating
-    is the only part that needs a model, so it is the only part it is given.
-
-    A turn the model did not return keeps its original text. Untranslated is a
-    degraded transcript; missing is a conversation that reads as if it never happened.
-    """
-    english = {}
-    for item in translated or []:
-        try:
-            english[int(item.get("index"))] = (item.get("english") or "").strip()
-        except (TypeError, ValueError):
-            continue
-    blocks = []
-    for turn in turns:
-        header = " ".join(part for part in (turn["when"], f'{turn["who"]}:') if part)
-        blocks.append(f'{header}\n{english.get(turn["index"]) or turn["body"]}')
-    return "\n\n".join(blocks)
-
-
-def write_english_field(session, subdomain, ticket_id, field_id, english):
-    """Put the transcript on the ticket. Returns whether Zendesk took it.
-
-    One field overwritten, not a note appended: a ticket carries one current English
-    version of the whole conversation rather than a chain of partial ones to read in
-    order.
-    """
-    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}.json"
-    payload = {"ticket": {"custom_fields": [{"id": field_id, "value": english}]}}
-    try:
-        resp = request_with_retry(session, "PUT", url, attempts=2, json=payload)
-    except requests.RequestException as exc:
-        print(f"Note: could not write the English transcript to #{ticket_id} ({exc}).")
-        return False
-    if resp.status_code >= 400:
-        print(f"Note: #{ticket_id} rejected the English transcript "
-              f"({resp.status_code}).")
-        return False
-    return True
-
-
-def attach_english(session, subdomain, tickets, findings, model, field_id):
-    """Render every non-English ticket about to be posted into English, on the ticket.
-
-    Runs before the digest is posted, and that order is the whole design: the Comment
-    button exists only on a digest card, so a ticket that reaches the dialog has
-    necessarily been through here first. relay.py can then read the field it needs
-    without a Claude call of its own — which it has no time for, being on the three
-    seconds Discord allows a dialog that cannot be deferred.
-
-    Scoped to the tickets that actually get a button. Translating the rest would be
-    paying for every ticket in the window to serve the handful anybody replies to.
-
-    Never raises: this is enrichment, and a digest that fails to post because a
-    translation failed would be a worse trade than a dialog showing German.
-    """
-    if not session:
-        return 0
-    if not field_id:
-        print(f"No {ENGLISH_FIELD_ENV} set; no English transcripts written.")
-        return 0
-    candidates = [f for f in findings if not is_english(f)]
-    if not candidates:
-        print(f"No non-English tickets among the {len(findings)} being posted; "
-              f"no English transcripts to write.")
-        return 0
-    by_id = {t.get("id"): t for t in tickets}
-    written = 0
-    for finding in candidates:
-        ticket = by_id.get(finding.get("id"))
-        if not ticket:
-            # --findings, or a fetch that returned the classification but not the row.
-            print(f"Note: #{finding.get('id')} was classified {finding.get('language')!r} "
-                  f"but never fetched; no transcript.")
-            continue
-        turns = conversation_turns(session, subdomain, ticket)
-        if not turns:
-            print(f"Note: #{ticket['id']} has no public comments to render.")
-            continue
-        payload = json.dumps(
-            [{"index": t["index"], "speaker": t["who"], "text": t["body"]}
-             for t in turns], ensure_ascii=False)
-        try:
-            rendered = claude_cli_json(
-                model, "medium", TRANSCRIPT_SYSTEM_PROMPT, TRANSCRIPT_SCHEMA,
-                clip(payload, TRANSCRIPT_INPUT_CHARS), ENGLISH_TIMEOUT_SECONDS,
-                f"the English transcript of #{ticket['id']}")
-        except SystemExit as exc:
-            # claude_cli_json exits on a failed call, which is right for the
-            # classification it was written for and wrong here: one ticket nobody
-            # can translate must not take the digest down with it.
-            print(f"Note: could not render #{ticket['id']} in English ({exc}).")
-            continue
-        english = clip(render_transcript(turns, rendered.get("turns")),
-                       TRANSCRIPT_CHARS)
-        if english and write_english_field(session, subdomain, ticket["id"],
-                                           field_id, english):
-            written += 1
-    # Printed even at zero. A run that wrote nothing and a run that never reached
-    # this step read identically in the journal otherwise, which is the one thing
-    # somebody checking whether the feature is on actually needs to tell apart.
-    print(f"Wrote an English transcript to {written} of {len(candidates)} "
-          f"non-English ticket(s).")
-    return written
 
 
 def compact_ticket(ticket):
@@ -1113,15 +475,6 @@ def compact_ticket(ticket):
         "status": ticket.get("status"),
         "satisfaction_rating": rating.get("score"),
     }
-
-
-def resolve_api_model(model):
-    """Map a shorthand model name onto the id `claude --model` expects.
-
-    Anything that isn't a known shorthand passes through untouched, so a pinned id
-    (`claude-opus-4-8`) or a model newer than this table still works.
-    """
-    return API_MODEL_ALIASES.get(model, model)
 
 
 def build_analysis_prompt(compact_tickets):
@@ -1212,143 +565,9 @@ def analyze_in_chunks(analyzer, compact_tickets, batch_size):
     return findings
 
 
-def cli_failure_detail(stdout, stderr, limit=CLI_FAILURE_CHARS):
-    """The readable half of a failed `claude --print` run, clipped for the log.
-
-    stderr wins, but the failures that matter most — a refused login, an exhausted
-    limit — leave it empty and put their message in the `--output-format json`
-    envelope on stdout, where it sits behind enough usage boilerplate to survive no
-    clip at all. Hence parsing the envelope rather than clipping it. `terminal_reason`
-    rides along when it fits: it is what separates an auth failure from a limit.
-
-    Output that is not that envelope is reported raw: a CLI that dies before emitting
-    one has still said the only thing anybody will get.
-    """
-    detail = (stderr or "").strip()
-    if detail:
-        return detail[:limit]
-    raw = (stdout or "").strip()
-    try:
-        envelope = json.loads(raw)
-    except ValueError:
-        envelope = None
-    if isinstance(envelope, dict):
-        message = ""
-        for name in ("result", "error"):
-            value = envelope.get(name)
-            if isinstance(value, dict):
-                value = value.get("message")
-            if isinstance(value, str) and value.strip():
-                message = value.strip()
-                break
-        reason = envelope.get("terminal_reason") or envelope.get("subtype")
-        reason = reason.strip() if isinstance(reason, str) else ""
-        if message and reason and len(message) + len(reason) + 3 <= limit:
-            return f"{message} ({reason})"
-        if message:
-            return message[:limit]
-        if reason:
-            return f"it reported {reason!r} and no message."
-    return raw[:limit]
-
-
-def claude_cli_json(model, effort, system_prompt, schema, prompt, timeout, label):
-    """Run one schema-enforced Claude Code request. Returns the parsed payload.
-
-    Shared by the digest's classification and note_reply.py's composing: same flags,
-    same error semantics, one place to keep them right.
-
-    `--json-schema` enforces the schema the way the API's structured outputs did.
-    Authentication is whatever `claude` is already logged in as, so neither caller
-    holds a Claude key.
-
-    The prompt goes over **stdin**, not argv. Linux caps one argument at 128KB
-    (MAX_ARG_STRLEN) and a full --batch-size 400 chunk is around 685KB, so passing it
-    as an argument would work on a normal day and die with "Argument list too long"
-    on a backfill. It is also the more private channel: argv is world-readable
-    through /proc, and these prompts carry ticket text.
-    """
-    command = [
-        CLAUDE_CLI, "--print",
-        "--model", model,
-        "--effort", effort,
-        "--system-prompt", system_prompt,
-        "--json-schema", json.dumps(schema),
-        "--output-format", "json",
-        "--no-session-persistence",
-        # Nothing outside this call may change what the model is told. The two flags
-        # cover different halves of that and neither implies the other:
-        # --setting-sources "" drops the user and project settings — and the hooks
-        # inside them — while --tools "" removes the tools. Without the first, a
-        # .claude/settings.json next to this file, or one in the service account's
-        # home, silently joins every classification and every translation.
-        #
-        # --tools stays last: it is variadic, so it swallows any following argument
-        # that does not begin with a dash.
-        "--setting-sources", "",
-        "--tools", "",
-    ]
-    child_env = {name: value for name, value in os.environ.items()
-                 if name not in CLAUDE_AUTH_OVERRIDES}
-    try:
-        done = subprocess.run(command, input=prompt, capture_output=True, text=True,
-                              check=False, timeout=timeout, env=child_env)
-    except FileNotFoundError:
-        sys.exit(f"{CLAUDE_CLI} is not on PATH. {label} runs through the Claude Code "
-                 f"CLI, so it has to be installed and logged in.")
-    except subprocess.TimeoutExpired:
-        sys.exit(f"{CLAUDE_CLI} did not finish {label} within {timeout}s.")
-
-    if done.returncode != 0:
-        detail = cli_failure_detail(done.stdout, done.stderr)
-        if not detail:
-            detail = ("it printed nothing, which is what a login it can no longer "
-                      "use looks like; check that `claude` is still signed in.")
-        sys.exit(f"{CLAUDE_CLI} exited {done.returncode} on {label}: {detail}")
-    try:
-        response = json.loads(done.stdout)
-    except ValueError as exc:
-        sys.exit(f"{CLAUDE_CLI} returned output that is not JSON on {label} ({exc}).")
-    if not isinstance(response, dict):
-        sys.exit(f"{CLAUDE_CLI} returned {type(response).__name__} on {label}, "
-                 f"expected an object.")
-    # is_error and subtype are the CLI's signals for success; stop_reason deliberately
-    # is not — a successful structured-output run reports "tool_use", because that is
-    # how the schema is enforced underneath.
-    if response.get("is_error") or response.get("subtype") != "success":
-        detail = cli_failure_detail(done.stdout, done.stderr)
-        sys.exit(f"{CLAUDE_CLI} reported failure on {label} "
-                 f"(subtype={response.get('subtype')!r}, "
-                 f"api_error_status={response.get('api_error_status')!r})"
-                 f"{': ' + detail if detail else '.'}")
-    # stop_reason is worth reading for this one value. There is no --max-tokens to
-    # raise, so an answer too long to finish comes back as JSON that stops mid-object,
-    # and the parse below would report a baffling syntax error for something whose
-    # only fix is a smaller batch.
-    if response.get("stop_reason") == "max_tokens":
-        sys.exit(f"{CLAUDE_CLI} ran out of output tokens on {label}, so the JSON is "
-                 f"incomplete. Lower --batch-size (currently splitting at "
-                 f"{DEFAULT_BATCH_SIZE}).")
-
-    # structured_output is the object --json-schema produced, so it beats re-parsing
-    # the `result` string: one less decode, and immune to prose alongside the JSON.
-    payload = response.get("structured_output")
-    if payload is not None:
-        return payload
-    raw = response.get("result")
-    if not raw:
-        sys.exit(f"{CLAUDE_CLI} returned neither structured_output nor a result "
-                 f"on {label}.")
-    try:
-        return json.loads(raw)
-    except ValueError as exc:
-        sys.exit(f"{CLAUDE_CLI} result on {label} is not the JSON the schema asked "
-                 f"for ({exc}).")
-
-
 def analyze(model, effort, compact_tickets):
     """Classify a batch through the Claude Code CLI. Returns findings."""
-    payload = claude_cli_json(
+    payload = claude_cli.run_json(
         model, effort, SYSTEM_PROMPT, SCHEMA,
         build_analysis_prompt(compact_tickets), CLAUDE_TIMEOUT_SECONDS,
         f"a batch of {len(compact_tickets)} tickets")
@@ -1417,10 +636,6 @@ MAX_ENTRIES_PER_MESSAGE = 10
 MAX_COMPONENT_CHARS = discord.MAX_MESSAGE_TEXT_CHARS
 
 
-def ticket_url(subdomain, ticket_id):
-    return f"https://{subdomain}.zendesk.com/agent/tickets/{ticket_id}"
-
-
 def is_urgent(finding):
     return finding.get("category") in URGENT_CATEGORIES
 
@@ -1452,7 +667,7 @@ def build_ticket_line(finding, subdomain, is_update=False):
         severity_marker(finding),
         CATEGORY_EMOJI.get(finding.get("category"), "•"),
         PLATFORM_EMOJI.get(finding.get("platform"), PLATFORM_EMOJI["unknown"]),
-        f"{marker}[#{tid}]({ticket_url(subdomain, tid)}) · "
+        f"{marker}[#{tid}]({zendesk.ticket_url(subdomain, tid)}) · "
         f"{clip(finding.get('summary'), SUMMARY_CHARS) or '(no summary)'}",
     ]
     root = clip(finding.get("likely_root_cause"), ROOT_CAUSE_CHARS)
@@ -1478,7 +693,7 @@ def build_collapsed_line(collapsed, subdomain):
     """
     links, used = [], 0
     for f in collapsed:
-        link = f"[#{f.get('id')}]({ticket_url(subdomain, f.get('id'))})"
+        link = f"[#{f.get('id')}]({zendesk.ticket_url(subdomain, f.get('id'))})"
         used += len(link) + 2  # ", "
         if used > COLLAPSED_LINKS_CHARS:
             break
@@ -1714,15 +929,15 @@ def main():
         else:
             query = DEFAULT_QUERY
 
-        zd = zendesk_session(email, api_token)
-        tickets, total_matched = fetch_tickets(zd, subdomain, query, args.max_tickets)
+        zd = zendesk.api_session(email, api_token)
+        tickets, total_matched = zendesk.fetch_tickets(zd, subdomain, query, args.max_tickets)
         matched = "?" if total_matched is None else total_matched
         print(f"Fetched {len(tickets)} of {matched} matching tickets (query: {query!r}).")
         if total_matched is not None and total_matched > len(tickets):
             # Name whichever cap actually bound, so a truncated digest doesn't send
             # someone raising --max-tickets against a limit that isn't ours.
-            reason = (f"Zendesk's search API returns at most {SEARCH_RESULT_LIMIT} results"
-                      if args.max_tickets >= SEARCH_RESULT_LIMIT
+            reason = (f"Zendesk's search API returns at most {zendesk.SEARCH_RESULT_LIMIT} results"
+                      if args.max_tickets >= zendesk.SEARCH_RESULT_LIMIT
                       else f"--max-tickets is {args.max_tickets}")
             print(f"Note: {total_matched - len(tickets)} matching tickets were not analyzed "
                   f"({reason}).")
@@ -1731,8 +946,8 @@ def main():
             return
 
         stats["matched"] = total_matched
-        stats["total_unsolved"] = fetch_total_unsolved(zd, subdomain)
-        stats["total_unsolved_non_review"] = fetch_total_unsolved(
+        stats["total_unsolved"] = zendesk.count_tickets(zd, subdomain, BACKLOG_QUERY)
+        stats["total_unsolved_non_review"] = zendesk.count_tickets(
             zd, subdomain, BACKLOG_NON_REVIEW_QUERY)
 
         # Drop positive store reviews before anything expensive: they were 59% of all
@@ -1751,7 +966,7 @@ def main():
         # whenever either needs it. After the review filter, so it only covers
         # tickets that can still be reported. One request per 100 tickets.
         if window_start or args.state:
-            hydrate_requester_activity(zd, subdomain, tickets)
+            zendesk.hydrate_requester_activity(zd, subdomain, tickets)
 
         if window_start:
             tickets, quiet = drop_quiet_tickets(tickets, window_start)
@@ -1792,7 +1007,7 @@ def main():
             print("Classify it, then: --findings <path> --dry-run")
             return
 
-        analyzer = partial(analyze, resolve_api_model(model), args.effort)
+        analyzer = partial(analyze, claude_cli.resolve_api_model(model), args.effort)
         findings = analyze_in_chunks(analyzer, compact, args.batch_size)
 
         # Keep only findings whose id maps to a fetched ticket, in case of drift.
@@ -1829,8 +1044,8 @@ def main():
     # rendering written there would be a write to a production ticket for a dialog
     # that can never be opened.
     if needs_discord:
-        attach_english(zd, subdomain, classified, shown, model,
-                       get_env(ENGLISH_FIELD_ENV, required=False))
+        transcript.attach_english(zd, subdomain, classified, shown, model,
+                                  get_env(transcript.ENGLISH_FIELD_ENV, required=False))
 
     messages, coverage = build_messages(findings, subdomain, stats, updated_ids)
     if args.dry_run:

@@ -23,9 +23,11 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import claude_cli  # noqa: E402
 import note_reply  # noqa: E402
-import triage  # noqa: E402
+import zendesk  # noqa: E402
 from shared.testing import Env, FakeResponse, FakeSession, Patched  # noqa: E402
+from shared.text import undash_english  # noqa: E402
 
 API_USER = 901790886886
 AGENT = 555
@@ -141,7 +143,7 @@ class EnglishTranscript(unittest.TestCase):
                         author=API_USER, cid=8)
         comments = [comment("claude: english", cid=9),
                     dict(comment("hallo", author=42, cid=7), public=True), prior]
-        with Patched(triage, conversation_turns=lambda *a: called.append(a)):
+        with Patched(zendesk, conversation_turns=lambda *a: called.append(a)):
             session = fake_session(*[FakeResponse({"ticket": {}})])
             note_reply.run_english(session, "sub", "model", {"id": 7}, comments,
                                    {"id": 9, "author": AGENT, "action": "english",
@@ -156,7 +158,7 @@ class EnglishTranscript(unittest.TestCase):
         comments = [comment("claude: english", cid=9),
                     dict(comment("hallo", author=42, cid=7), public=True), prior]
         session = fake_session(*[FakeResponse({"ticket": {}})])
-        with Patched(triage, conversation_turns=lambda *a: None):
+        with Patched(zendesk, conversation_turns=lambda *a: None):
             note_reply.run_english(session, "sub", "model", {"id": 7}, comments,
                                    {"id": 9, "author": AGENT, "action": "english",
                                     "brief": ""}, dry_run=False)
@@ -173,9 +175,9 @@ class EnglishTranscript(unittest.TestCase):
         """A transcript of English text repeats what is already on the ticket."""
         turns = [{"index": 0, "who": "Customer", "when": "t", "body": "My app crashes"}]
         session = fake_session(*[FakeResponse({"ticket": {}})])
-        with Patched(triage, conversation_turns=lambda *a: turns,
-                     claude_cli_json=lambda *a, **k: {
-                         "turns": [{"index": 0, "english": "My app crashes"}]}):
+        with Patched(zendesk, conversation_turns=lambda *a: turns), \
+                Patched(claude_cli, run_json=lambda *a, **k: {
+                    "turns": [{"index": 0, "english": "My app crashes"}]}):
             note_reply.run_english(session, "sub", "model", {"id": 7},
                                    [comment("claude: english", cid=9)],
                                    {"id": 9, "author": AGENT, "action": "english",
@@ -190,7 +192,8 @@ class EnglishTranscript(unittest.TestCase):
             raise SystemExit("claude exited 1 on the English transcript of #7: 529.")
         session = fake_session(*[FakeResponse({"ticket": {}}), FakeResponse({}),
                                FakeResponse({})])
-        with Patched(triage, conversation_turns=lambda *a: turns, claude_cli_json=fail):
+        with Patched(zendesk, conversation_turns=lambda *a: turns), \
+                Patched(claude_cli, run_json=fail):
             note_reply.run_english(session, "sub", "model", {"id": 7},
                                    [comment("claude: english", cid=9)],
                                    {"id": 9, "author": AGENT, "action": "english",
@@ -261,9 +264,9 @@ class EnglishTranscript(unittest.TestCase):
         turns = [{"index": 0, "who": "Customer", "when": "2026-09-03 10:00 UTC",
                   "body": "Hallo"}]
         session = fake_session(*[FakeResponse({"ticket": {}})])
-        with Patched(triage, conversation_turns=lambda *a: turns,
-                     claude_cli_json=lambda *a, **k: {"turns": [{"index": 0,
-                                                                "english": "Hello"}]}):
+        with Patched(zendesk, conversation_turns=lambda *a: turns), \
+                Patched(claude_cli, run_json=lambda *a, **k: {"turns": [{"index": 0,
+                                                                        "english": "Hello"}]}):
             note_reply.run_english(session, "sub", "model", {"id": 7},
                                    [dict(comment("Hallo", author=42, cid=3), public=True)],
                                    {"id": 9, "author": AGENT, "action": "english",
@@ -684,8 +687,8 @@ class Idempotency(unittest.TestCase):
 
     def test_a_handled_command_is_recognised(self):
         note = note_reply.build_draft_note(GERMAN, "x", 42)
-        self.assertTrue(triage.has_marker([comment(note)], note_reply.done_marker(42)))
-        self.assertFalse(triage.has_marker([comment(note)], note_reply.done_marker(43)))
+        self.assertTrue(zendesk.has_marker([comment(note)], note_reply.done_marker(42)))
+        self.assertFalse(zendesk.has_marker([comment(note)], note_reply.done_marker(43)))
 
 
 class Writes(unittest.TestCase):
@@ -943,21 +946,21 @@ class Composition(unittest.TestCase):
     def test_a_range_becomes_a_plain_hyphen(self):
         """Not left alone: an unspaced long dash is still a long dash, and "14-21
         days" is what a person would have typed."""
-        self.assertEqual(triage.undash_english("kept 14—21 days"), "kept 14-21 days")
-        self.assertEqual(triage.undash_english("versions 2.14–2.15"), "versions 2.14-2.15")
+        self.assertEqual(undash_english("kept 14—21 days"), "kept 14-21 days")
+        self.assertEqual(undash_english("versions 2.14–2.15"), "versions 2.14-2.15")
 
     def test_no_long_dash_survives_anywhere(self):
         for text in ("a — b", "a—b", "a – b", "a–b", "— leading", "trailing —"):
             with self.subTest(text=text):
-                self.assertNotIn("—", triage.undash_english(text))
-                self.assertNotIn("–", triage.undash_english(text))
+                self.assertNotIn("—", undash_english(text))
+                self.assertNotIn("–", undash_english(text))
 
     def test_hyphens_in_words_survive(self):
-        self.assertEqual(triage.undash_english("end-to-end encrypted"),
+        self.assertEqual(undash_english("end-to-end encrypted"),
                          "end-to-end encrypted")
 
     def test_en_dashes_go_too(self):
-        self.assertEqual(triage.undash_english("gone – sorry"), "gone, sorry")
+        self.assertEqual(undash_english("gone – sorry"), "gone, sorry")
 
     def test_every_option_is_cleaned_not_just_the_first(self):
         result = note_reply.validate_composition(dict(ENGLISH, options=[
