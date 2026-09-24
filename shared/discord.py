@@ -22,11 +22,6 @@ SEPARATOR = 14
 MAX_MESSAGE_TEXT_CHARS = 4000
 
 
-def clip(text, limit):
-    text = (text or "").strip()
-    return text if len(text) <= limit else text[: limit - 1] + "…"
-
-
 def text_display(content):
     return {"type": TEXT_DISPLAY, "content": content}
 
@@ -92,6 +87,11 @@ def messages_from_entries(header, entries, max_items, max_chars=MAX_MESSAGE_TEXT
         messages.append(container_message(blocks))
         coverage.append(set().union(*(ids for _, ids in chunk)) if chunk else set())
     return messages, coverage
+
+
+def delivered_ids(coverage, posted):
+    """The ids carried by the first `posted` messages: what Discord accepted."""
+    return set().union(*coverage[:posted]) if posted else set()
 
 
 def components_webhook_url(webhook_url):

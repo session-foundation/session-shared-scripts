@@ -1,5 +1,6 @@
 """Fakes for the tests of every script that talks HTTP through `shared`."""
 import json
+import os
 import time
 
 import requests
@@ -16,6 +17,10 @@ class FakeResponse:
 
     def json(self):
         return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"{self.status_code}", response=self)
 
 
 class NonJsonResponse(FakeResponse):
@@ -46,6 +51,12 @@ class FakeSession:
         if isinstance(item, Exception):
             raise item
         return item
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
 
 
 class Patched:
@@ -85,4 +96,29 @@ class NoSleep:
 
     def __exit__(self, *exc):
         time.sleep = self._real
+        return False
+
+
+class Env:
+    """Replace process environment variables for the duration of a block.
+
+    A value of None unsets the variable, so a test can exercise the missing case
+    on a machine where the real setting is present.
+    """
+
+    def __init__(self, **overrides):
+        self.overrides = overrides
+
+    def __enter__(self):
+        self.saved = dict(os.environ)
+        for key, value in self.overrides.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        return self
+
+    def __exit__(self, *exc):
+        os.environ.clear()
+        os.environ.update(self.saved)
         return False

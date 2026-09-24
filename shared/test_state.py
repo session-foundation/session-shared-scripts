@@ -81,5 +81,38 @@ class TestStateFile(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(os.path.dirname(self.path))), ["seen.json"])
 
 
+class TestTracker(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = os.path.join(self.directory.name, "seen.json")
+        self.tracker = dedup.Tracker(
+            VERSION, "thing", key_of=lambda t: str(t["id"]),
+            activity_of=lambda t: t["touched"], field="touched",
+            describe=lambda t: {"name": t.get("name", "")})
+
+    def test_partition_against_what_was_reported(self):
+        state = self.tracker.empty()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.tracker.save(self.path, state, [{"id": 1, "touched": "A"},
+                                                 {"id": 2, "touched": "A"}], 30)
+            state = self.tracker.load(self.path)
+        new, changed, unchanged = self.tracker.partition(
+            [{"id": 1, "touched": "B"}, {"id": 2, "touched": "A"}, {"id": 3, "touched": "A"}],
+            state)
+        self.assertEqual([t["id"] for t in new], [3])
+        self.assertEqual([t["id"] for t in changed], [1])
+        self.assertEqual([t["id"] for t in unchanged], [2])
+
+    def test_describe_fields_are_written_beside_the_activity(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.tracker.save(self.path, self.tracker.empty(),
+                              [{"id": 1, "touched": "A", "name": "one"}], 30)
+            record = self.tracker.load(self.path)["seen"]["1"]
+        self.assertEqual(record["touched"], "A")
+        self.assertEqual(record["name"], "one")
+        self.assertIn("last_reported", record)
+
+
 if __name__ == "__main__":
     unittest.main()

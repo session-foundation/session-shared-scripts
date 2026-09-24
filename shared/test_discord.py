@@ -126,5 +126,13 @@ class TestMessagesFromEntries(unittest.TestCase):
         self.assertEqual(len(messages), 2)
 
 
+class TestDeliveredIds(unittest.TestCase):
+    def test_only_the_accepted_messages_count(self):
+        coverage = [{1, 2}, {3}, {4}]
+        self.assertEqual(discord.delivered_ids(coverage, 2), {1, 2, 3})
+        self.assertEqual(discord.delivered_ids(coverage, 0), set())
+        self.assertEqual(discord.delivered_ids([], 0), set())
+
+
 if __name__ == "__main__":
     unittest.main()

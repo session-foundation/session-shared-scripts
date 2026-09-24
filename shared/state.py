@@ -9,6 +9,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 STAMP = "%Y-%m-%dT%H:%M:%SZ"
+DEFAULT_RETENTION_DAYS = 30
 
 
 def empty_state(version):
@@ -71,3 +72,54 @@ def save_state(path, state, records, retention_days, version):
         json.dump({"version": version, "updated_at": stamp, "seen": kept}, handle, indent=2)
     os.replace(temporary, path)  # atomic: a crash mid-write cannot corrupt the state
     return len(kept), len(seen) - len(kept)
+
+
+class Tracker:
+    """One digest's dedup: its schema version, and how an item is keyed and stamped.
+
+    `key_of(item)` names an item across runs and `activity_of(item)` is the value a
+    re-report is judged against, stored under `field`. `describe(item)`, if given,
+    adds fields written for whoever opens the file and never read back.
+    """
+
+    def __init__(self, version, noun, key_of, activity_of, field, describe=None,
+                 retention_days=DEFAULT_RETENTION_DAYS):
+        self.version = version
+        self.noun = noun
+        self.key_of = key_of
+        self.activity_of = activity_of
+        self.field = field
+        self.describe = describe
+        self.retention_days = retention_days
+
+    def empty(self):
+        return empty_state(self.version)
+
+    def load(self, path):
+        return load_state(path, self.version, self.noun)
+
+    def partition(self, items, state):
+        """Split into (new, changed, unchanged) against what was last reported."""
+        seen = state.get("seen", {})
+        new, changed, unchanged = [], [], []
+        for item in items:
+            previous = seen.get(self.key_of(item))
+            if previous is None:
+                new.append(item)
+            elif previous.get(self.field) != self.activity_of(item):
+                changed.append(item)
+            else:
+                unchanged.append(item)
+        return new, changed, unchanged
+
+    def save(self, path, state, reported, retention_days=None):
+        """Record `reported` as seen now. Returns (kept, pruned)."""
+        if retention_days is None:
+            retention_days = self.retention_days
+        records = {}
+        for item in reported:
+            record = {self.field: self.activity_of(item)}
+            if self.describe:
+                record.update(self.describe(item))
+            records[self.key_of(item)] = record
+        return save_state(path, state, records, retention_days, self.version)
