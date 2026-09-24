@@ -714,10 +714,11 @@ a stranger's until someone adds them.
 
 ### What is left out
 
-Forks and archived repositories, by checking the search results against the org's
-repository list rather than by name — so a repository created today is covered today,
-and `session-pysogs` or `session-android-private` never are. `--include-forks`,
-`--include-archived` and `--exclude-repo` override that per run.
+Forks, archived repositories and private repositories, by checking the search results
+against the org's repository list rather than by name — so a repository created today
+is covered today and a fork of an upstream project never is. `--include-forks`,
+`--include-archived` and `--exclude-repo` override the first two per run; private
+repositories stay out whatever the token can see.
 
 | flag | |
 | --- | --- |
@@ -730,7 +731,7 @@ and `session-pysogs` or `session-android-private` never are. `--include-forks`,
 
 | env var | |
 | --- | --- |
-| `GITHUB_PRS_TOKEN` | read-only token; no scope at all is needed for the public repos, `repo` to also see the org's private ones |
+| `GITHUB_PRS_TOKEN` | read-only token; no scope at all is needed, the digest reads public repositories only |
 | `GITHUB_PRS_DISCORD_WEBHOOK_URL` | the channel it posts to (not needed with `--dry-run`) |
 | `GITHUB_PRS_ORG` | optional; defaults to `session-foundation` |
 

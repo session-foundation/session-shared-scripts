@@ -367,12 +367,19 @@ class TestWebhookUrl(unittest.TestCase):
 
 
 class TestFetching(unittest.TestCase):
-    def test_forks_and_archived_repos_are_left_out(self):
+    def test_forks_archived_and_private_repos_are_left_out(self):
         page = [{"name": "session-android", "fork": False, "archived": False},
                 {"name": "session-pysogs", "fork": True, "archived": False},
-                {"name": "session-ios-private", "fork": False, "archived": True}]
+                {"name": "retired", "fork": False, "archived": True},
+                {"name": "internal", "fork": False, "archived": False, "private": True}]
         with mock.patch.object(digest, "fetch_json", return_value=page):
             self.assertEqual(digest.fetch_repos(None, "org"), {"session-android"})
+
+    def test_private_repos_cannot_be_asked_for(self):
+        page = [{"name": "internal", "fork": True, "archived": True, "private": True}]
+        with mock.patch.object(digest, "fetch_json", return_value=page):
+            self.assertEqual(digest.fetch_repos(None, "org", include_forks=True,
+                                                include_archived=True), set())
 
     def test_forks_can_be_asked_for(self):
         page = [{"name": "session-pysogs", "fork": True, "archived": False}]
