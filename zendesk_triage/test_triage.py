@@ -1952,6 +1952,17 @@ class TestClaudeCli(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     self.run_cli(response=response)
 
+    def test_a_zero_exit_that_reports_is_error_names_the_reason(self):
+        """The envelope's `result` is where the CLI puts the reason, whatever the exit
+        code; the subtype and status alone do not say what went wrong."""
+        with self.assertRaises(SystemExit) as caught:
+            self.run_cli(response={"subtype": "success", "is_error": True,
+                                   "api_error_status": 404,
+                                   "result": "There's an issue with the selected model."})
+        message = str(caught.exception)
+        self.assertIn("api_error_status=404", message)
+        self.assertIn("selected model", message)
+
     def test_a_non_zero_exit_prefers_stderr_over_stdout(self):
         """A non-zero exit means there is no JSON to read, and the CLI could echo the
         prompt back — which this repo's public run logs must not carry."""

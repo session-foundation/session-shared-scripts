@@ -1469,9 +1469,11 @@ def claude_cli_json(model, effort, system_prompt, schema, prompt, timeout, label
     # is not — a successful structured-output run reports "tool_use", because that is
     # how the schema is enforced underneath.
     if response.get("is_error") or response.get("subtype") != "success":
+        detail = cli_failure_detail(done.stdout, done.stderr)
         sys.exit(f"{CLAUDE_CLI} reported failure on {label} "
                  f"(subtype={response.get('subtype')!r}, "
-                 f"api_error_status={response.get('api_error_status')!r}).")
+                 f"api_error_status={response.get('api_error_status')!r})"
+                 f"{': ' + detail if detail else '.'}")
     # stop_reason is worth reading for this one value. There is no --max-tokens to
     # raise, so an answer too long to finish comes back as JSON that stops mid-object,
     # and the parse below would report a baffling syntax error for something whose
