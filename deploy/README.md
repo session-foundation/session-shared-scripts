@@ -163,6 +163,14 @@ its configuration from the environment.
 # than extending it, which is why the standard directories are repeated.
 PATH=/home/zendesk/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+# Optional, and the one to use on a host nobody logs into. `claude setup-token` on a
+# machine with a browser mints a token that lasts a year, against the same
+# subscription and the same billing as the interactive login — it is not an API key.
+# Without it the CLI runs on the login `claude` was signed in with, whose refresh
+# token hard-expires in weeks and takes the digest and the `claude:` notes with it
+# when it does. Paste the token here; it is printed once and saved nowhere.
+#CLAUDE_CODE_OAUTH_TOKEN=
+
 ZENDESK_SUBDOMAIN=
 # Authors every comment the reply flow posts.
 ZENDESK_EMAIL=
@@ -200,10 +208,12 @@ ZENDESK_WEBHOOK_SECRET=
 #RELAY_DRY_RUN=1
 ```
 
-Check what systemd actually loaded, rather than what you think you wrote:
+Check what systemd actually loads from it, rather than what you think you wrote.
+`systemctl show -p Environment` will not do: it lists only `Environment=` lines from
+the unit and nothing from `EnvironmentFile=`.
 
 ```bash
-systemctl show zendesk-digest.service -p Environment | tr ' ' '\n' | grep -vi token
+systemd-run --pipe --wait --uid=zendesk -p EnvironmentFile=/etc/zendesk/env env | grep -vi token
 ```
 
 Set `RELAY_DRY_RUN=1` for the first deployment. The whole `claude:` note path runs —
@@ -250,12 +260,28 @@ next runs.
 
 ```bash
 runuser -u zendesk -- env HOME=/home/zendesk /home/zendesk/.local/bin/claude --version
-systemctl show zendesk-relay -p Environment | tr ' ' '\n' | grep -E 'HOME|PATH'
+tr '\0' '\n' < /proc/"$(systemctl show -p MainPID --value zendesk-relay)"/environ | grep -E '^(HOME|PATH)='
 ```
+
+The second line reads the running relay's own environment, so it also tells you
+whether an edit to `/etc/zendesk/env` has reached it yet — it does not until the unit
+is restarted.
 
 Both the explicit `HOME` and the absolute path are load-bearing: `runuser -u` resets
 neither, so a bare `claude` there is resolved against root's `PATH` and reports
 `Permission denied` for an install that is fine.
+
+With `CLAUDE_CODE_OAUTH_TOKEN` set, that check tests the wrong credential — it reads
+the interactive login, which the token outranks. Test what the unit will actually use:
+
+```bash
+systemd-run --pty --uid=zendesk -p EnvironmentFile=/etc/zendesk/env \
+  --setenv=HOME=/home/zendesk /home/zendesk/.local/bin/claude \
+  --print --model claude-sonnet-5 --output-format json 'reply with OK'
+```
+
+An `is_error` envelope naming authentication means the token is wrong or expired; the
+digest reports the same message to Discord once it runs.
 
 That covers the install. The sandbox is the other half, and no amount of reading the
 unit file settles it — `ProtectHome=tmpfs`, `MemoryDenyWriteExecute=` and

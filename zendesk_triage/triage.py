@@ -31,8 +31,14 @@ Config (env vars, or flags for local runs):
     ZENDESK_EMAIL         agent email for API token auth
     ZENDESK_API_TOKEN     Zendesk API token
                           Classification runs through the locally installed
-                          Claude Code CLI, which supplies its own credentials,
-                          so no Claude key lives in this deployment at all.
+                          Claude Code CLI. No Claude API key lives in this
+                          deployment: the CLI authenticates with a subscription,
+                          either the interactive login or CLAUDE_CODE_OAUTH_TOKEN.
+    CLAUDE_CODE_OAUTH_TOKEN
+                          (optional) A `claude setup-token` token, passed through
+                          to the CLI. Same subscription and billing as the
+                          interactive login, with a year's life instead of weeks,
+                          which is what an unattended host wants.
     ZENDESK_DISCORD_WEBHOOK_URL
                           Discord incoming webhook for the triage channel, shared
                           with resolve_reviews.py's tally and the failure alerts
@@ -192,15 +198,20 @@ DEFAULT_BATCH_SIZE = 400
 # authentication is whatever `claude` is already logged in as and no key lives here.
 CLAUDE_CLI = "claude"
 
-# Dropped from the CLI's environment. It authenticates as whatever `claude` is logged
-# in as, and any of these silently outranks that login — a box that once ran the API
-# backend still has the key in its EnvironmentFile, where it is now dead config that
-# would otherwise pick the credential for every classification and translation.
+# Dropped from the CLI's environment. Each one silently outranks whatever `claude` is
+# logged in as, and each is API-backend configuration — a box that once ran that way
+# still has the key in its EnvironmentFile, where it is now dead config that would
+# otherwise pick the credential, and the billing, for every classification.
+#
+# CLAUDE_CODE_OAUTH_TOKEN is deliberately not in this list. It is a subscription
+# credential like the interactive login, not an API key, and it is the only one of
+# these an unattended host can renew on a yearly rather than weekly cadence — see
+# deploy/README.md. Nothing else can set it: it has never been written by anything
+# this repo deploys, so it reaches the CLI only because somebody put it there.
 CLAUDE_AUTH_OVERRIDES = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_BASE_URL",
-    "CLAUDE_CODE_OAUTH_TOKEN",
 )
 # A 400-ticket chunk at medium effort is minutes of work. Generous, because being
 # killed mid-batch costs the whole chunk — and bounded, because a wedged CLI would

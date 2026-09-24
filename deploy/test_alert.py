@@ -7,27 +7,24 @@ from unittest import mock
 
 import alert
 
-# What the digest left in the journal on 2026-09-23, systemd's lines included.
+# What the digest itself left in the journal on 2026-09-23.
 JOURNAL = """\
 Fetched 13 of 13 matching tickets (query: 'type:ticket status<pending').
 Loaded state for 242 previously reported tickets.
 4 new, 1 changed since last reported, 8 unchanged (skipped).
 claude exited 1 on a batch of 5 tickets: Failed to authenticate: OAuth session \
 expired and could not be refreshed (api_error)
-Main process exited, code=exited, status=1/FAILURE
-Failed with result 'exit-code'.
-Failed to start zendesk-digest.service - Zendesk positive-review resolver.
-Triggering OnFailure= dependencies.
-Consumed 1.358s CPU time.
+
 """
+CLI = "claude exited 1 on a batch of 5 tickets: "
 
 
 class TestLastJobLine(unittest.TestCase):
-    def test_systemd_has_the_last_word_in_the_journal_but_not_in_the_alert(self):
+    def test_the_last_non_blank_line_is_the_excerpt(self):
+        self.assertTrue(alert.last_job_line(JOURNAL).startswith(CLI))
         self.assertIn("OAuth session expired", alert.last_job_line(JOURNAL))
 
     def test_a_unit_that_said_nothing_leaves_it_empty(self):
-        self.assertEqual(alert.last_job_line("Main process exited, code=exited\n"), "")
         self.assertEqual(alert.last_job_line("   \n\n"), "")
         self.assertEqual(alert.last_job_line(""), "")
 
@@ -44,14 +41,24 @@ class TestAuthDetection(unittest.TestCase):
         for line in ("Invalid API key · Please run /login",
                      "OAuth token expired",
                      "Request failed: unauthorized",
-                     "Credit balance is too low"):
+                     "Credit balance is too low",
+                     "it printed nothing, which is what a login it can no longer use "
+                     "looks like; check that `claude` is still signed in."):
             with self.subTest(line=line):
-                self.assertTrue(alert.is_auth_failure(line))
+                self.assertTrue(alert.is_auth_failure(CLI + line))
 
     def test_an_ordinary_failure_is_not_a_login_problem(self):
         for line in ("Zendesk 500 on /api/v2/search.json",
                      "claude did not finish a batch of 5 tickets within 1800s.",
                      ""):
+            with self.subTest(line=line):
+                self.assertFalse(alert.is_auth_failure(line))
+
+    def test_a_dead_zendesk_token_is_not_a_dead_claude_login(self):
+        """Zendesk's 401 body says "authenticate" too, and re-logging the CLI in
+        would fix nothing."""
+        for line in ('Zendesk search failed (401): {"error":"Couldn\'t authenticate you"}',
+                     'update_many failed (401): {"error":"Couldn\'t authenticate you"}'):
             with self.subTest(line=line):
                 self.assertFalse(alert.is_auth_failure(line))
 
@@ -103,10 +110,13 @@ class TestJournalTail(unittest.TestCase):
             self.run_call = run
             return alert.journal_tail("zendesk-digest.service")
 
-    def test_the_unit_is_asked_for_by_name(self):
+    def test_only_the_units_own_output_is_asked_for(self):
+        """-u would add systemd's lines about the unit, and the last of those would
+        become the excerpt."""
         self.run_tail(return_value=mock.Mock(returncode=0, stdout=JOURNAL))
         command = self.run_call.call_args[0][0]
-        self.assertIn("zendesk-digest.service", command)
+        self.assertIn("_SYSTEMD_UNIT=zendesk-digest.service", command)
+        self.assertNotIn("-u", command)
         self.assertIn("--no-pager", command)
 
     def test_output_comes_back_whole(self):

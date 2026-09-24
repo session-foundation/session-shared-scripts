@@ -444,7 +444,7 @@ command that cannot be satisfied is still a command that was answered.
 | `claude-drafted` | a draft being posted | the reply going out |
 | `claude-sent` | the reply going out | — |
 | `claude-solved` | `claude: solve`, on every solve | — |
-| `claude-error` | a refusal, with the reason in the note | the next successful run |
+| `claude-error` | a refusal or a failed Claude call, with the reason in the note | the next successful run |
 
 The tag is the durable queue and the webhook is only a latency optimisation. A relay
 that is down leaves `claude-queued` on the ticket, so `tags:claude-queued` older than
