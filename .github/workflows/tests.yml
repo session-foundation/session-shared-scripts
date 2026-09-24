@@ -1,0 +1,71 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: shared
+            requirements: github_prs/requirements.txt
+          - suite: github_prs
+            requirements: github_prs/requirements.txt
+          - suite: zendesk_triage
+            requirements: zendesk_triage/requirements.txt zendesk_triage/requirements-dev.txt
+          - suite: deploy
+            requirements: github_prs/requirements.txt
+          - suite: crowdin
+            requirements: crowdin/requirements.txt
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: "**/requirements*.txt"
+
+      - name: Install dependencies
+        run: |
+          for file in ${{ matrix.requirements }}; do
+            pip install -r "$file"
+          done
+
+      - name: Run ${{ matrix.suite }} tests
+        working-directory: ${{ matrix.suite }}
+        run: python -m unittest discover -v
+
+  sogs_moderation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # session_util is published as a deb built against the system interpreter, so
+      # this suite runs on that interpreter with a venv that can see it.
+      - name: Install python3-session-util
+        run: |
+          sudo curl -so /usr/share/keyrings/session-foundation.gpg https://deb.session.foundation/pub.gpg
+          printf 'Types: deb\nURIs: https://deb.session.foundation\nSuites: %s\nComponents: main\nSigned-By: /usr/share/keyrings/session-foundation.gpg\n' \
+            "$(lsb_release -sc)" | sudo tee /etc/apt/sources.list.d/session.sources
+          sudo apt-get update
+          sudo apt-get install -y python3-session-util
+
+      - name: Install dependencies
+        run: |
+          python3 -m venv --system-site-packages .venv
+          .venv/bin/pip install -r sogs_moderation/requirements.txt
+
+      - name: Run sogs_moderation tests
+        working-directory: sogs_moderation
+        run: ../.venv/bin/python -m unittest discover -v
