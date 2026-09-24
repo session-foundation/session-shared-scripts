@@ -5,12 +5,15 @@ import contextlib
 import io
 import json
 import os
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
-import digest
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import digest  # noqa: E402
+from shared import discord  # noqa: E402
 
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
 CUTOFF = NOW - timedelta(hours=25)
@@ -143,41 +146,6 @@ class TestStateFile(unittest.TestCase):
     def test_no_path_means_no_state_and_no_complaint(self):
         self.assertEqual(digest.load_state(None), digest.empty_state())
 
-    def test_every_unreadable_state_is_a_cache_miss_not_an_error(self):
-        """Losing it re-reports the window once. Failing the run instead would mean a
-        corrupt cache stops the digest entirely."""
-        for content in ("{ not json", '{"version": 1}', "[]",
-                        '{"version": 99, "seen": {}}'):
-            with self.subTest(content=content):
-                with open(self.path.replace("sub/", ""), "w", encoding="utf-8") as fh:
-                    fh.write(content)
-                with contextlib.redirect_stdout(io.StringIO()):
-                    state = digest.load_state(self.path.replace("sub/", ""))
-                self.assertEqual(state, digest.empty_state())
-
-    def test_a_missing_file_is_a_cache_miss(self):
-        self.assertEqual(self.load(), digest.empty_state())
-
-    def test_entries_are_pruned_past_the_retention(self):
-        self.save(pr(1))
-        state = self.load()
-        for record in state["seen"].values():
-            record["last_reported"] = "2026-01-01T00:00:00Z"
-        with contextlib.redirect_stdout(io.StringIO()):
-            kept, pruned = digest.save_state(self.path, state, [], retention_days=30)
-        self.assertEqual((kept, pruned), (0, 1))
-
-    def test_a_malformed_entry_is_dropped_rather_than_kept_forever(self):
-        state = {"version": digest.STATE_VERSION,
-                 "seen": {"1": {"updated_at": "x", "last_reported": "never"}}}
-        with contextlib.redirect_stdout(io.StringIO()):
-            kept, _ = digest.save_state(self.path, state, [])
-        self.assertEqual(kept, 0)
-
-    def test_nothing_is_left_behind_by_the_atomic_write(self):
-        self.save(pr(1))
-        self.assertEqual(sorted(os.listdir(os.path.dirname(self.path))), ["seen.json"])
-
 
 class TestAge(unittest.TestCase):
     def test_coarsens_as_it_grows(self):
@@ -297,29 +265,6 @@ class TestHeader(unittest.TestCase):
         self.assertIn("floor", digest.build_header([], [], 1000, 25, True))
 
 
-class TestChunking(unittest.TestCase):
-    def test_splits_on_the_component_count(self):
-        blocks = ["x"] * (digest.MAX_COMPONENTS_PER_MESSAGE + 1)
-        chunks = digest.chunk_blocks(blocks)
-        self.assertEqual([len(chunk) for chunk in chunks],
-                         [digest.MAX_COMPONENTS_PER_MESSAGE, 1])
-
-    def test_splits_on_the_character_budget(self):
-        blocks = ["x" * 2500, "y" * 2500]
-        self.assertEqual(len(digest.chunk_blocks(blocks)), 2)
-
-    def test_the_header_is_charged_to_the_first_message_only(self):
-        block = "x" * 1900
-        chunks = digest.chunk_blocks([block, block], first_used=0)
-        self.assertEqual(len(chunks), 1)
-        chunks = digest.chunk_blocks([block, block], first_used=1000)
-        self.assertEqual(len(chunks), 2)
-
-    def test_an_oversized_block_still_gets_a_message(self):
-        blocks = digest.chunk_blocks(["x" * (digest.MAX_MESSAGE_TEXT_CHARS + 100)])
-        self.assertEqual(len(blocks), 1)
-
-
 class TestMessages(unittest.TestCase):
     def test_a_quiet_day_still_posts_the_header(self):
         messages, coverage = digest.build_messages([], [], 4, 25, NOW)
@@ -331,8 +276,8 @@ class TestMessages(unittest.TestCase):
 
     def test_the_payload_is_components_v2(self):
         message = digest.build_messages([pr(1)], [], 1, 25, NOW)[0][0]
-        self.assertEqual(message["flags"], digest.COMPONENTS_V2_FLAG)
-        self.assertEqual(message["components"][0]["type"], digest.CONTAINER)
+        self.assertEqual(message["flags"], discord.COMPONENTS_V2_FLAG)
+        self.assertEqual(message["components"][0]["type"], discord.CONTAINER)
 
     def test_one_busy_repo_never_exceeds_the_message_budget(self):
         new = [pr(n, title="y" * 80) for n in range(120)]
@@ -341,7 +286,7 @@ class TestMessages(unittest.TestCase):
         for message in messages:
             text = sum(len(c.get("content", ""))
                        for c in message["components"][0]["components"])
-            self.assertLessEqual(text, digest.MAX_MESSAGE_TEXT_CHARS)
+            self.assertLessEqual(text, discord.MAX_MESSAGE_TEXT_CHARS)
         self.assertEqual(set().union(*coverage), {digest.pr_id(p) for p in new})
 
     def test_only_the_first_message_carries_the_header(self):
@@ -352,18 +297,7 @@ class TestMessages(unittest.TestCase):
         for message in messages[1:]:
             rendered = json.dumps(message, ensure_ascii=False)
             self.assertNotIn("Contributor pull requests", rendered)
-            self.assertLess(len(rendered), digest.MAX_MESSAGE_TEXT_CHARS * 2)
-
-
-class TestWebhookUrl(unittest.TestCase):
-    def test_components_are_requested(self):
-        url = digest.components_webhook_url("https://discord.com/api/webhooks/1/tok")
-        self.assertIn("with_components=true", url)
-
-    def test_an_existing_query_survives(self):
-        url = digest.components_webhook_url("https://discord.com/api/webhooks/1/tok?wait=true")
-        self.assertIn("wait=true", url)
-        self.assertIn("with_components=true", url)
+            self.assertLess(len(rendered), discord.MAX_MESSAGE_TEXT_CHARS * 2)
 
 
 class TestFetching(unittest.TestCase):
@@ -398,40 +332,6 @@ class TestFetching(unittest.TestCase):
         self.assertEqual(len(items), digest.SEARCH_RESULT_LIMIT)
         self.assertTrue(truncated)
         self.assertEqual(fetch.call_count, digest.SEARCH_RESULT_LIMIT // digest.PER_PAGE)
-
-
-class TestRetryAfter(unittest.TestCase):
-    def response(self, headers):
-        return mock.Mock(headers=headers)
-
-    def test_retry_after_seconds_is_used(self):
-        self.assertEqual(digest.retry_after_seconds(self.response({"retry-after": "12"}), 1), 12)
-
-    def test_a_primary_limit_falls_back_to_the_reset_epoch(self):
-        import time as time_module
-        reset = str(int(time_module.time()) + 30)
-        seconds = digest.retry_after_seconds(
-            self.response({"x-ratelimit-reset": reset}), 1)
-        self.assertTrue(25 <= seconds <= 31, seconds)
-
-    def test_nonsense_falls_back_to_the_caller_default(self):
-        for headers in ({"retry-after": "soon"}, {"retry-after": "-30"},
-                        {"retry-after": "inf"}, {"x-ratelimit-reset": "?"}, {}):
-            self.assertEqual(digest.retry_after_seconds(self.response(headers), 7), 7)
-
-
-class TestPosting(unittest.TestCase):
-    def test_a_rejection_reports_what_landed_before_it(self):
-        ok, bad = mock.Mock(status_code=204), mock.Mock(status_code=400, text="no")
-        session = mock.Mock()
-        session.request.side_effect = [ok, bad]
-        with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(digest.post_to_discord(session, "url", [{}, {}, {}]), 1)
-
-    def test_all_accepted(self):
-        session = mock.Mock()
-        session.request.return_value = mock.Mock(status_code=204)
-        self.assertEqual(digest.post_to_discord(session, "url", [{}, {}]), 2)
 
 
 if __name__ == "__main__":

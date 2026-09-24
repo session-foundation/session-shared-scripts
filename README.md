@@ -735,10 +735,13 @@ that: private repositories stay out whatever the token can see.
 | `GITHUB_PRS_ORG` | optional; defaults to `session-foundation` |
 
 It runs on the same box as the Zendesk digest, under its own user and its own
-environment file — see [deploy/README.md](deploy/README.md).
+environment file — see [deploy/README.md](deploy/README.md). Its HTTP retries,
+Discord posting and dedup state are the same code the Zendesk digest uses, in
+[shared/](shared/).
 
 ```sh
 cd github_prs && python -m unittest discover
+cd shared && python -m unittest discover
 ```
 
 ## Workflow Failure Notificaiton
