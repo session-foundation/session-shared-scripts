@@ -14,6 +14,11 @@ EnvironmentFile=/etc/zendesk/env
 # character nobody thought about.
 ExecStart=/opt/zendesk/venv/bin/python /opt/zendesk/deploy/alert.py %i
 
+# Read-only access to the failed unit's journal, which is where the alert gets the
+# line it quotes. Without it journalctl exits non-zero, the excerpt is dropped and
+# the alert still sends — so a host that skips this degrades rather than breaks.
+SupplementaryGroups=systemd-journal
+
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
