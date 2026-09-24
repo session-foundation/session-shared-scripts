@@ -358,7 +358,7 @@ def save_state(path, state, reported, retention_days=DEFAULT_RETENTION_DAYS):
 #
 # A header, then one block per repository whose PRs changed. Components V2 so that
 # each repository is its own component: a long day splits between repositories
-# rather than mid-list.
+# rather than mid-list, unless one repository alone outgrows a message.
 COMPONENTS_V2_FLAG = 1 << 15
 CONTAINER = 17
 TEXT_DISPLAY = 10
@@ -403,7 +403,25 @@ def build_pr_line(pr, now, is_new):
             f"{stamp}{replies} · {title}")
 
 
-def group_by_repo(new, updated, now):
+def split_block(heading, entries, max_chars):
+    """(text, ids) blocks of at most `max_chars`, each under its own copy of `heading`.
+
+    A block over the budget is rejected by Discord, and since nothing in it is then
+    recorded, the same block would be rebuilt every run until the window moved on.
+    """
+    blocks, lines, ids, used = [], [heading], set(), len(heading)
+    for line, key in entries:
+        if ids and used + 1 + len(line) > max_chars:
+            blocks.append(("\n".join(lines), ids))
+            lines, ids, used = [heading], set(), len(heading)
+        lines.append(line)
+        ids.add(key)
+        used += 1 + len(line)
+    blocks.append(("\n".join(lines), ids))
+    return blocks
+
+
+def group_by_repo(new, updated, now, max_chars=MAX_MESSAGE_TEXT_CHARS):
     """(text, ids) per repository, new PRs above updated ones.
 
     Repositories are ordered by how much changed, so the busiest is read first.
@@ -411,18 +429,17 @@ def group_by_repo(new, updated, now):
     returns them in update order, which reads as no order at all next to an age
     taken from the creation date.
     """
-    blocks = []
+    repos = []
     for repo in sorted({repo_name(pr) for pr in new + updated}):
-        lines, ids = [f"**{repo}**"], set()
+        entries = []
         for prs, field, is_new in ((new, "created_at", True),
                                    (updated, "updated_at", False)):
             group = sorted((pr for pr in prs if repo_name(pr) == repo),
                            key=itemgetter(field), reverse=True)
-            lines += [build_pr_line(pr, now, is_new) for pr in group]
-            ids |= {pr_id(pr) for pr in group}
-        blocks.append(("\n".join(lines), ids))
-    blocks.sort(key=lambda block: -len(block[1]))
-    return blocks
+            entries += [(build_pr_line(pr, now, is_new), pr_id(pr)) for pr in group]
+        repos.append((split_block(f"**{repo}**", entries, max_chars), len(entries)))
+    repos.sort(key=lambda item: -item[1])
+    return [block for blocks, _ in repos for block in blocks]
 
 
 def window_label(hours):
@@ -454,7 +471,7 @@ def chunk_blocks(blocks, first_used=0,
     it a busy day's first message goes over on the header alone.
 
     A single block over the character budget still gets its own message rather than
-    being dropped — clipped titles should keep that from arising.
+    being dropped; group_by_repo splits blocks to keep that from arising.
     """
     chunks, current, used = [], [], first_used
     for block in blocks:
@@ -477,7 +494,9 @@ def build_messages(new, updated, backlog, window_hours, now, truncated=False):
     failure on the last message re-posts the first ones tomorrow.
     """
     header = build_header(new, updated, backlog, window_hours, truncated)
-    blocks = group_by_repo(new, updated, now)
+    # Every block is sized to fit beside the header, though only the first message
+    # carries it: simpler than sizing the first block differently.
+    blocks = group_by_repo(new, updated, now, MAX_MESSAGE_TEXT_CHARS - len(header))
     messages, coverage = [], []
     # A quiet day still owes the channel its header, so seed one empty chunk.
     for index, chunk in enumerate(chunk_blocks(blocks, first_used=len(header)) or [[]]):

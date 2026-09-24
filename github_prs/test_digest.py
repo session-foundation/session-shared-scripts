@@ -246,6 +246,27 @@ class TestGrouping(unittest.TestCase):
         blocks = digest.group_by_repo([pr(1), pr(2), pr(3)], [], NOW)
         self.assertEqual(len(blocks), 1)
 
+    def test_a_repo_that_outgrows_a_message_is_split_under_repeated_headings(self):
+        prs = [pr(n, title="t" * 80) for n in range(60)]
+        blocks = digest.group_by_repo(prs, [], NOW, max_chars=1000)
+        self.assertGreater(len(blocks), 1)
+        for text, ids in blocks:
+            self.assertLessEqual(len(text), 1000)
+            self.assertTrue(text.startswith("**session-android**\n"))
+            self.assertEqual(len(text.splitlines()) - 1, len(ids))
+        self.assertEqual(sum(len(ids) for _, ids in blocks), len(prs))
+        self.assertEqual(set().union(*(ids for _, ids in blocks)),
+                         {digest.pr_id(p) for p in prs})
+
+    def test_a_split_repo_keeps_its_blocks_together_and_first(self):
+        busy = [pr(n, repo="busy", title="t" * 80) for n in range(30)]
+        quiet = [pr(100, repo="quiet")]
+        headings = [text.splitlines()[0]
+                    for text, _ in digest.group_by_repo(busy + quiet, [], NOW, max_chars=1000)]
+        self.assertGreater(len(headings), 2)
+        self.assertEqual(headings[-1], "**quiet**")
+        self.assertEqual(set(headings[:-1]), {"**busy**"})
+
     def test_a_block_accounts_for_every_pr_it_shows(self):
         """What reached Discord is recorded per message, so a partial post cannot
         suppress the PRs that never went out."""
@@ -312,6 +333,16 @@ class TestMessages(unittest.TestCase):
         message = digest.build_messages([pr(1)], [], 1, 25, NOW)[0][0]
         self.assertEqual(message["flags"], digest.COMPONENTS_V2_FLAG)
         self.assertEqual(message["components"][0]["type"], digest.CONTAINER)
+
+    def test_one_busy_repo_never_exceeds_the_message_budget(self):
+        new = [pr(n, title="y" * 80) for n in range(120)]
+        messages, coverage = digest.build_messages(new, [], 120, 72, NOW)
+        self.assertGreater(len(messages), 1)
+        for message in messages:
+            text = sum(len(c.get("content", ""))
+                       for c in message["components"][0]["components"])
+            self.assertLessEqual(text, digest.MAX_MESSAGE_TEXT_CHARS)
+        self.assertEqual(set().union(*coverage), {digest.pr_id(p) for p in new})
 
     def test_only_the_first_message_carries_the_header(self):
         new = [pr(n, repo=f"repo-{n}", title="y" * 80) for n in range(40)]
