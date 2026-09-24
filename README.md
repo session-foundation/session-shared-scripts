@@ -716,9 +716,8 @@ a stranger's until someone adds them.
 
 Forks, archived repositories and private repositories, by checking the search results
 against the org's repository list rather than by name — so a repository created today
-is covered today and a fork of an upstream project never is. `--include-forks`,
-`--include-archived` and `--exclude-repo` override the first two per run; private
-repositories stay out whatever the token can see.
+is covered today and a fork of an upstream project never is. There is no flag to widen
+that: private repositories stay out whatever the token can see.
 
 | flag | |
 | --- | --- |

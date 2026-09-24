@@ -166,8 +166,8 @@ def fetch_json(session, url, **kwargs):
     return resp.json()
 
 
-def fetch_repos(session, org, include_forks=False, include_archived=False):
-    """Names of the org's repositories the digest is willing to report on.
+def fetch_repos(session, org):
+    """Names of the org's own, live, public repositories.
 
     Private repositories are never reported, whatever the token can see: the digest
     posts to Discord, and nothing about them belongs there.
@@ -177,11 +177,7 @@ def fetch_repos(session, org, include_forks=False, include_archived=False):
         batch = fetch_json(session, f"{API}/orgs/{org}/repos",
                            params={"per_page": PER_PAGE, "page": page, "type": "all"})
         for repo in batch:
-            if repo.get("private"):
-                continue
-            if repo.get("fork") and not include_forks:
-                continue
-            if repo.get("archived") and not include_archived:
+            if repo.get("private") or repo.get("fork") or repo.get("archived"):
                 continue
             names.add(repo["name"])
         if len(batch) < PER_PAGE:
@@ -559,12 +555,6 @@ def main():
                         default=DEFAULT_RETENTION_DAYS, metavar="N",
                         help=f"Drop state entries older than this "
                              f"(default {DEFAULT_RETENTION_DAYS}).")
-    parser.add_argument("--include-forks", action="store_true",
-                        help="Also report the org's forks of upstream projects.")
-    parser.add_argument("--include-archived", action="store_true",
-                        help="Also report archived repositories.")
-    parser.add_argument("--exclude-repo", action="append", default=[],
-                        help="Skip this repository (repeatable).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print the Discord payload instead of posting it.")
     args = parser.parse_args()
@@ -579,8 +569,7 @@ def main():
     maintainers = load_maintainers(args.maintainers)
 
     session = github_session(token)
-    repos = fetch_repos(session, org, args.include_forks, args.include_archived)
-    repos -= set(args.exclude_repo)
+    repos = fetch_repos(session, org)
     items, truncated = search_open_prs(session, org)
     prs = contributor_prs(items, repos, maintainers)
 

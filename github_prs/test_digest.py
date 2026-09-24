@@ -375,18 +375,6 @@ class TestFetching(unittest.TestCase):
         with mock.patch.object(digest, "fetch_json", return_value=page):
             self.assertEqual(digest.fetch_repos(None, "org"), {"session-android"})
 
-    def test_private_repos_cannot_be_asked_for(self):
-        page = [{"name": "internal", "fork": True, "archived": True, "private": True}]
-        with mock.patch.object(digest, "fetch_json", return_value=page):
-            self.assertEqual(digest.fetch_repos(None, "org", include_forks=True,
-                                                include_archived=True), set())
-
-    def test_forks_can_be_asked_for(self):
-        page = [{"name": "session-pysogs", "fork": True, "archived": False}]
-        with mock.patch.object(digest, "fetch_json", return_value=page):
-            self.assertEqual(digest.fetch_repos(None, "org", include_forks=True),
-                             {"session-pysogs"})
-
     def test_repo_pagination_follows_full_pages(self):
         pages = [[{"name": f"r{n}", "fork": False, "archived": False}
                   for n in range(digest.PER_PAGE)],
