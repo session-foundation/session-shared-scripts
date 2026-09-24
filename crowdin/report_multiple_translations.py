@@ -40,15 +40,16 @@ import argparse
 import collections
 import concurrent.futures
 import datetime as dt
-import email.utils
 import json
 import os
 import subprocess
 import sys
 import threading
-import time
 
 import requests
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from shared import discord, retry  # noqa: E402
 
 API = "https://api.crowdin.com/api/v2"
 DEFAULT_PROJECT = "618696"
@@ -81,49 +82,10 @@ def get_token(cli_token):
              "or store it via secret-tool).")
 
 
-def parse_retry_after(value, fallback, cap=30):
-    """Seconds to wait for a Retry-After header, parsed defensively.
-
-    Supports both numeric-seconds and HTTP-date forms (RFC 7231); falls back to
-    `fallback` when the header is missing or unparseable, and clamps the result
-    to `cap` so a bogus/huge value can't stall the run."""
-    wait = fallback
-    if value is not None:
-        try:
-            wait = float(value)
-        except (TypeError, ValueError):
-            try:
-                when = email.utils.parsedate_to_datetime(value)
-                if when.tzinfo is None:
-                    when = when.replace(tzinfo=dt.timezone.utc)
-                wait = (when - dt.datetime.now(dt.timezone.utc)).total_seconds()
-            except (TypeError, ValueError):
-                wait = fallback
-    if wait < 0:
-        wait = fallback
-    return min(wait, cap)
-
-
-def request_with_retry(session, method, url, max_retries=10, **kw):
-    """Request with backoff on 429/5xx AND on network errors (flaky DNS/connection)."""
-    delay = 0.5
-    last_exc = None
-    for _ in range(max_retries):
-        try:
-            r = session.request(method, url, timeout=60, **kw)
-        except requests.exceptions.RequestException as e:
-            last_exc = e
-            time.sleep(delay)
-            delay = min(delay * 2, 30)
-            continue
-        if r.status_code == 429 or r.status_code >= 500:
-            time.sleep(parse_retry_after(r.headers.get("Retry-After"), delay))
-            delay = min(delay * 2, 30)
-            continue
-        r.raise_for_status()
-        return r
-    if last_exc:
-        raise last_exc
+def request_with_retry(session, method, url, **kw):
+    """A Crowdin API call. A non-retryable 4xx raises, so a caller can read the
+    body of what it asked for without checking the status first."""
+    r = retry.request_with_retry(session, method, url, attempts=10, timeout=60, **kw)
     r.raise_for_status()
     return r
 
@@ -366,33 +328,22 @@ def pack_embeds(embeds):
 
 
 def post_to_discord(webhook_url, messages):
-    # Use a fresh, unauthenticated session -- the Crowdin Bearer token must never
-    # be sent to Discord. request_with_retry raises on any non-retryable 4xx, so
-    # we translate that into the concise failure message here.
+    # A fresh, unauthenticated session: the Crowdin Bearer token must never be
+    # sent to Discord.
     with requests.Session() as webhook_session:
-        for payload in messages:
-            try:
-                request_with_retry(webhook_session, "POST", webhook_url, json=payload)
-            except requests.exceptions.RequestException as e:
-                resp = getattr(e, "response", None)
-                if resp is not None:
-                    detail = f"Discord webhook failed ({resp.status_code}): {resp.text[:300]}"
-                else:
-                    detail = f"Discord webhook failed: {e}"
-                # A rich payload can be rejected outright (e.g. an embed exceeded
-                # Discord's size limits). Before crashing, best-effort post a plain
-                # warning so the failure is at least visible in the channel; if even
-                # that fails, fall through to the sys.exit below.
-                try:
-                    request_with_retry(webhook_session, "POST", webhook_url, json={
-                        "content": "⚠️ Crowdin multiple-translations report failed to post "
-                                   "its results (a message was rejected by Discord). "
-                                   "Re-run `report_multiple_translations.py --json` for the "
-                                   "full list.",
-                    })
-                except requests.exceptions.RequestException:
-                    pass
-                sys.exit(detail)
+        posted = discord.post_to_discord(webhook_session, webhook_url, messages)
+        if posted == len(messages):
+            return
+        # A rich payload can be rejected outright, an embed over Discord's size
+        # limits say. A plain warning at least makes the failure visible in the
+        # channel; if that fails too, the exit below still says so.
+        discord.post_to_discord(webhook_session, webhook_url, [{
+            "content": "⚠️ Crowdin multiple-translations report failed to post "
+                       "its results (a message was rejected by Discord). "
+                       "Re-run `report_multiple_translations.py --json` for the "
+                       "full list.",
+        }])
+        sys.exit(f"Discord accepted {posted} of {len(messages)} messages.")
 
 
 # --------------------------------------------------------------------------- #
