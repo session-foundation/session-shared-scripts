@@ -126,6 +126,14 @@ its configuration from the environment.
 # than extending it, which is why the standard directories are repeated.
 PATH=/home/zendesk/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+# Optional, and the one to use on a host nobody logs into. `claude setup-token` on a
+# machine with a browser mints a token that lasts a year, against the same
+# subscription and the same billing as the interactive login — it is not an API key.
+# Without it the CLI runs on the login `claude` was signed in with, whose refresh
+# token hard-expires in weeks and takes the digest and the `claude:` notes with it
+# when it does. Paste the token here; it is printed once and saved nowhere.
+#CLAUDE_CODE_OAUTH_TOKEN=
+
 ZENDESK_SUBDOMAIN=
 # Authors every comment the reply flow posts.
 ZENDESK_EMAIL=
@@ -199,6 +207,18 @@ systemctl show zendesk-relay -p Environment | tr ' ' '\n' | grep -E 'HOME|PATH'
 Both the explicit `HOME` and the absolute path are load-bearing: `runuser -u` resets
 neither, so a bare `claude` there is resolved against root's `PATH` and reports
 `Permission denied` for an install that is fine.
+
+With `CLAUDE_CODE_OAUTH_TOKEN` set, that check tests the wrong credential — it reads
+the interactive login, which the token outranks. Test what the unit will actually use:
+
+```bash
+systemd-run --pty --uid=zendesk -p EnvironmentFile=/etc/zendesk/env \
+  --setenv=HOME=/home/zendesk /home/zendesk/.local/bin/claude \
+  --print --model claude-sonnet-5 --output-format json 'reply with OK'
+```
+
+An `is_error` envelope naming authentication means the token is wrong or expired; the
+digest reports the same message to Discord once it runs.
 
 That covers the install. The sandbox is the other half, and no amount of reading the
 unit file settles it — `ProtectHome=tmpfs`, `MemoryDenyWriteExecute=` and
