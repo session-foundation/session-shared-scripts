@@ -1880,6 +1880,18 @@ class TestClaudeCli(unittest.TestCase):
         self.assertEqual(child_env["HOME"], "/home/zendesk")
         self.assertEqual(child_env["PATH"], "/usr/bin")
 
+    def test_a_subscription_token_reaches_the_cli(self):
+        """`claude setup-token` is the only credential an unattended host can renew
+        yearly rather than weekly, and it bills the subscription exactly as the
+        interactive login does — so it is passed through where an API key is not."""
+        with Patched(os, environ={"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat-x",
+                                  "ANTHROPIC_API_KEY": "sk-dead",
+                                  "PATH": "/usr/bin", "HOME": "/home/zendesk"}):
+            self.run_cli()
+        child_env = self.calls[0][1]["env"]
+        self.assertEqual(child_env["CLAUDE_CODE_OAUTH_TOKEN"], "sk-ant-oat-x")
+        self.assertNotIn("ANTHROPIC_API_KEY", child_env)
+
     def test_nothing_outside_the_call_can_change_what_the_model_is_told(self):
         """--tools "" only removes the tools. Without --setting-sources "" a
         .claude/settings.json beside this file, or one in the service account's home,
