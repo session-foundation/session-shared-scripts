@@ -1828,7 +1828,7 @@ class TestClaudeCli(unittest.TestCase):
     SCHEMA = {"type": "object", "properties": {"a": {"type": "string"}}}
 
     def run_cli(self, response=None, returncode=0, stderr="", raises=None,
-                prompt="ticket text"):
+                prompt="ticket text", stdout=None):
         self.calls = []
 
         def fake_run(command, **kwargs):
@@ -1839,9 +1839,10 @@ class TestClaudeCli(unittest.TestCase):
                        "structured_output": {"a": "b"}}
             if response is not None:
                 payload = response
+            written = (json.dumps(payload) if isinstance(payload, dict) else payload)
             return type("Done", (), {
                 "returncode": returncode,
-                "stdout": json.dumps(payload) if isinstance(payload, dict) else payload,
+                "stdout": written if stdout is None else stdout,
                 "stderr": stderr})()
 
         with Patched(triage.subprocess, run=fake_run):
@@ -1939,12 +1940,86 @@ class TestClaudeCli(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     self.run_cli(response=response)
 
-    def test_a_non_zero_exit_reports_stderr_not_stdout(self):
+    def test_a_non_zero_exit_prefers_stderr_over_stdout(self):
         """A non-zero exit means there is no JSON to read, and the CLI could echo the
         prompt back — which this repo's public run logs must not carry."""
         with self.assertRaises(SystemExit) as caught:
-            self.run_cli(returncode=1, stderr="not logged in")
+            self.run_cli(returncode=1, stderr="not logged in",
+                         stdout="ticket text echoed back")
         self.assertIn("not logged in", str(caught.exception))
+        self.assertNotIn("ticket text", str(caught.exception))
+
+    def test_a_non_zero_exit_falls_back_to_stdout(self):
+        """A refused login exits 1 with its diagnostic on stdout and stderr empty,
+        so reading stderr alone reports the exit code and nothing else."""
+        with self.assertRaises(SystemExit) as caught:
+            self.run_cli(returncode=1, stdout="Invalid API key · Please run /login")
+        self.assertIn("/login", str(caught.exception))
+
+    def test_the_json_envelope_is_read_rather_than_clipped(self):
+        """The real failure on the host: the message sits behind ~900 characters of
+        usage counters, so clipping raw stdout reports boilerplate and nothing else."""
+        envelope = {"is_error": True, "duration_api_ms": 0, "num_turns": 1,
+                    "session_id": "95bc6ddc", "total_cost_usd": 0,
+                    "usage": {"input_tokens": 0, "output_tokens": 0,
+                              "padding": "x" * 900},
+                    "terminal_reason": "api_error", "subtype": "error_during_execution",
+                    "result": "OAuth token expired · Please run /login"}
+        with self.assertRaises(SystemExit) as caught:
+            self.run_cli(returncode=1, stdout=json.dumps(envelope))
+        message = str(caught.exception)
+        self.assertIn("OAuth token expired", message)
+        self.assertIn("api_error", message)
+        self.assertNotIn("is_error", message)
+        self.assertNotIn("total_cost_usd", message)
+
+    def test_an_error_field_is_read_when_there_is_no_result(self):
+        for error in ("Credit balance is too low", {"message": "Credit balance is too low"}):
+            with self.subTest(error=error):
+                with self.assertRaises(SystemExit) as caught:
+                    self.run_cli(returncode=1,
+                                 stdout=json.dumps({"is_error": True, "error": error}))
+                self.assertIn("Credit balance is too low", str(caught.exception))
+
+    def test_a_reason_alone_beats_reporting_the_envelope(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.run_cli(returncode=1,
+                         stdout=json.dumps({"is_error": True,
+                                            "terminal_reason": "api_error"}))
+        self.assertIn("api_error", str(caught.exception))
+        self.assertNotIn("is_error", str(caught.exception))
+
+    def test_an_envelope_with_nothing_readable_is_reported_raw(self):
+        """Whatever it printed beats saying nothing, and the shape is the CLI's to
+        change."""
+        with self.assertRaises(SystemExit) as caught:
+            self.run_cli(returncode=1, stdout=json.dumps({"unexpected": "shape"}))
+        self.assertIn("unexpected", str(caught.exception))
+
+    def test_stdout_that_is_not_json_is_reported_raw(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.run_cli(returncode=1, stdout='{"is_error": true, "result": "cut off')
+        self.assertIn("cut off", str(caught.exception))
+
+    def test_a_silent_non_zero_exit_still_says_something(self):
+        """Neither stream is guaranteed to carry anything, and a message ending in a
+        bare colon is what a failed run leaves in the journal."""
+        with self.assertRaises(SystemExit) as caught:
+            self.run_cli(returncode=1, stdout="", stderr="")
+        self.assertFalse(str(caught.exception).rstrip().endswith(":"))
+        self.assertIn("signed in", str(caught.exception))
+
+    def test_the_failure_detail_is_clipped(self):
+        """Every route out of it, not just stderr: the prompt can come back on any
+        of them and this log must not carry ticket text."""
+        for kwargs in ({"stderr": "x" * 5000},
+                       {"stdout": "x" * 5000},
+                       {"stdout": json.dumps({"result": "x" * 5000,
+                                              "terminal_reason": "api_error"})}):
+            with self.subTest(**kwargs):
+                with self.assertRaises(SystemExit) as caught:
+                    self.run_cli(returncode=1, **kwargs)
+                self.assertLess(len(str(caught.exception)), 500)
 
     def test_output_that_is_not_json_is_named_as_such(self):
         with self.assertRaises(SystemExit):

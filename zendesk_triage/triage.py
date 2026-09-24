@@ -206,6 +206,9 @@ CLAUDE_AUTH_OVERRIDES = (
 # killed mid-batch costs the whole chunk — and bounded, because a wedged CLI would
 # otherwise hold the digest until the unit's own TimeoutStartSec fires.
 CLAUDE_TIMEOUT_SECONDS = 1800
+# How much of a failed call's output reaches the log. The CLI can echo input back and
+# this log must not carry ticket text, so nothing here is ever passed through whole.
+CLI_FAILURE_CHARS = 300
 
 # ---- Taxonomy --------------------------------------------------------------
 #
@@ -1351,6 +1354,46 @@ def analyze_in_chunks(analyzer, compact_tickets, batch_size):
     return findings
 
 
+def cli_failure_detail(stdout, stderr, limit=CLI_FAILURE_CHARS):
+    """The readable half of a failed `claude --print` run, clipped for the log.
+
+    stderr wins, but the failures that matter most — a refused login, an exhausted
+    limit — leave it empty and put their message in the `--output-format json`
+    envelope on stdout, where it sits behind enough usage boilerplate to survive no
+    clip at all. Hence parsing the envelope rather than clipping it. `terminal_reason`
+    rides along when it fits: it is what separates an auth failure from a limit.
+
+    Output that is not that envelope is reported raw: a CLI that dies before emitting
+    one has still said the only thing anybody will get.
+    """
+    detail = (stderr or "").strip()
+    if detail:
+        return detail[:limit]
+    raw = (stdout or "").strip()
+    try:
+        envelope = json.loads(raw)
+    except ValueError:
+        envelope = None
+    if isinstance(envelope, dict):
+        message = ""
+        for name in ("result", "error"):
+            value = envelope.get(name)
+            if isinstance(value, dict):
+                value = value.get("message")
+            if isinstance(value, str) and value.strip():
+                message = value.strip()
+                break
+        reason = envelope.get("terminal_reason") or envelope.get("subtype")
+        reason = reason.strip() if isinstance(reason, str) else ""
+        if message and reason and len(message) + len(reason) + 3 <= limit:
+            return f"{message} ({reason})"
+        if message:
+            return message[:limit]
+        if reason:
+            return f"it reported {reason!r} and no message."
+    return raw[:limit]
+
+
 def claude_cli_json(model, effort, system_prompt, schema, prompt, timeout, label):
     """Run one schema-enforced Claude Code request. Returns the parsed payload.
 
@@ -1399,10 +1442,11 @@ def claude_cli_json(model, effort, system_prompt, schema, prompt, timeout, label
         sys.exit(f"{CLAUDE_CLI} did not finish {label} within {timeout}s.")
 
     if done.returncode != 0:
-        # stderr, not stdout: a non-zero exit means there is no JSON to read. Clipped,
-        # because the CLI could echo input back and this log must not carry it.
-        sys.exit(f"{CLAUDE_CLI} exited {done.returncode} on {label}: "
-                 f"{(done.stderr or '').strip()[:300]}")
+        detail = cli_failure_detail(done.stdout, done.stderr)
+        if not detail:
+            detail = ("it printed nothing, which is what a login it can no longer "
+                      "use looks like; check that `claude` is still signed in.")
+        sys.exit(f"{CLAUDE_CLI} exited {done.returncode} on {label}: {detail}")
     try:
         response = json.loads(done.stdout)
     except ValueError as exc:
