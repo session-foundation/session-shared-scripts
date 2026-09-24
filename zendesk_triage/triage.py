@@ -71,18 +71,21 @@ Usage:
 """
 import argparse
 import json
-import math
 import os
 import re
 import subprocess
 import sys
 import textwrap
-import time
 from datetime import datetime, timedelta, timezone
 from functools import partial
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from shared import discord, state as dedup  # noqa: E402
+from shared.discord import clip, post_to_discord  # noqa: E402
+from shared.env import get_env  # noqa: E402
+from shared.retry import request_with_retry  # noqa: E402
 
 # The channel AppFollow imports app-store reviews on. Identified reviews with no
 # false positives in a 3,662-ticket sample; tags did not (only 287 carried one).
@@ -384,80 +387,12 @@ _SYSTEM_PROMPT_TEMPLATE = textwrap.dedent(
 SYSTEM_PROMPT = _SYSTEM_PROMPT_TEMPLATE.replace("__CATEGORIES__", CATEGORY_GUIDANCE)
 
 
-def get_env(name, cli_value=None, required=True):
-    if cli_value:
-        return cli_value
-    value = os.environ.get(name)
-    if value:
-        return value
-    if required:
-        sys.exit(f"Missing required config: set the {name} environment variable (or pass the matching flag).")
-    return None
-
-
 def zendesk_session(email, token):
     session = requests.Session()
     # Zendesk API-token auth: username is "{email}/token", password is the token.
     session.auth = (f"{email}/token", token)
     session.headers["Accept"] = "application/json"
     return session
-
-
-def retry_after_seconds(resp, default):
-    """Seconds to wait per the Retry-After header, falling back to `default`.
-
-    RFC 9110 allows either a delay in seconds or an HTTP-date; float() on the date
-    form raises, so anything unparseable falls back rather than crashing the run.
-
-    Negative, NaN, and infinite values fall back too: time.sleep() rejects the first
-    two outright, so a hostile or buggy proxy sending `Retry-After: -30` would
-    otherwise take the run down with a ValueError.
-    """
-    raw = resp.headers.get("retry-after")
-    if raw is None:
-        return default
-    try:
-        seconds = float(raw)
-    except (TypeError, ValueError):
-        return default
-    if not math.isfinite(seconds) or seconds < 0:
-        return default
-    return seconds
-
-
-def request_with_retry(session, method, url, attempts=6, **kwargs):
-    """GET/POST with backoff on 429 and 5xx.
-
-    Lower `attempts` for calls whose result is nice-to-have: the full budget can
-    burn ~60s of backoff, which is not worth spending on optional data.
-    """
-    if attempts <= 0:
-        raise ValueError("attempts must be at least 1")
-
-    delay = 1.0
-    last_exc = None
-    resp = None
-    for attempt in range(attempts):
-        final = attempt == attempts - 1
-        try:
-            resp = session.request(method, url, timeout=30, **kwargs)
-        except requests.RequestException as exc:
-            last_exc = exc
-            if final:
-                break
-            time.sleep(delay)
-            delay = min(delay * 2, 30)
-            continue
-        if resp.status_code == 429 or resp.status_code >= 500:
-            if final:
-                break
-            time.sleep(min(retry_after_seconds(resp, delay), 60))
-            delay = min(delay * 2, 30)
-            continue
-        return resp
-    if last_exc:
-        raise last_exc
-    return resp
 
 
 def fetch_every_ticket(session, subdomain, query, max_tickets):
@@ -606,30 +541,11 @@ def fetch_total_unsolved(session, subdomain, query=BACKLOG_QUERY):
 
 
 def empty_state():
-    return {"version": STATE_VERSION, "seen": {}}
+    return dedup.empty_state(STATE_VERSION)
 
 
 def load_state(path):
-    if not os.path.exists(path):
-        print(f"No state file at {path}; treating every ticket in the window as new.")
-        return empty_state()
-    try:
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, json.JSONDecodeError) as exc:
-        print(f"Note: unreadable state file {path} ({exc}); treating every ticket as new.")
-        return empty_state()
-    if not isinstance(data, dict) or not isinstance(data.get("seen"), dict):
-        print(f"Note: unexpected shape in {path}; treating every ticket as new.")
-        return empty_state()
-    # A state file written by a different schema version can't be trusted field by
-    # field, so treat it as a cache miss rather than misreading it.
-    if data.get("version") != STATE_VERSION:
-        print(f"Note: {path} is version {data.get('version')!r}, expected {STATE_VERSION}; "
-              f"treating every ticket as new.")
-        return empty_state()
-    print(f"Loaded state for {len(data['seen'])} previously reported tickets.")
-    return data
+    return dedup.load_state(path, STATE_VERSION, "ticket")
 
 
 def activity_key(ticket):
@@ -702,40 +618,10 @@ def partition_by_state(tickets, state):
 
 
 def save_state(path, state, reported, retention_days):
-    """Record `reported` as seen, prune old entries, write atomically.
-
-    Returns (kept, pruned).
-    """
-    now = datetime.now(timezone.utc)
-    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    seen = dict(state.get("seen", {}))
-    for ticket in reported:
-        seen[str(ticket.get("id"))] = {
-            "requester_updated_at": activity_key(ticket),
-            "last_reported": stamp,
-        }
-
-    # Bound the file: the window is 72h, so anything older than retention is moot.
-    cutoff = now - timedelta(days=retention_days)
-    kept = {}
-    for ticket_id, record in seen.items():
-        try:
-            last = datetime.strptime(
-                record.get("last_reported", ""), "%Y-%m-%dT%H:%M:%SZ"
-            ).replace(tzinfo=timezone.utc)
-        except (TypeError, ValueError):
-            continue  # malformed entry — drop it rather than keep it forever
-        if last >= cutoff:
-            kept[ticket_id] = record
-
-    directory = os.path.dirname(path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    temporary = f"{path}.tmp"
-    with open(temporary, "w", encoding="utf-8") as fh:
-        json.dump({"version": STATE_VERSION, "updated_at": stamp, "seen": kept}, fh, indent=2)
-    os.replace(temporary, path)  # atomic: a crash mid-write can't corrupt the state
-    return len(kept), len(seen) - len(kept)
+    """Record `reported` as seen. Returns (kept, pruned)."""
+    records = {str(t.get("id")): {"requester_updated_at": activity_key(t)}
+               for t in reported}
+    return dedup.save_state(path, state, records, retention_days, STATE_VERSION)
 
 
 # ---- App-store review filtering --------------------------------------------
@@ -1557,38 +1443,21 @@ COLLAPSED_LINKS_CHARS = 900
 
 # ---- Components V2 ---------------------------------------------------------
 #
-# The digest is a Container of Text Displays: one block per ticket, so a reader skims
-# lines rather than a wall, and each message records which ticket ids it accounts for.
-#
-# Every component here is non-interactive, which is what lets a plain incoming webhook
-# carry it: Discord allows a webhook that no application owns only those. Adding an
-# interactive one would need the transport moved back to a bot token — see
-# test_the_digest_carries_no_interactive_components.
-#
-# https://docs.discord.com/developers/components/reference
-COMPONENTS_V2_FLAG = 1 << 15
-CONTAINER = 17
-TEXT_DISPLAY = 10
-SEPARATOR = 14
+# The digest is a Container of Text Displays, one per ticket, built by
+# shared.discord — which also documents why a plain webhook can carry it.
 
 # Discord allows 40 components in one message, and a ticket now costs one Text
 # Display, so that ceiling no longer binds — the character budget below does. Ten is
 # kept because it is a readable message, not because it is the limit.
 MAX_ENTRIES_PER_MESSAGE = 10
-# Discord's ceiling on all the text in one Components V2 message, and the constraint
-# that actually binds. Ten clipped ticket lines plus a header come to roughly 3,500,
+# Discord's ceiling on all the text in one message, and the constraint that
+# actually binds. Ten clipped ticket lines plus a header come to roughly 3,500,
 # so this is a guard rather than a routine constraint.
-MAX_MESSAGE_TEXT_CHARS = 4000
-MAX_COMPONENT_CHARS = MAX_MESSAGE_TEXT_CHARS
+MAX_COMPONENT_CHARS = discord.MAX_MESSAGE_TEXT_CHARS
 
 
 def ticket_url(subdomain, ticket_id):
     return f"https://{subdomain}.zendesk.com/agent/tickets/{ticket_id}"
-
-
-def clip(text, limit):
-    text = (text or "").strip()
-    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def is_urgent(finding):
@@ -1737,42 +1606,6 @@ def build_header(findings, highlights, stats=None):
     return "\n".join(lines)
 
 
-def chunk_entries(entries, max_items=MAX_ENTRIES_PER_MESSAGE,
-                  max_chars=MAX_COMPONENT_CHARS, first_used=0):
-    """Group (line, ticket_ids) pairs into messages within Discord's budgets.
-
-    Two limits rather than one, and whichever binds first splits the message: a
-    Components V2 message allows 40 components, of which a ticket costs three, and a
-    character budget that clipped lines rarely approach. Sections are separate
-    components rather than joined text, so unlike the old plain-content digest
-    nothing is spent on the newlines between them.
-
-    `first_used` is what the caller has already spent on the first message before any
-    ticket goes in — the header. Without it the header rides on top of a full budget
-    of ticket lines, and a busy day's accounting lines are enough to put message one
-    over the limit.
-
-    An entry longer than the character budget still gets its own message rather than
-    being dropped; the pieces are pre-clipped so that shouldn't arise.
-
-    Entries are passed through, not rebuilt, so the caller can still tell which one
-    it is looking at by identity — build_messages needs that to find the collapsed
-    line again once its entry is somewhere inside a chunk.
-    """
-    chunks, current, current_chars = [], [], first_used
-    for entry in entries:
-        text, _ = entry
-        if current and (len(current) >= max_items
-                        or current_chars + len(text) > max_chars):
-            chunks.append(current)
-            current, current_chars = [], 0
-        current.append(entry)
-        current_chars += len(text)
-    if current:
-        chunks.append(current)
-    return chunks
-
-
 def select_highlights(findings):
     """Ordered highlights split into (shown, omitted) by the display cap.
 
@@ -1822,68 +1655,10 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
     if collapsed:
         entries.append((build_collapsed_line(collapsed, subdomain), collapsed_ids))
 
-    messages, coverage = [], []
-    # A quiet day still owes the channel the header — chunk_entries has nothing to
-    # chunk when no ticket is worth looking into, so seed one empty chunk.
-    # The header only lands on message one, so only message one's budget pays for
-    # it. chunk_entries resets to zero for every chunk after the first.
-    chunks = chunk_entries(entries, first_used=len(header)) or [[]]
-    for index, chunk in enumerate(chunks):
-        blocks = []
-        covered = set()
-        if index == 0:
-            blocks.append({"type": TEXT_DISPLAY, "content": header})
-            if chunk:
-                blocks.append({"type": SEPARATOR})
-            # The header accounts for every classified ticket except the highlights
-            # that didn't fit; those are covered by no message and stay eligible.
-            covered |= header_ids
-        for text, ids in chunk:
-            blocks.append({"type": TEXT_DISPLAY, "content": text})
-            covered |= ids
-        messages.append({
-            "flags": COMPONENTS_V2_FLAG,
-            "components": [{"type": CONTAINER, "components": blocks}],
-        })
-        coverage.append(covered)
+    messages, coverage = discord.messages_from_entries(
+        header, entries, MAX_ENTRIES_PER_MESSAGE, MAX_COMPONENT_CHARS)
+    coverage[0] |= header_ids
     return messages, coverage
-
-
-def digest_webhook_url(webhook_url):
-    """The webhook, told to respect the components field.
-
-    Discord ignores `components` on a webhook post without it, and the digest is
-    nothing but components.
-    """
-    parts = urlsplit(webhook_url)
-    query = dict(parse_qsl(parts.query))
-    query["with_components"] = "true"
-    return urlunsplit(parts._replace(query=urlencode(query)))
-
-
-def post_to_discord(session, url, messages):
-    """POST each message in order; return how many Discord accepted.
-
-    Stops at the first failure and returns the accepted count instead of exiting, so
-    the caller can record the tickets that did land before signalling the failure —
-    otherwise a failure on message 3 of 3 reposts messages 1 and 2 on the next run.
-    """
-    for index, payload in enumerate(messages):
-        try:
-            resp = request_with_retry(session, "POST", url, json=payload)
-        except requests.RequestException as exc:
-            # request_with_retry re-raises once its budget is spent. Letting that
-            # propagate would skip save_state entirely, so the messages that already
-            # landed would be reposted on the next run — the exact thing returning a
-            # count exists to prevent.
-            print(f"Discord unreachable on message {index + 1}/{len(messages)} "
-                  f"({exc}).")
-            return index
-        if resp.status_code >= 400:
-            print(f"Discord rejected message {index + 1}/{len(messages)} "
-                  f"({resp.status_code}): {resp.text[:300]}")
-            return index
-    return len(messages)
 
 
 def main():
@@ -2116,7 +1891,8 @@ def main():
         return
 
     # A fresh session, never the Zendesk one: that carries the API-token auth header.
-    posted = post_to_discord(requests.Session(), digest_webhook_url(webhook), messages)
+    posted = post_to_discord(requests.Session(), discord.components_webhook_url(webhook),
+                             messages)
     print(f"Posted {posted} of {len(messages)} Discord message(s).")
 
     # Record only tickets covered by messages Discord actually accepted, so a partial
