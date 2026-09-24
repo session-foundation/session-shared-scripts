@@ -30,16 +30,13 @@ import requests  # noqa: E402
 import triage  # noqa: E402
 
 
-# systemd's own lines about the unit, which say it failed but never why. Dropped so
-# the excerpt is the last thing the job itself said.
-SYSTEMD_LINES = ("Main process exited", "Failed with result", "Triggering OnFailure",
-                 "Failed to start", "Consumed ", "Starting ", "Started ",
-                 "Scheduled restart", "Deactivated successfully")
 # A dead login reads as a broken job unless the alert names it: the job is fine and
 # re-running it fixes nothing. The CLI's wording varies between refusals, so this
-# matches the words that survive the rewordings.
+# matches the words that survive the rewordings. Only a line the CLI path wrote is
+# checked: Zendesk's own 401 body says "Couldn't authenticate you".
 AUTH_SIGNATURES = ("oauth", "/login", "authenticate", "invalid api key",
-                   "unauthorized", "credit balance")
+                   "unauthorized", "credit balance", "signed in")
+CLI_FAILURE_PREFIX = f"{triage.CLAUDE_CLI} exited"
 # Where the Claude Code CLI lives for the account the units run as; see
 # deploy/README.md. Spelled out because an alert that says "log in again" without
 # saying how sends whoever is on call to the README first.
@@ -54,9 +51,11 @@ def journal_tail(unit, lines=25):
     Never raises: an excerpt improves the message, it is not a precondition for
     sending one, and the alert is the last thing that should fail here.
     """
+    # _SYSTEMD_UNIT= rather than -u: -u also returns PID 1's lines about the unit
+    # ("<unit>: Failed with result 'exit-code'."), which say it failed but never why.
     try:
-        done = subprocess.run(["journalctl", "-u", unit, "-n", str(lines),
-                               "--no-pager", "-o", "cat"],
+        done = subprocess.run(["journalctl", f"_SYSTEMD_UNIT={unit}", "-n", str(lines),
+                               "--no-pager", "-q", "-o", "cat"],
                               capture_output=True, text=True, timeout=15, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return ""
@@ -64,16 +63,18 @@ def journal_tail(unit, lines=25):
 
 
 def last_job_line(journal):
-    """The last thing the job itself said, systemd's own lines discarded."""
+    """The last non-blank line the job logged, clipped."""
     for line in reversed((journal or "").splitlines()):
         line = line.strip()
-        if line and not line.startswith(SYSTEMD_LINES):
+        if line:
             return line[:EXCERPT_CHARS]
     return ""
 
 
 def is_auth_failure(line):
-    return any(signature in (line or "").lower() for signature in AUTH_SIGNATURES)
+    line = (line or "").lower()
+    return (line.startswith(CLI_FAILURE_PREFIX)
+            and any(signature in line for signature in AUTH_SIGNATURES))
 
 
 def build_message(unit, host, journal_unit=None, detail=""):
