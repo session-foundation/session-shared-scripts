@@ -19,8 +19,8 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-from session_ops.zendesk import triage
 from session_ops.shared import discord
+from session_ops.zendesk import api, claude_cli, transcript, triage
 from session_ops.shared.testing import (
     FakeResponse, FakeSession, NonJsonResponse, Patched)
 
@@ -135,7 +135,7 @@ class TestWindowQuery(unittest.TestCase):
         cannot be asked a follow-up. It is not work a digest can queue up."""
         for query in (triage.build_window_query(72), triage.DEFAULT_QUERY):
             with self.subTest(query=query):
-                self.assertIn(f"-via:{triage.REVIEW_CHANNEL}", query)
+                self.assertIn(f"-via:{api.REVIEW_CHANNEL}", query)
 
     def test_pending_tickets_are_out_of_scope(self):
         """A pending ticket is one somebody already answered. It leaves the queue on
@@ -279,12 +279,12 @@ class TestRequesterActivity(unittest.TestCase):
     def test_it_attaches_the_requester_timestamp(self):
         tickets = [ticket(1), ticket(2)]
         session = FakeSession([self.metrics((1, "A"), (2, "B"))])
-        self.assertEqual(triage.hydrate_requester_activity(session, "acme", tickets), 2)
+        self.assertEqual(api.hydrate_requester_activity(session, "acme", tickets), 2)
         self.assertEqual([t["requester_updated_at"] for t in tickets], ["A", "B"])
 
     def test_it_sideloads_rather_than_fetching_each_ticket(self):
         session = FakeSession([self.metrics((1, "A"))])
-        triage.hydrate_requester_activity(session, "acme", [ticket(1)])
+        api.hydrate_requester_activity(session, "acme", [ticket(1)])
         method, url, kwargs = session.calls[0]
         self.assertEqual(method, "GET")
         self.assertIn("show_many.json", url)
@@ -294,7 +294,7 @@ class TestRequesterActivity(unittest.TestCase):
         """show_many caps at 100 ids, so 150 tickets must be two requests."""
         tickets = [ticket(i) for i in range(150)]
         session = FakeSession([self.metrics(), self.metrics()])
-        triage.hydrate_requester_activity(session, "acme", tickets)
+        api.hydrate_requester_activity(session, "acme", tickets)
         self.assertEqual(len(session.calls), 2)
         self.assertEqual(len(session.calls[0][2]["params"]["ids"].split(",")), 100)
         self.assertEqual(len(session.calls[1][2]["params"]["ids"].split(",")), 50)
@@ -305,7 +305,7 @@ class TestRequesterActivity(unittest.TestCase):
         for response in (FakeResponse({}, status_code=500), NonJsonResponse(),
                          requests.ConnectionError("unreachable")):
             with self.subTest(response=type(response).__name__):
-                triage.hydrate_requester_activity(FakeSession([response]), "acme", tickets)
+                api.hydrate_requester_activity(FakeSession([response]), "acme", tickets)
                 self.assertNotIn("requester_updated_at", tickets[0])
                 self.assertEqual(triage.activity_key(tickets[0]), "X")
 
@@ -314,7 +314,7 @@ class TestRequesterActivity(unittest.TestCase):
         pin the ticket unchanged forever."""
         tickets = [ticket(1, updated_at="X")]
         session = FakeSession([self.metrics((1, None))])
-        triage.hydrate_requester_activity(session, "acme", tickets)
+        api.hydrate_requester_activity(session, "acme", tickets)
         self.assertEqual(triage.activity_key(tickets[0]), "X")
 
 
@@ -804,20 +804,20 @@ class TestReviewFiltering(unittest.TestCase):
                       via={"channel": channel})
 
     def test_star_count_is_read_from_the_subject(self):
-        self.assertEqual(triage.review_stars(self.review(1, 5)), 5)
-        self.assertEqual(triage.review_stars(self.review(2, 1)), 1)
+        self.assertEqual(api.review_stars(self.review(1, 5)), 5)
+        self.assertEqual(api.review_stars(self.review(2, 1)), 1)
 
     def test_non_review_subject_has_no_stars(self):
-        self.assertIsNone(triage.review_stars(ticket(1, subject="Notifications broken")))
+        self.assertIsNone(api.review_stars(ticket(1, subject="Notifications broken")))
 
     def test_channel_identifies_a_review_without_stars_in_the_subject(self):
         """The channel is the reliable signal: only 287 of 2,656 sampled reviews
         carried the app-store tag, so tag-based filtering would miss most."""
-        self.assertTrue(triage.is_store_review(
+        self.assertTrue(api.is_store_review(
             ticket(1, subject="no stars here", via={"channel": "any_channel"})))
 
     def test_web_tickets_are_not_reviews(self):
-        self.assertFalse(triage.is_store_review(ticket(1, via={"channel": "web"})))
+        self.assertFalse(api.is_store_review(ticket(1, via={"channel": "web"})))
 
     def test_positive_reviews_are_skipped(self):
         keep, skipped = triage.partition_reviews(
@@ -879,23 +879,23 @@ class TestReviewPlatform(unittest.TestCase):
         })
 
     def test_google_play_is_android(self):
-        self.assertEqual(triage.review_platform(self.google_play(1)), "android")
+        self.assertEqual(api.review_platform(self.google_play(1)), "android")
 
     def test_the_app_store_is_ios(self):
         """Its registered name is the generic 'AppFollow: Review Monitor'; only the
         instance name says which store, so both names have to be searched."""
-        self.assertEqual(triage.review_platform(self.app_store(1)), "ios")
+        self.assertEqual(api.review_platform(self.app_store(1)), "ios")
 
     def test_a_review_naming_no_store_stays_unresolved(self):
-        self.assertIsNone(triage.review_platform(self.review(1)))
-        self.assertIsNone(triage.review_platform(
+        self.assertIsNone(api.review_platform(self.review(1)))
+        self.assertIsNone(api.review_platform(
             self.review(2, {"registered_integration_service_name": "Some Other Importer"})))
 
     def test_non_review_tickets_are_not_a_source_of_platform(self):
         email = ticket(1, via={"channel": "email",
                                "source": {"from": {"address": "a@b.c", "name": "A"}}})
-        self.assertIsNone(triage.review_platform(email))
-        self.assertIsNone(triage.review_platform(ticket(2, via={"channel": "web"})))
+        self.assertIsNone(api.review_platform(email))
+        self.assertIsNone(api.review_platform(ticket(2, via={"channel": "web"})))
 
     def test_the_ticket_overrides_the_models_guess(self):
         findings = [finding(1, platform="ios"), finding(2, platform="unknown")]
@@ -930,7 +930,7 @@ class TestReviewPlatform(unittest.TestCase):
         self.assertNotIn(triage.PLATFORM_EMOJI["unknown"], line)
 
     def test_every_resolvable_source_maps_to_a_known_platform(self):
-        for _, platform in triage.REVIEW_SOURCE_PLATFORMS:
+        for _, platform in api.REVIEW_SOURCE_PLATFORMS:
             self.assertIn(platform, triage.PLATFORMS)
 
 
@@ -1244,23 +1244,23 @@ class TestResolveApiModel(unittest.TestCase):
     """The CLI resolves aliases itself; the API takes ids, so only that path maps."""
 
     def test_every_alias_maps_to_an_id(self):
-        for alias, model_id in triage.API_MODEL_ALIASES.items():
-            self.assertEqual(triage.resolve_api_model(alias), model_id)
+        for alias, model_id in claude_cli.API_MODEL_ALIASES.items():
+            self.assertEqual(claude_cli.resolve_api_model(alias), model_id)
             self.assertTrue(model_id.startswith("claude-"), model_id)
 
     def test_the_default_model_resolves_to_an_api_id(self):
         """The API 404s on a bare shorthand, so whatever DEFAULT_MODEL is —
         a pinned id today, an alias if that ever changes — it has to resolve to one."""
-        resolved = triage.resolve_api_model(triage.DEFAULT_MODEL)
-        self.assertNotIn(resolved, triage.API_MODEL_ALIASES)
+        resolved = claude_cli.resolve_api_model(triage.DEFAULT_MODEL)
+        self.assertNotIn(resolved, claude_cli.API_MODEL_ALIASES)
         self.assertTrue(resolved.startswith("claude-"), resolved)
 
     def test_a_full_id_passes_through(self):
-        self.assertEqual(triage.resolve_api_model("claude-opus-4-8"), "claude-opus-4-8")
+        self.assertEqual(claude_cli.resolve_api_model("claude-opus-4-8"), "claude-opus-4-8")
 
     def test_an_unknown_value_passes_through(self):
         """A model newer than this table should reach the API rather than be rewritten."""
-        self.assertEqual(triage.resolve_api_model("claude-future-9"), "claude-future-9")
+        self.assertEqual(claude_cli.resolve_api_model("claude-future-9"), "claude-future-9")
 
 
 class TestAnalyzeInChunks(unittest.TestCase):
@@ -1384,7 +1384,7 @@ class TestCompactTicket(unittest.TestCase):
 class TestFetchTickets(unittest.TestCase):
     def test_returns_the_total_match_count_alongside_the_batch(self):
         session = FakeSession([FakeResponse({"count": 47, "results": [ticket(1), ticket(2)]})])
-        tickets, total = triage.fetch_tickets(session, "acme", "q", 100)
+        tickets, total = api.fetch_tickets(session, "acme", "q", 100)
         self.assertEqual(len(tickets), 2)
         self.assertEqual(total, 47)
 
@@ -1393,7 +1393,7 @@ class TestFetchTickets(unittest.TestCase):
             FakeResponse({"count": 3, "results": [ticket(1)], "next_page": "https://n/2"}),
             FakeResponse({"count": 3, "results": [ticket(2), ticket(3)]}),
         ])
-        tickets, total = triage.fetch_tickets(session, "acme", "q", 100)
+        tickets, total = api.fetch_tickets(session, "acme", "q", 100)
         self.assertEqual([t["id"] for t in tickets], [1, 2, 3])
         self.assertEqual(total, 3)
 
@@ -1401,7 +1401,7 @@ class TestFetchTickets(unittest.TestCase):
         session = FakeSession([
             FakeResponse({"count": 500, "results": [ticket(i) for i in range(10)]}),
         ])
-        tickets, total = triage.fetch_tickets(session, "acme", "q", 4)
+        tickets, total = api.fetch_tickets(session, "acme", "q", 4)
         self.assertEqual(len(tickets), 4)
         self.assertEqual(total, 500)  # the gap is what the digest surfaces
 
@@ -1409,18 +1409,18 @@ class TestFetchTickets(unittest.TestCase):
         session = FakeSession([
             FakeResponse({"count": 2, "results": [ticket(1), {"result_type": "user", "id": 9}]}),
         ])
-        tickets, _ = triage.fetch_tickets(session, "acme", "q", 100)
+        tickets, _ = api.fetch_tickets(session, "acme", "q", 100)
         self.assertEqual([t["id"] for t in tickets], [1])
 
     def test_total_is_none_when_zendesk_omits_the_count(self):
         session = FakeSession([FakeResponse({"results": [ticket(1)]})])
-        _, total = triage.fetch_tickets(session, "acme", "q", 100)
+        _, total = api.fetch_tickets(session, "acme", "q", 100)
         self.assertIsNone(total)
 
     def test_forbidden_response_exits_with_a_hint(self):
         session = FakeSession([FakeResponse({}, status_code=403)])
         with self.assertRaises(SystemExit):
-            triage.fetch_tickets(session, "acme", "q", 100)
+            api.fetch_tickets(session, "acme", "q", 100)
 
     def test_pagination_stops_at_the_zendesk_result_limit(self):
         """Past 1000 results the search API 422s, so we never ask for that page.
@@ -1428,7 +1428,7 @@ class TestFetchTickets(unittest.TestCase):
         A caller asking for more gets the limit, not an error: one page beyond the
         cap is queued here and must go unrequested.
         """
-        limit = triage.SEARCH_RESULT_LIMIT
+        limit = api.SEARCH_RESULT_LIMIT
         pages = [
             FakeResponse({
                 "count": 5000,
@@ -1438,7 +1438,7 @@ class TestFetchTickets(unittest.TestCase):
             for offset in range(0, limit + 100, 100)
         ]
         session = FakeSession(pages)
-        tickets, total = triage.fetch_tickets(session, "acme", "q", 5000)
+        tickets, total = api.fetch_tickets(session, "acme", "q", 5000)
         self.assertEqual(len(tickets), limit)
         self.assertEqual(total, 5000)  # the digest still reports the real backlog
         self.assertEqual(len(session.calls), limit // 100)
@@ -1447,7 +1447,7 @@ class TestFetchTickets(unittest.TestCase):
         session = FakeSession([
             FakeResponse({"count": 500, "results": [ticket(i) for i in range(100)]}),
         ])
-        tickets, _ = triage.fetch_tickets(session, "acme", "q", 7)
+        tickets, _ = api.fetch_tickets(session, "acme", "q", 7)
         self.assertEqual(len(tickets), 7)
 
     def test_an_unexpected_422_keeps_the_tickets_already_fetched(self):
@@ -1456,7 +1456,7 @@ class TestFetchTickets(unittest.TestCase):
             FakeResponse({"count": 900, "results": [ticket(1)], "next_page": "https://n/2"}),
             FakeResponse({"error": "invalid"}, status_code=422),
         ])
-        tickets, total = triage.fetch_tickets(session, "acme", "q", 900)
+        tickets, total = api.fetch_tickets(session, "acme", "q", 900)
         self.assertEqual([t["id"] for t in tickets], [1])
         self.assertEqual(total, 900)
 
@@ -1464,7 +1464,7 @@ class TestFetchTickets(unittest.TestCase):
         """Nothing fetched means nothing to salvage — that's a real failure."""
         session = FakeSession([FakeResponse({"error": "invalid"}, status_code=422)])
         with self.assertRaises(SystemExit):
-            triage.fetch_tickets(session, "acme", "q", 100)
+            api.fetch_tickets(session, "acme", "q", 100)
 
 
 class TestFetchEveryTicket(unittest.TestCase):
@@ -1476,53 +1476,53 @@ class TestFetchEveryTicket(unittest.TestCase):
 
     def test_one_short_slice_is_a_single_query(self):
         session = FakeSession([self.page([1, 2, 3], 3)])
-        tickets, total = triage.fetch_every_ticket(session, "acme", "q", 100)
+        tickets, total = api.fetch_every_ticket(session, "acme", "q", 100)
         self.assertEqual([t["id"] for t in tickets], [1, 2, 3])
         self.assertEqual((total, len(session.calls)), (3, 1))
 
     def test_a_full_slice_is_followed_by_another(self):
         """A full 1000 means there may be more behind it, so the walk continues from
         the oldest created_at rather than stopping at Zendesk's ceiling."""
-        first = list(range(triage.SEARCH_RESULT_LIMIT))
+        first = list(range(api.SEARCH_RESULT_LIMIT))
         session = FakeSession([
             self.page(first, 1036, "2026-08-02T00:00:00Z"),
             self.page(range(9000, 9036), 36, "2025-08-02T00:00:00Z"),
         ])
-        tickets, total = triage.fetch_every_ticket(session, "acme", "q", 5000)
-        self.assertEqual(len(tickets), triage.SEARCH_RESULT_LIMIT + 36)
+        tickets, total = api.fetch_every_ticket(session, "acme", "q", 5000)
+        self.assertEqual(len(tickets), api.SEARCH_RESULT_LIMIT + 36)
         self.assertEqual(total, 1036, "total comes from the unsliced query")
         self.assertIn("created<=2026-08-02T00:00:00Z", session.calls[1][2]["params"]["query"])
 
     def test_the_overlapping_second_is_not_counted_twice(self):
         """created<= re-fetches everything sharing the oldest second; ids dedupe it."""
-        first = list(range(triage.SEARCH_RESULT_LIMIT))
+        first = list(range(api.SEARCH_RESULT_LIMIT))
         session = FakeSession([
             self.page(first, 1002),
             self.page([998, 999, 1000, 1001], 4),
             self.page([], 0),
         ])
-        tickets, _ = triage.fetch_every_ticket(session, "acme", "q", 5000)
+        tickets, _ = api.fetch_every_ticket(session, "acme", "q", 5000)
         self.assertEqual(len(tickets), len({t["id"] for t in tickets}))
-        self.assertEqual(len(tickets), triage.SEARCH_RESULT_LIMIT + 2)
+        self.assertEqual(len(tickets), api.SEARCH_RESULT_LIMIT + 2)
 
     def test_a_slice_that_adds_nothing_new_ends_the_walk(self):
         """Otherwise a tie group larger than a slice would loop forever."""
-        first = list(range(triage.SEARCH_RESULT_LIMIT))
+        first = list(range(api.SEARCH_RESULT_LIMIT))
         session = FakeSession([self.page(first, 99999), self.page(first, 99999)])
-        tickets, _ = triage.fetch_every_ticket(session, "acme", "q", 99999)
-        self.assertEqual(len(tickets), triage.SEARCH_RESULT_LIMIT)
+        tickets, _ = api.fetch_every_ticket(session, "acme", "q", 99999)
+        self.assertEqual(len(tickets), api.SEARCH_RESULT_LIMIT)
         self.assertEqual(len(session.calls), 2)
 
     def test_it_never_returns_more_than_asked_for(self):
         session = FakeSession([self.page(range(10), 10)])
-        tickets, _ = triage.fetch_every_ticket(session, "acme", "q", 4)
+        tickets, _ = api.fetch_every_ticket(session, "acme", "q", 4)
         self.assertEqual(len(tickets), 4)
 
 
 class TestBacklogQueries(unittest.TestCase):
     def test_the_non_review_query_is_the_backlog_minus_the_review_channel(self):
         self.assertTrue(triage.BACKLOG_NON_REVIEW_QUERY.startswith(triage.BACKLOG_QUERY))
-        self.assertIn(f"-via:{triage.REVIEW_CHANNEL}", triage.BACKLOG_NON_REVIEW_QUERY)
+        self.assertIn(f"-via:{api.REVIEW_CHANNEL}", triage.BACKLOG_NON_REVIEW_QUERY)
 
     def test_the_counter_honours_the_query_it_is_given(self):
         session = FakeSession([FakeResponse({"count": 428})])
@@ -1586,9 +1586,9 @@ class TestClaudeCli(unittest.TestCase):
                 "stdout": written if stdout is None else stdout,
                 "stderr": stderr})()
 
-        with Patched(triage.subprocess, run=fake_run):
-            return triage.claude_cli_json("claude-opus-5", "medium", "be terse",
-                                          self.SCHEMA, prompt, 60, "a batch of 3")
+        with Patched(claude_cli.subprocess, run=fake_run):
+            return claude_cli.claude_cli_json("claude-opus-5", "medium", "be terse",
+                                              self.SCHEMA, prompt, 60, "a batch of 3")
 
     def command(self, **kwargs):
         self.run_cli(**kwargs)
@@ -1615,7 +1615,7 @@ class TestClaudeCli(unittest.TestCase):
                                   "PATH": "/usr/bin", "HOME": "/home/zendesk"}):
             self.run_cli()
         child_env = self.calls[0][1]["env"]
-        for name in triage.CLAUDE_AUTH_OVERRIDES:
+        for name in claude_cli.CLAUDE_AUTH_OVERRIDES:
             self.assertNotIn(name, child_env)
         # Everything else still reaches it: HOME is where the login lives, and PATH is
         # how a per-user install is found at all.
@@ -1796,7 +1796,7 @@ class TestClaudeCli(unittest.TestCase):
 
     def test_a_wedged_cli_does_not_hang_the_run(self):
         with self.assertRaises(SystemExit) as caught:
-            self.run_cli(raises=triage.subprocess.TimeoutExpired("claude", 60))
+            self.run_cli(raises=claude_cli.subprocess.TimeoutExpired("claude", 60))
         self.assertIn("60s", str(caught.exception))
 
 
@@ -1812,18 +1812,18 @@ class TestEnglishTranscript(unittest.TestCase):
         """Translating English into English would put a machine's wording in front of
         the agent in place of the words everyone could already read."""
         for language in ("English", "english", "en", "EN"):
-            self.assertTrue(triage.is_english({"language": language}), language)
+            self.assertTrue(transcript.is_english({"language": language}), language)
 
     def test_an_unknown_language_counts_as_english(self):
         """A blank `language` is far more likely to be a thin classification than a
         ticket nobody could read. Guessing this way wastes nothing; the other way
         overwrites words everyone could read with a translation of them."""
         for language in ("", None, "   "):
-            self.assertTrue(triage.is_english({"language": language}), repr(language))
+            self.assertTrue(transcript.is_english({"language": language}), repr(language))
 
     def test_a_non_english_ticket_is_translated(self):
         for language in ("German", "Spanish", "Japanese"):
-            self.assertFalse(triage.is_english({"language": language}), language)
+            self.assertFalse(transcript.is_english({"language": language}), language)
 
     # ---- turns -------------------------------------------------------------
 
@@ -1834,8 +1834,8 @@ class TestEnglishTranscript(unittest.TestCase):
             def json():
                 return {"comments": comments}
 
-        return triage.conversation_turns(FakeSession([Resp()]), "acme",
-                                         {"id": 1, "requester_id": requester_id})
+        return api.conversation_turns(FakeSession([Resp()]), "acme",
+                                      {"id": 1, "requester_id": requester_id})
 
     def comment(self, body, author_id=5, public=True, created_at="2026-08-28T00:22:38Z"):
         return {"body": body, "author_id": author_id, "public": public,
@@ -1886,7 +1886,7 @@ class TestEnglishTranscript(unittest.TestCase):
                   "body": "Es geht nicht."},
                  {"index": 1, "who": "Support", "when": "2026-08-28 01:31 UTC",
                   "body": "Have you tried?"}]
-        got = triage.render_transcript(turns, [
+        got = transcript.render_transcript(turns, [
             {"index": 0, "english": "It does not work."},
             {"index": 1, "english": "Have you tried?"},
         ])
@@ -1899,7 +1899,7 @@ class TestEnglishTranscript(unittest.TestCase):
         as if that turn never happened."""
         turns = [{"index": 0, "who": "Customer", "when": "", "body": "Es geht nicht."},
                  {"index": 1, "who": "Customer", "when": "", "body": "Immer noch."}]
-        got = triage.render_transcript(turns, [{"index": 0, "english": "Broken."}])
+        got = transcript.render_transcript(turns, [{"index": 0, "english": "Broken."}])
         self.assertIn("Broken.", got)
         self.assertIn("Immer noch.", got)
 
@@ -1908,21 +1908,21 @@ class TestEnglishTranscript(unittest.TestCase):
         speaker's words under another's name for the rest of the transcript."""
         turns = [{"index": 0, "who": "Customer", "when": "", "body": "eins"},
                  {"index": 1, "who": "Support", "when": "", "body": "zwei"}]
-        got = triage.render_transcript(turns, [{"index": 1, "english": "two"},
-                                               {"index": 0, "english": "one"}])
+        got = transcript.render_transcript(turns, [{"index": 1, "english": "two"},
+                                                   {"index": 0, "english": "one"}])
         self.assertEqual(got, "Customer:\none\n\nSupport:\ntwo")
 
     def test_an_unparseable_timestamp_leaves_the_turn_labelled(self):
-        self.assertEqual(triage.stamp_minutes("not a date"), "")
-        self.assertEqual(triage.stamp_minutes(None), "")
-        got = triage.render_transcript(
+        self.assertEqual(api.stamp_minutes("not a date"), "")
+        self.assertEqual(api.stamp_minutes(None), "")
+        got = transcript.render_transcript(
             [{"index": 0, "who": "Customer", "when": "", "body": "x"}], [])
         self.assertEqual(got, "Customer:\nx")
 
     def test_the_stamp_is_minutes_not_seconds(self):
         """This dates a turn for somebody reading a conversation; seconds are noise in
         front of every paragraph."""
-        self.assertEqual(triage.stamp_minutes("2026-08-28T01:31:09Z"),
+        self.assertEqual(api.stamp_minutes("2026-08-28T01:31:09Z"),
                          "2026-08-28 01:31 UTC")
 
     # ---- the run -----------------------------------------------------------
@@ -1932,11 +1932,11 @@ class TestEnglishTranscript(unittest.TestCase):
         to behave exactly as it did before — no comment fetches, no Claude calls, no
         writes."""
         calls = []
-        with Patched(triage, conversation_turns=lambda *a: calls.append(a),
+        with Patched(transcript, conversation_turns=lambda *a: calls.append(a),
                      claude_cli_json=lambda *a, **k: calls.append(a)):
-            written = triage.attach_english(object(), "acme", [{"id": 1}],
-                                            [{"id": 1, "language": "German"}],
-                                            "claude-sonnet-5", field_id=None)
+            written = transcript.attach_english(object(), "acme", [{"id": 1}],
+                                                [{"id": 1, "language": "German"}],
+                                                "claude-sonnet-5", field_id=None)
         self.assertEqual(written, 0)
         self.assertEqual(calls, [])
 
@@ -1944,9 +1944,9 @@ class TestEnglishTranscript(unittest.TestCase):
         """--findings never builds one: the findings already exist and no ticket was
         ever fetched, so there is nothing to read comments from or write back to."""
         self.assertEqual(
-            triage.attach_english(None, "acme", [{"id": 1}],
-                                  [{"id": 1, "language": "German"}],
-                                  "claude-sonnet-5", field_id=42),
+            transcript.attach_english(None, "acme", [{"id": 1}],
+                                      [{"id": 1, "language": "German"}],
+                                      "claude-sonnet-5", field_id=42),
             0)
 
     def test_a_run_that_posts_no_card_writes_nothing(self):
@@ -1965,21 +1965,21 @@ class TestEnglishTranscript(unittest.TestCase):
                         model="claude-sonnet-5", field_id=42)
         defaults.update(kwargs)
         with contextlib.redirect_stdout(out):
-            triage.attach_english(**defaults)
+            transcript.attach_english(**defaults)
         return out.getvalue()
 
     def test_a_run_that_wrote_nothing_says_so(self):
         """The count printed only when it was non-zero, so a run that wrote nothing
         and a run that never reached this step read identically in the journal — the
         one thing somebody checking whether the feature is on needs to tell apart."""
-        with Patched(triage, conversation_turns=lambda *a: None):
+        with Patched(transcript, conversation_turns=lambda *a: None):
             said = self.said(tickets=[{"id": 1}],
                              findings=[{"id": 1, "language": "German"}])
         self.assertIn("0 of 1", said)
 
     def test_an_unset_field_id_says_which_variable_is_missing(self):
         said = self.said(field_id=None, findings=[{"id": 1, "language": "German"}])
-        self.assertIn(triage.ENGLISH_FIELD_ENV, said)
+        self.assertIn(transcript.ENGLISH_FIELD_ENV, said)
 
     def test_an_all_english_digest_says_so_rather_than_nothing(self):
         said = self.said(findings=[{"id": 1, "language": "English"},
@@ -1993,7 +1993,7 @@ class TestEnglishTranscript(unittest.TestCase):
         self.assertIn("never fetched", said)
 
     def test_a_ticket_with_no_public_comments_is_named(self):
-        with Patched(triage, conversation_turns=lambda *a: None):
+        with Patched(transcript, conversation_turns=lambda *a: None):
             said = self.said(tickets=[{"id": 7}],
                              findings=[{"id": 7, "language": "German"}])
         self.assertIn("7", said)
@@ -2007,12 +2007,12 @@ class TestEnglishTranscript(unittest.TestCase):
             raise SystemExit("claude exited 1")
 
         written = []
-        with Patched(triage,
+        with Patched(transcript,
                      conversation_turns=lambda *a: [
                          {"index": 0, "who": "Customer", "when": "", "body": "x"}],
                      claude_cli_json=explode,
                      write_english_field=lambda *a: written.append(a) or True):
-            got = triage.attach_english(
+            got = transcript.attach_english(
                 object(), "acme", [{"id": 1}, {"id": 2}],
                 [{"id": 1, "language": "German"}, {"id": 2, "language": "German"}],
                 "claude-sonnet-5", field_id=42)
@@ -2021,14 +2021,14 @@ class TestEnglishTranscript(unittest.TestCase):
 
     def test_the_transcript_is_written_to_the_configured_field(self):
         puts = []
-        with Patched(triage,
+        with Patched(transcript,
                      conversation_turns=lambda *a: [
                          {"index": 0, "who": "Customer", "when": "2026-08-28 00:22 UTC",
                           "body": "Es geht nicht."}],
                      claude_cli_json=lambda *a, **k: {
                          "turns": [{"index": 0, "english": "It does not work."}]},
                      write_english_field=lambda *a: puts.append(a) or True):
-            got = triage.attach_english(
+            got = transcript.attach_english(
                 object(), "acme", [{"id": 1}, {"id": 2}],
                 [{"id": 1, "language": "German"}, {"id": 2, "language": "English"}],
                 "claude-sonnet-5", field_id=42)
@@ -2041,15 +2041,15 @@ class TestEnglishTranscript(unittest.TestCase):
     def test_a_ticket_with_no_matching_row_is_skipped(self):
         """--findings and a partial fetch both leave findings whose ticket was never
         loaded. There is nothing to read comments from, so there is nothing to do."""
-        with Patched(triage,
+        with Patched(transcript,
                      conversation_turns=lambda *a: [
                          {"index": 0, "who": "Customer", "when": "", "body": "x"}],
                      claude_cli_json=lambda *a, **k: {"turns": []},
                      write_english_field=lambda *a: True):
             self.assertEqual(
-                triage.attach_english(object(), "acme", [],
-                                      [{"id": 99, "language": "German"}],
-                                      "claude-sonnet-5", field_id=42),
+                transcript.attach_english(object(), "acme", [],
+                                          [{"id": 99, "language": "German"}],
+                                          "claude-sonnet-5", field_id=42),
                 0)
 
 
@@ -2070,7 +2070,7 @@ class TestCustomerSide(unittest.TestCase):
 
     def test_an_ordinary_ticket_costs_no_lookups(self):
         session = FakeSession([])
-        authors = triage.customer_authors(
+        authors = api.customer_authors(
             session, "acme", self.EMAIL, [self.said("Hallo", 999)])
         self.assertEqual(authors, {999})
         self.assertEqual(session.calls, [], "the requester wrote, so no role lookup")
@@ -2078,7 +2078,7 @@ class TestCustomerSide(unittest.TestCase):
     def test_a_dm_falls_back_to_whoever_is_not_an_agent(self):
         session = FakeSession([FakeResponse({"user": {}}),
                                FakeResponse({"user": {"id": 7, "role": "admin"}})])
-        authors = triage.customer_authors(session, "acme", self.TWEET, [
+        authors = api.customer_authors(session, "acme", self.TWEET, [
             self.said("中国大陆可以使用吗？", -1),
             self.said("Thanks for getting in touch.", 7)])
         self.assertEqual(authors, {-1})
@@ -2086,13 +2086,13 @@ class TestCustomerSide(unittest.TestCase):
     def test_an_unresolvable_author_counts_as_the_customer(self):
         session = FakeSession([FakeResponse({}, status_code=404)])
         self.assertEqual(
-            triage.customer_authors(session, "acme", self.TWEET,
-                                    [self.said("中国大陆", -1)]), {-1})
+            api.customer_authors(session, "acme", self.TWEET,
+                                 [self.said("中国大陆", -1)]), {-1})
 
     def test_the_sample_keeps_their_words_and_drops_the_agent_s(self):
         session = FakeSession([FakeResponse({"user": {}}),
                                FakeResponse({"user": {"id": 7, "role": "admin"}})])
-        sample = triage.customer_text(session, "acme", self.TWEET, [
+        sample = api.customer_text(session, "acme", self.TWEET, [
             self.said("中国大陆可以使用吗？", -1),
             self.said("Thanks for getting in touch.", 7)], 2000)
         self.assertIn("中国大陆可以使用吗", sample)
@@ -2102,19 +2102,19 @@ class TestCustomerSide(unittest.TestCase):
         """"Conversation with <handle>" is the ticket's own description, not words
         anybody typed, and it was what the language detector saw."""
         session = FakeSession([FakeResponse({"user": {}})])
-        sample = triage.customer_text(session, "acme", self.TWEET,
-                                      [self.said("中国大陆", -1)], 2000)
+        sample = api.customer_text(session, "acme", self.TWEET,
+                                   [self.said("中国大陆", -1)], 2000)
         self.assertNotIn("Conversation with", sample)
 
     def test_private_notes_never_reach_the_sample(self):
         session = FakeSession([])
-        sample = triage.customer_text(session, "acme", self.EMAIL,
-                                      [self.said("claude: draft - x", 999, public=False)],
-                                      2000)
+        sample = api.customer_text(session, "acme", self.EMAIL,
+                                   [self.said("claude: draft - x", 999, public=False)],
+                                   2000)
         self.assertNotIn("claude: draft", sample)
 
     def test_a_ticket_with_no_text_still_yields_a_sample(self):
         session = FakeSession([])
-        self.assertTrue(triage.customer_text(
+        self.assertTrue(api.customer_text(
             session, "acme", dict(self.EMAIL, description=""), [], 2000).strip())
 

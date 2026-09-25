@@ -14,9 +14,8 @@ import unittest
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from session_ops.zendesk import resolve_reviews
-from session_ops.zendesk import triage
-from session_ops.shared.testing import FakeResponse, FakeSession, NoSleep
+from session_ops.shared.testing import FakeResponse, FakeSession, NoSleep, Patched
+from session_ops.zendesk import api, resolve_reviews, triage
 
 
 def review(ticket_id, stars=5, channel="any_channel", subject=None):
@@ -96,7 +95,7 @@ class TestSelection(unittest.TestCase):
         self.assertEqual([t["id"] for t in resolvable], [1])
 
     def test_a_star_subject_counts_even_off_channel(self):
-        """triage.is_store_review accepts either signal; the rating still decides."""
+        """api.is_store_review accepts either signal; the rating still decides."""
         resolvable, _ = self.select([review(1, stars=5, channel="email")])
         self.assertEqual([t["id"] for t in resolvable], [1])
 
@@ -343,13 +342,12 @@ class TestSummaryMessage(unittest.TestCase):
     def test_the_summary_does_not_reuse_the_zendesk_session(self):
         """That session carries the API-token auth header; Discord must not see it."""
         posted = []
-        original = triage.post_to_discord
-        triage.post_to_discord = lambda session, url, messages: (
-            posted.append((session, url, messages)) or len(messages))
-        try:
+        def post(session, url, messages):
+            posted.append((session, url, messages))
+            return len(messages)
+
+        with Patched(resolve_reviews, post_to_discord=post):
             self.assertTrue(resolve_reviews.post_summary("https://hook", "hi"))
-        finally:
-            triage.post_to_discord = original
         session, url, messages = posted[0]
         self.assertIsNone(session.auth)
         self.assertEqual((url, messages), ("https://hook", [{"content": "hi"}]))
@@ -361,8 +359,8 @@ class TestSharedDetectionIsNotReimplemented(unittest.TestCase):
     triage's, so both scripts must call the same functions."""
 
     def test_detection_comes_from_triage(self):
-        self.assertIs(resolve_reviews.triage.is_store_review, triage.is_store_review)
-        self.assertIs(resolve_reviews.triage.review_stars, triage.review_stars)
+        self.assertIs(resolve_reviews.api.is_store_review, api.is_store_review)
+        self.assertIs(resolve_reviews.api.review_stars, api.review_stars)
 
     def test_the_star_floor_matches_what_the_triage_skips(self):
         """The triage counts reviews above its floor without classifying them; this

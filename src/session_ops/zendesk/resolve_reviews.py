@@ -78,7 +78,9 @@ from urllib.parse import quote
 
 
 from session_ops.shared import http
-from session_ops.zendesk import triage
+from session_ops.shared.discord import post_to_discord
+from session_ops.shared.env import get_env
+from session_ops.zendesk import api
 
 # Reviews at or above this rating carry nothing to act on. Fixed rather than a flag:
 # 3★ and below are what the triage treats as bug reports in disguise, so lowering the
@@ -130,10 +132,10 @@ def select_resolvable(tickets, min_stars):
     """
     resolvable, skipped = [], []
     for ticket in tickets:
-        if not triage.is_store_review(ticket):
+        if not api.is_store_review(ticket):
             skipped.append((ticket, "not an app-store review"))
             continue
-        stars = triage.review_stars(ticket)
+        stars = api.review_stars(ticket)
         if stars is None:
             skipped.append((ticket, "no star rating in the subject"))
             continue
@@ -244,7 +246,7 @@ def tally_by_stars(tickets):
     counts = {}
     for ticket in tickets:
         # Never None here: select_resolvable drops anything without a parsed rating.
-        stars = triage.review_stars(ticket)
+        stars = api.review_stars(ticket)
         counts[stars] = counts.get(stars, 0) + 1
     return counts
 
@@ -314,8 +316,8 @@ def post_summary(webhook_url, message):
     A fresh session, never the Zendesk one — that carries the API-token auth header,
     and Discord has no business receiving it.
     """
-    return bool(triage.post_to_discord(http.Session(), webhook_url,
-                                       [{"content": message}]))
+    return bool(post_to_discord(http.Session(), webhook_url,
+                                [{"content": message}]))
 
 
 def main(argv=None):
@@ -342,9 +344,9 @@ def main(argv=None):
                         help="Discord webhook URL (else ZENDESK_DISCORD_WEBHOOK_URL).")
     args = parser.parse_args(argv)
 
-    subdomain = triage.get_env("ZENDESK_SUBDOMAIN", args.subdomain)
-    email = triage.get_env("ZENDESK_EMAIL", args.email)
-    api_token = triage.get_env("ZENDESK_API_TOKEN", args.api_token)
+    subdomain = get_env("ZENDESK_SUBDOMAIN", args.subdomain)
+    email = get_env("ZENDESK_EMAIL", args.email)
+    api_token = get_env("ZENDESK_API_TOKEN", args.api_token)
     # The triage channel's own webhook, the one the digest posts to — a Discord
     # webhook is bound to the channel it was created in, so posting alongside the
     # digest means using its secret rather than the shared DISCORD_WEBHOOK_URL.
@@ -353,15 +355,15 @@ def main(argv=None):
     # should stop the run rather than have it bulk-edit tickets it cannot report. A
     # dry run posts nothing, so it never needs one.
     needs_webhook = args.apply and not args.no_discord
-    webhook = triage.get_env("ZENDESK_DISCORD_WEBHOOK_URL", args.webhook,
-                             required=needs_webhook)
+    webhook = get_env("ZENDESK_DISCORD_WEBHOOK_URL", args.webhook,
+                      required=needs_webhook)
 
-    session = triage.zendesk_session(email, api_token)
+    session = api.zendesk_session(email, api_token)
     query = build_query()
     # Every match, not the newest 1000: the tail of this query is held open by
     # low-star reviews the job never solves, so a plain fetch hides the solvable
-    # ones behind them for good. See triage.fetch_every_ticket.
-    tickets, total_matched = triage.fetch_every_ticket(
+    # ones behind them for good. See api.fetch_every_ticket.
+    tickets, total_matched = api.fetch_every_ticket(
         session, subdomain, query, args.max_tickets)
     matched = "?" if total_matched is None else total_matched
     print(f"Fetched {len(tickets)} of {matched} matching tickets (query: {query!r}).")
