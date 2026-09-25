@@ -1,0 +1,21 @@
+[
+  {
+    "embeds": [
+      {
+        "title": "🈳 Crowdin: translations to choose between",
+        "description": "**1** slot(s) newly holding 2+ translations, **1** resolved. **5** open in total.\nEach open slot needs one translation kept and the rest deleted, so that exactly one translation (per plural form) is exported.",
+        "color": 15105570
+      },
+      {
+        "title": "de — 1 new",
+        "description": "• [attachmentsSaveError](https://crowdin.com/editor/session-crossplatform-strings/all/en-de#102) — **2** translations",
+        "color": 15105570
+      },
+      {
+        "title": "de — 1 resolved",
+        "description": "• [accept](https://crowdin.com/editor/session-crossplatform-strings/all/en-de#101)",
+        "color": 3066993
+      }
+    ]
+  }
+]

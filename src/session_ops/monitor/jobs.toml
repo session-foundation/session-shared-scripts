@@ -13,3 +13,8 @@ max_age_hours = 80
 name = "zendesk-digest"
 # Mon..Fri 10:00, and a full backlog run can take 90 min.
 max_age_hours = 80
+
+[[job]]
+name = "crowdin-duplicates"
+# Daily at 03:00 UTC; a full scan without --croql runs about an hour.
+max_age_hours = 28

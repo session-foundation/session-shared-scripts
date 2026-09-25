@@ -9,6 +9,8 @@ digest, all on one machine.
 | `zendesk-digest.timer` → `.service` | Weekday mornings. Resolves positive reviews, then posts the digest. |
 | `github-prs-digest.timer` → `.service` | Weekday mornings. Posts the contributor pull request digest. |
 | `session-ops-silence.timer` → `.service` | Hourly. Alerts when a job in `jobs.toml` has not succeeded within its `max_age_hours`. |
+| `crowdin-relay.service` | Always on. The endpoint Crowdin posts suggestion webhooks to. |
+| `crowdin-duplicates.timer` → `.service` | Daily. Reconciles the open duplicate-translation slots and posts what changed. |
 
 `zendesk-alert@.service`, `github-prs-alert@.service` and `session-ops-alert@.service`
 are pulled in by `OnFailure=` and report the failed unit to the channel that job posts
@@ -178,6 +180,43 @@ The `cp` of every unit is the point: the two digests gain the `ExecStartPost=` t
 writes their stamp. Until each has run once, the checker counts its silence from the
 first check that found the stamp missing, so it does not alert on install.
 
+### Adding the Crowdin duplicate-translation report
+
+Its own account and environment file, shared by the relay and the daily
+reconciliation, which both read and write the open slots in
+`/var/lib/session-ops/crowdin/duplicates.json` under a file lock. Neither needs a home.
+
+```bash
+useradd --system --no-create-home --home /nonexistent --shell /usr/sbin/nologin crowdin
+[ -e /etc/session-ops/crowdin.env ] || install -m 640 -o root -g crowdin /dev/null /etc/session-ops/crowdin.env
+"${EDITOR:-nano}" /etc/session-ops/crowdin.env    # contents under Secrets, below
+
+cp /opt/zendesk/deploy/crowdin-* /etc/systemd/system/
+systemctl daemon-reload
+
+# Seed once: records every open slot and posts nothing. About an hour, read-only.
+systemd-run --pipe --wait --uid=crowdin -p EnvironmentFile=/etc/session-ops/crowdin.env \
+  -p StateDirectory=session-ops/crowdin \
+  /opt/zendesk/.venv/bin/crowdin-reconcile-duplicates --seed \
+  --state /var/lib/session-ops/crowdin/duplicates.json
+
+systemctl enable --now crowdin-relay.service crowdin-duplicates.timer
+```
+
+Then the route, in the live nginx file rather than by re-copying it (see the note
+under Install): add the `location ^~ /crowdin/suggestions/` block from
+`nginx-webhooks.conf`, then `nginx -t && systemctl reload nginx`.
+
+Last, in Crowdin: project → Integrations → Webhooks → Add, URL
+`https://webhooks.session.codes/crowdin/suggestions/<CROWDIN_WEBHOOK_SECRET>`, request
+type POST, content type `application/json`, events *Suggestion added, updated,
+deleted, approved and disapproved*.
+
+The relay does nothing until the state exists, and a wrong secret gets a 404. Crowdin
+never retries a delivery, so what the relay misses the next reconciliation posts, at
+most a day late. The old sharded report keeps running from GitHub Actions until a full
+reconciliation cycle has run clean here.
+
 ## Secrets
 
 `/etc/zendesk/env`, mode `640`, `root:zendesk` — readable by the service, not by
@@ -281,6 +320,26 @@ Mode `640`, `root:sessionops`.
 ```sh
 # Where silence alerts go. Any channel whose readers can act on a job that stopped.
 ALERT_DISCORD_WEBHOOK_URL=
+```
+
+### `/etc/session-ops/crowdin.env`
+
+Mode `640`, `root:crowdin`.
+
+```sh
+# Read-only: the relay is reachable from the internet, and nothing here writes to
+# Crowdin. Scopes: Projects, Source files & strings, Translations (read).
+CROWDIN_API_TOKEN=
+
+# The channel new and resolved slots go to.
+CROWDIN_DISCORD_WEBHOOK_URL=
+
+# The last path segment of the webhook URL given to Crowdin, which signs nothing.
+# Empty refuses every delivery. Generate with: openssl rand -hex 32
+CROWDIN_WEBHOOK_SECRET=
+
+# Uncomment for the first deliveries: the relay prints what it would post.
+#CROWDIN_RELAY_DRY_RUN=1
 ```
 
 ## Verifying, in order
@@ -417,6 +476,26 @@ ls -l /var/lib/session-ops/stamps/     # one file per job that has succeeded sin
 ```
 
 `systemctl start session-ops-alert@test.service` checks its failure path.
+
+**8. The Crowdin relay and reconciliation.** Without the secret the route must not
+exist, and with it an empty delivery is acknowledged:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST 127.0.0.1:8081/crowdin/suggestions/wrong \
+  -H 'Content-Type: application/json' -d '{}'                       # expect 404
+. /etc/session-ops/crowdin.env; curl -sS -X POST \
+  "127.0.0.1:8081/crowdin/suggestions/$CROWDIN_WEBHOOK_SECRET" \
+  -H 'Content-Type: application/json' -d '{}'                       # expect "checks":0
+```
+
+A suggestion typed into the Crowdin editor should then log a line in
+`journalctl -fu crowdin-relay`. A dry run of reconciliation for one locale:
+
+```bash
+systemd-run --pipe --wait --uid=crowdin -p EnvironmentFile=/etc/session-ops/crowdin.env \
+  -p StateDirectory=session-ops/crowdin /opt/zendesk/.venv/bin/crowdin-reconcile-duplicates \
+  --dry-run --locales de --state /var/lib/session-ops/crowdin/duplicates.json
+```
 
 ## Updating
 
