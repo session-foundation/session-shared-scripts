@@ -54,9 +54,6 @@ import time
 from fastapi import BackgroundTasks, FastAPI, Request, Response
 from starlette.concurrency import run_in_threadpool
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import triage  # noqa: E402  (needs the path insert above)
-
 NOTE_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "note_reply.py")
 
 # How stale a signed request may be. The signature covers the timestamp, so this
