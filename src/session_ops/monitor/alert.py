@@ -29,7 +29,9 @@ import subprocess
 import sys
 
 from session_ops.shared import http
-from session_ops.zendesk import triage
+from session_ops.shared.discord import post_to_discord
+from session_ops.shared.env import get_env
+from session_ops.zendesk import claude_cli
 
 
 # A dead login reads as a broken job unless the alert names it: the job is fine and
@@ -38,7 +40,7 @@ from session_ops.zendesk import triage
 # checked: Zendesk's own 401 body says "Couldn't authenticate you".
 AUTH_SIGNATURES = ("oauth", "/login", "authenticate", "invalid api key",
                    "unauthorized", "credit balance", "signed in")
-CLI_FAILURE_PREFIX = f"{triage.CLAUDE_CLI} exited"
+CLI_FAILURE_PREFIX = f"{claude_cli.CLAUDE_CLI} exited"
 # Where the Claude Code CLI lives for the account the units run as; see
 # deploy/README.md. Spelled out because an alert that says "log in again" without
 # saying how sends whoever is on call to the README first.
@@ -142,7 +144,7 @@ def main(argv=None):
         print(f"{args[-1]} reported this failure itself.")
         return
     webhook = (os.environ.get("ALERT_DISCORD_WEBHOOK_URL")
-               or triage.get_env("ZENDESK_DISCORD_WEBHOOK_URL"))
+               or get_env("ZENDESK_DISCORD_WEBHOOK_URL"))
     invocation = unit_property(args[-1], "InvocationID") or None
     detail = last_job_line(journal_tail(args[-1], invocation=invocation))
     message = build_message(args[0], socket.gethostname(), *args[1:], detail=detail,
@@ -152,7 +154,7 @@ def main(argv=None):
                "allowed_mentions": {"roles": [role]} if role else {"parse": []}}
     # A fresh session, never a Zendesk one — that carries the API-token auth header,
     # and Discord has no business receiving it.
-    if not triage.post_to_discord(http.Session(), webhook, [payload]):
+    if not post_to_discord(http.Session(), webhook, [payload]):
         sys.exit("Could not post the failure to Discord.")
 
 

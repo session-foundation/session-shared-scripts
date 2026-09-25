@@ -67,7 +67,10 @@ import re
 import sys
 import textwrap
 
-from session_ops.zendesk import triage
+from session_ops.shared.discord import clip
+from session_ops.shared.env import get_env
+from session_ops.shared.text import undash_english
+from session_ops.zendesk import api, claude_cli, transcript
 
 DEFAULT_MODEL = "claude-sonnet-5"
 COMPOSE_TIMEOUT_SECONDS = 240
@@ -140,12 +143,12 @@ def done_marker(comment_id):
     emailed twice. Keyed on the commanding comment because that is what is unique
     per instruction; the ticket id is not.
     """
-    return triage.marker("claude:done", comment_id)
+    return api.marker("claude:done", comment_id)
 
 
 def draft_marker(comment_id):
     """Marks a note as carrying a sendable draft, and says which brief produced it."""
-    return triage.marker("claude:draft", comment_id)
+    return api.marker("claude:draft", comment_id)
 
 
 def english_marker(latest_public_id):
@@ -155,7 +158,7 @@ def english_marker(latest_public_id):
     twice with nothing said in between should cost nothing, and asking again after
     the customer writes back should produce a fresh transcript.
     """
-    return triage.marker("claude:english", latest_public_id)
+    return api.marker("claude:english", latest_public_id)
 
 
 # Anchored to the start of a line so that prose mentioning the command in passing —
@@ -276,12 +279,12 @@ def para(text):
     whitespace has to survive intact. quoted_para() carries what the customer said and
     what the agent gave as a solve reason, which are theirs and may not be English.
     """
-    return f"<p>{html.escape(triage.undash_english(text))}</p>"
+    return f"<p>{html.escape(undash_english(text))}</p>"
 
 
 def bold_para(text):
     """A paragraph that leads a section, such as a speaker line in a transcript."""
-    return f"<p><strong>{html.escape(triage.undash_english(text))}</strong></p>"
+    return f"<p><strong>{html.escape(undash_english(text))}</strong></p>"
 
 
 def quoted_para(text):
@@ -303,7 +306,7 @@ def quoted_para(text):
 def transcript_blocks(turns, translated):
     """One turn at a time, as readable paragraphs.
 
-    Deliberately not triage.render_transcript's output re-split on blank lines: a
+    Deliberately not transcript.render_transcript's output re-split on blank lines: a
     turn whose own text contains a blank line gets torn into several pieces that
     way, which is what made the first version render as a row of disconnected code
     boxes. The speaker line leads each turn and the body follows as prose — nothing
@@ -447,16 +450,16 @@ PLACEMENT_SYSTEM = textwrap.dedent(
 def place_ticket(model, book, ticket, sample):
     """Which group and platform this ticket belongs to. (None, None) if unplaceable."""
     catalogue = "\n".join(f"- {g['key']}: {g['title']}" for g in book["groups"])
-    body = triage.clip(sample, CUSTOMER_SAMPLE_CHARS)
+    body = clip(sample, CUSTOMER_SAMPLE_CHARS)
     try:
-        found = triage.claude_cli_json(
+        found = claude_cli.claude_cli_json(
             model, "medium", PLACEMENT_SYSTEM, PLACEMENT_SCHEMA,
             f"GROUP CATALOGUE:\n{catalogue}\n\nTHE TICKET:\n"
             f"{(ticket.get('subject') or '')[:200]}\n\n{body}",
             PLACEMENT_TIMEOUT_SECONDS, f"the placement of #{ticket['id']}")
     except SystemExit as exc:
         # Grounding is an enrichment. A failed classification costs a thinner draft,
-        # not the draft — the same call triage.py makes about its transcripts.
+        # not the draft — the same call transcript.py makes about its transcripts.
         print(f"Note: could not place #{ticket['id']} ({exc}); drafting without "
               f"the house answer.")
         return None, None
@@ -679,19 +682,19 @@ def validate_composition(result):
         sys.exit("Claude returned no usable reply option.")
     # `reply_en` and `back_translation` are English by construction, so the failsafe
     # always applies. `translated` is the customer's language, where a long dash may be
-    # grammar rather than decoration — see triage.undash_english — so it is cleaned only
+    # grammar rather than decoration — see undash_english — so it is cleaned only
     # when that language is English, and left alone otherwise.
     for option in options:
         for field in ("reply_en", "back_translation"):
-            option[field] = triage.undash_english(option.get(field))
+            option[field] = undash_english(option.get(field))
         if result["is_english"]:
-            option["translated"] = triage.undash_english(option.get("translated"))
+            option["translated"] = undash_english(option.get("translated"))
     result["options"] = options[:MAX_OPTIONS]
     return result
 
 
 def compose(model, sample, brief, previous=None, precedent=None):
-    return validate_composition(triage.claude_cli_json(
+    return validate_composition(claude_cli.claude_cli_json(
         model, "medium", COMPOSE_SYSTEM, COMPOSE_SCHEMA,
         build_compose_prompt(sample, brief, previous, precedent),
         COMPOSE_TIMEOUT_SECONDS, "the reply draft"))
@@ -751,7 +754,7 @@ def find_draft(comments, api_user):
     so a human pasting the delimiters into a note of their own cannot smuggle text
     past the review.
 
-    triage.fetch_comments returns newest first, so this walks the list as it comes.
+    api.fetch_comments returns newest first, so this walks the list as it comes.
     """
     for comment in comments:
         if comment.get("public") or comment.get("author_id") != api_user:
@@ -800,7 +803,7 @@ def first_line(text, limit=90):
     whole reply, which is already on the ticket one comment above.
     """
     line = next((part.strip() for part in (text or "").splitlines() if part.strip()), "")
-    return triage.clip(line, limit)
+    return clip(line, limit)
 
 
 def build_sent_note(user, comment_id, sent):
@@ -831,8 +834,8 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
     shown = find_draft(comments, api_user)
     previous = "\n\n".join(f"Option {n}:\n{shown[n]}" for n in sorted(shown)) or None
 
-    sample = triage.customer_text(session, subdomain, ticket, comments,
-                                     CUSTOMER_SAMPLE_CHARS)
+    sample = api.customer_text(session, subdomain, ticket, comments,
+                               CUSTOMER_SAMPLE_CHARS)
     book = load_house()
     group, platform = tagged_placement(ticket)
     new_tags = []
@@ -851,7 +854,7 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
               f"({cell['n']} solved, {cell['consistency']} consistency).")
 
     try:
-        result = compose(model, triage.clip(sample, CUSTOMER_SAMPLE_CHARS), brief,
+        result = compose(model, clip(sample, CUSTOMER_SAMPLE_CHARS), brief,
                          previous, precedent)
     except SystemExit as exc:
         say(session, subdomain, ticket_id, comment_id,
@@ -888,7 +891,7 @@ def run_solve(session, subdomain, ticket, command, dry_run):
         say(session, subdomain, ticket_id, command["id"],
             "This ticket is already solved.", dry_run, error=False)
         return
-    author = triage.fetch_user(session, subdomain, command["author"])
+    author = api.fetch_user(session, subdomain, command["author"])
     who = author.get("name") or f"user {command['author']}"
     if dry_run:
         print(f"#{ticket_id}: dry run, would solve on behalf of {who}.")
@@ -927,8 +930,8 @@ def run_explain(session, subdomain, model, ticket, comments, command, dry_run):
     new_tags = []
     if not group:
         group, platform = place_ticket(
-            model, book, ticket, triage.customer_text(session, subdomain, ticket, comments,
-                                     CUSTOMER_SAMPLE_CHARS))
+            model, book, ticket, api.customer_text(session, subdomain, ticket, comments,
+                                                   CUSTOMER_SAMPLE_CHARS))
         new_tags = ([f"{TAG_GROUP_PREFIX}{group}"] if group else []) + \
                    ([f"{TAG_PLATFORM_PREFIX}{platform}"] if platform else [])
     cell, covering = house_cell(book, group, platform)
@@ -980,7 +983,7 @@ def run_reply(session, subdomain, ticket, comments, command, api_user, dry_run):
     if complaint:
         say(session, subdomain, ticket_id, comment_id, complaint, dry_run, error=False)
         return
-    author = triage.fetch_user(session, subdomain, command["author"])
+    author = api.fetch_user(session, subdomain, command["author"])
     who = author.get("name") or f"user {command['author']}"
     if dry_run:
         print(f"#{ticket_id}: dry run, would send an option on behalf of {who}.")
@@ -1031,18 +1034,18 @@ def run_english(session, subdomain, model, ticket, comments, command, dry_run):
     answer to a reply, and without the reply it reads as a complaint about nothing.
 
     Python owns the speaker labels and timestamps and the model only translates —
-    the same split triage.py makes, for the same reason: a model asked to format the
+    the same split transcript.py makes, for the same reason: a model asked to format the
     transcript can drop a turn, merge two, or date one it was never given, and each
     of those is invisible in the output.
     """
     ticket_id = ticket["id"]
     latest = next((c.get("id") for c in comments if c.get("public")), None)
-    if latest is not None and triage.has_marker(comments, english_marker(latest)):
+    if latest is not None and api.has_marker(comments, english_marker(latest)):
         say(session, subdomain, ticket_id, command["id"],
             "The English transcript on this ticket is already up to date — nothing "
             "has been said since it was written.", dry_run, error=False)
         return
-    turns = triage.conversation_turns(session, subdomain, ticket)
+    turns = api.conversation_turns(session, subdomain, ticket)
     if not turns:
         say(session, subdomain, ticket_id, command["id"],
             "There are no public comments on this ticket to translate.", dry_run,
@@ -1052,10 +1055,10 @@ def run_english(session, subdomain, model, ticket, comments, command, dry_run):
     payload = json.dumps([{"index": t["index"], "speaker": t["who"], "text": t["body"]}
                           for t in turns], ensure_ascii=False)
     try:
-        rendered = triage.claude_cli_json(
-            model, "medium", triage.TRANSCRIPT_SYSTEM_PROMPT, triage.TRANSCRIPT_SCHEMA,
-            triage.clip(payload, triage.TRANSCRIPT_INPUT_CHARS),
-            triage.ENGLISH_TIMEOUT_SECONDS, f"the English transcript of #{ticket_id}")
+        rendered = claude_cli.claude_cli_json(
+            model, "medium", transcript.TRANSCRIPT_SYSTEM_PROMPT, transcript.TRANSCRIPT_SCHEMA,
+            clip(payload, transcript.TRANSCRIPT_INPUT_CHARS),
+            transcript.ENGLISH_TIMEOUT_SECONDS, f"the English transcript of #{ticket_id}")
     except SystemExit as exc:
         say(session, subdomain, ticket_id, command["id"],
             f"The English transcript could not be produced: {exc} To try again, add "
@@ -1107,7 +1110,7 @@ def say(session, subdomain, ticket_id, comment_id, text, dry_run, error=True):
 def latest_command(comments, api_user, session, subdomain):
     """The newest private note that is a command from someone allowed to give one.
 
-    triage.fetch_comments returns newest first, so the first match is the newest
+    api.fetch_comments returns newest first, so the first match is the newest
     command: older ones have already been handled and carry their own done markers.
 
     An unauthorised author stops the search rather than falling through to an older
@@ -1120,7 +1123,7 @@ def latest_command(comments, api_user, session, subdomain):
         parsed = parse_command(comment_text(comment))
         if not parsed:
             continue
-        user = triage.fetch_user(session, subdomain, comment.get("author_id"))
+        user = api.fetch_user(session, subdomain, comment.get("author_id"))
         if not may_command(user):
             print(f"Ignoring a command from {user.get('role') or 'an unknown user'}.")
             return None
@@ -1137,25 +1140,25 @@ def main():
                         help="do everything except write to Zendesk")
     args = parser.parse_args()
 
-    subdomain = triage.get_env("ZENDESK_SUBDOMAIN")
-    session = triage.zendesk_session(triage.get_env("ZENDESK_EMAIL"),
-                                     triage.get_env("ZENDESK_API_TOKEN"))
+    subdomain = get_env("ZENDESK_SUBDOMAIN")
+    session = api.zendesk_session(get_env("ZENDESK_EMAIL"),
+                                  get_env("ZENDESK_API_TOKEN"))
     api_user = api_user_id(session, subdomain)
 
-    ticket = triage.fetch_ticket(session, subdomain, args.ticket)
+    ticket = api.fetch_ticket(session, subdomain, args.ticket)
     if ticket.get("status") == "closed":
         # Closed is irreversible and takes no comments at all, so there is nowhere to
         # even report the refusal. Say it to the journal and stop.
         print(f"#{args.ticket}: closed, so Zendesk takes no comments. Nothing done.")
         return
-    comments = triage.fetch_comments(session, subdomain, args.ticket)
+    comments = api.fetch_comments(session, subdomain, args.ticket)
 
     command = latest_command(comments, api_user, session, subdomain)
     if not command:
         print(f"#{args.ticket}: no command note to act on.")
         clear_queued(session, subdomain, args.ticket, args.dry_run)
         return
-    if triage.has_marker(comments, done_marker(command["id"])):
+    if api.has_marker(comments, done_marker(command["id"])):
         print(f"#{args.ticket}: this command was already handled; nothing written.")
         clear_queued(session, subdomain, args.ticket, args.dry_run)
         return
