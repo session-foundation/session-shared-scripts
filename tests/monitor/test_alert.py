@@ -137,6 +137,19 @@ class TestJournalTail(unittest.TestCase):
                 self.assertEqual(self.run_tail(side_effect=error), "")
 
 
+class TestBackstopContext(unittest.TestCase):
+    def test_only_the_failed_invocation_is_quoted(self):
+        """A run killed before it logged would otherwise get the previous run's line."""
+        with mock.patch.object(alert.subprocess, "run", return_value=subprocess.CompletedProcess(
+                [], 0, stdout="", stderr="")) as run:
+            alert.journal_tail("session-ops@x.service", invocation="abc")
+        self.assertIn("_SYSTEMD_INVOCATION_ID=abc", run.call_args.args[0])
+
+    def test_the_result_says_how_the_unit_failed(self):
+        message = alert.build_message("session-ops@x.service", "box", result="timeout")
+        self.assertIn("failed on `box` (timed out).", message)
+
+
 class TestAlreadyAlerted(unittest.TestCase):
     def setUp(self):
         import os

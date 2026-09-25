@@ -65,9 +65,17 @@ class TestRun(unittest.TestCase):
     def test_an_exception_is_one_sentence_with_secrets_scrubbed(self):
         self.run_job(job("raises"), extra=["s3cr3t-value"])
         content = self.posted[0][1][0]["content"]
-        self.assertIn("> ValueError: bad token <DEMO_TOKEN>", content)
-        self.assertNotIn("second line", content)
+        self.assertIn("> ValueError: bad token <DEMO_TOKEN> second line", content)
         self.assertNotIn("s3cr3t-value", content)
+
+    def test_a_job_that_names_no_step_is_not_said_to_fail_during_one(self):
+        self.run_job(job("exits_with_a_pretty_printed_body"))
+        self.assertIn("❌ **demo** failed on `box`.\n", self.posted[0][1][0]["content"])
+
+    def test_a_crowdin_error_reads_as_its_status_and_message(self):
+        from crowdin_api.exceptions import AuthenticationFailed
+        error = AuthenticationFailed(http_status=401, context=b'{"error":{"message":"Unauthorized"}}')
+        self.assertEqual(runner.describe(error), "Crowdin 401: Unauthorized")
 
     def test_a_webhook_url_never_appears_in_an_alert(self):
         self.assertNotIn("abcdef", runner.scrub(f"posting to {HOOK} failed", environ={}))

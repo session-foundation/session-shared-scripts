@@ -34,7 +34,7 @@ ERROR_CHARS = 300
 SECRET_NAME = re.compile(r"TOKEN|SECRET|KEY|WEBHOOK|PASSWORD|SEED", re.IGNORECASE)
 WEBHOOK_URL = re.compile(r"https://(?:\w+\.)?discord(?:app)?\.com/api/webhooks/\S+")
 
-_step = "starting"
+_step = None
 
 
 def step(name):
@@ -73,15 +73,25 @@ def scrub(text, environ=None):
 
 
 def one_sentence(text):
-    first = next((line.strip() for line in str(text).splitlines() if line.strip()), "")
-    return first if len(first) <= ERROR_CHARS else first[:ERROR_CHARS - 1] + "…"
+    """`text` on one line, clipped: a pretty-printed error body cut at its first
+    newline says only `{`."""
+    flat = " ".join(str(text).split())
+    return flat if len(flat) <= ERROR_CHARS else flat[:ERROR_CHARS - 1] + "…"
+
+
+def describe(exc):
+    status = getattr(exc, "http_status", None)
+    if status is not None and hasattr(exc, "context"):  # crowdin-api-client's errors
+        from session_ops.crowdin import sdk
+        return f"Crowdin {status}: {sdk.error_message(exc)}"
+    return f"{type(exc).__name__}: {exc}"
 
 
 def alert_message(job, host, current_step, error, outcome, role_id=None):
     mention = f"<@&{role_id}> " if role_id else ""
     if error:
-        lines = [f"{mention}❌ **{job.name}** failed on `{host}` during **{current_step}**.",
-                 f"> {error}"]
+        during = f" during **{current_step}**" if current_step else ""
+        lines = [f"{mention}❌ **{job.name}** failed on `{host}`{during}.", f"> {error}"]
     else:
         failed = len(outcome.failures())
         lines = [f"{mention}❌ **{job.name}** on `{host}`: {failed} of "
@@ -137,7 +147,7 @@ def _invoke(function, argv):
                                   else f"exited {exc.code}")
     except Exception as exc:  # the job's failure is the run's to report
         traceback.print_exc()
-        return None, one_sentence(f"{type(exc).__name__}: {exc}")
+        return None, one_sentence(describe(exc))
 
 
 def call(job, argv):
@@ -150,7 +160,7 @@ def call(job, argv):
 def run(job, dry_run=False, extra=()):
     """Run `job` and report its failure. Returns the process exit code."""
     global _step
-    _step = "starting"
+    _step = None
     state_dir = os.environ.get("STATE_DIRECTORY", "").split(":")[0] or job.state_dir
     missing = [name for name in job.env if not os.environ.get(name)]
     work = tempfile.mkdtemp(prefix=f"{job.name}-")

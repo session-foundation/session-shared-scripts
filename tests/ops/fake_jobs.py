@@ -24,3 +24,7 @@ def partial(argv):
 
 def optional_failure(argv):
     return Outcome(targets={"resolver": "500", "digest": None}, optional=frozenset({"resolver"}))
+
+
+def exits_with_a_pretty_printed_body(argv):
+    raise SystemExit("GitHub 401 on /orgs: {\n  \"message\": \"Bad credentials\"\n}")

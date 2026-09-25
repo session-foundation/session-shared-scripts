@@ -47,8 +47,21 @@ RELOGIN = ("runuser -u zendesk -- env HOME=/home/zendesk "
 EXCERPT_CHARS = 400
 
 
-def journal_tail(unit, lines=25):
+def unit_property(unit, name):
+    """A property of `unit` as systemd has it, or "" when it cannot be asked."""
+    try:
+        done = subprocess.run(["systemctl", "show", "-p", name, "--value", unit],
+                              capture_output=True, text=True, timeout=15, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return done.stdout.strip()
+
+
+def journal_tail(unit, lines=25, invocation=None):
     """The last lines `unit` logged, or "" when the journal cannot be read.
+
+    `invocation` keeps it to the run that failed: a run killed before it logged
+    anything would otherwise be quoted with the previous run's last line.
 
     Never raises: an excerpt improves the message, it is not a precondition for
     sending one, and the alert is the last thing that should fail here.
@@ -56,7 +69,8 @@ def journal_tail(unit, lines=25):
     # _SYSTEMD_UNIT= rather than -u: -u also returns PID 1's lines about the unit
     # ("<unit>: Failed with result 'exit-code'."), which say it failed but never why.
     try:
-        done = subprocess.run(["journalctl", f"_SYSTEMD_UNIT={unit}", "-n", str(lines),
+        match = [f"_SYSTEMD_INVOCATION_ID={invocation}"] if invocation else []
+        done = subprocess.run(["journalctl", f"_SYSTEMD_UNIT={unit}", *match, "-n", str(lines),
                                "--no-pager", "-q", "-o", "cat"],
                               capture_output=True, text=True, timeout=15, check=False)
     except (OSError, subprocess.TimeoutExpired):
@@ -79,7 +93,12 @@ def is_auth_failure(line):
             and any(signature in line for signature in AUTH_SIGNATURES))
 
 
-def build_message(unit, host, journal_unit=None, detail=""):
+RESULTS = {"timeout": "timed out", "signal": "was killed", "core-dump": "crashed",
+           "oom-kill": "ran out of memory", "exit-code": "exited with an error",
+           "watchdog": "stopped answering its watchdog"}
+
+
+def build_message(unit, host, journal_unit=None, detail="", result=""):
     """What the channel gets: what broke, where, what it said, and where to look.
 
     The journalctl line stays even when the excerpt is there — one line is rarely the
@@ -90,7 +109,8 @@ def build_message(unit, host, journal_unit=None, detail=""):
     would send whoever reads it to a unit systemd has never heard of.
     """
     origin = f", as part of {journal_unit}" if journal_unit else ""
-    parts = [f"❌ **{unit}** failed on `{host}`{origin}."]
+    how = f" ({RESULTS.get(result, result)})" if result else ""
+    parts = [f"❌ **{unit}** failed on `{host}`{origin}{how}."]
     if detail:
         parts.append(f"> {detail}")
     if is_auth_failure(detail):
@@ -109,11 +129,9 @@ def already_alerted(unit, state_root="/var/lib/session-ops"):
     try:
         with open(os.path.join(state_root, job.group(1), "alerted"), encoding="utf-8") as fh:
             marker = fh.read().strip()
-        done = subprocess.run(["systemctl", "show", "-p", "InvocationID", "--value", unit],
-                              capture_output=True, text=True, timeout=15, check=False)
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError:
         return False
-    return bool(marker) and marker == done.stdout.strip()
+    return bool(marker) and marker == unit_property(unit, "InvocationID")
 
 
 def main(argv=None):
@@ -125,8 +143,10 @@ def main(argv=None):
         return
     webhook = (os.environ.get("ALERT_DISCORD_WEBHOOK_URL")
                or triage.get_env("ZENDESK_DISCORD_WEBHOOK_URL"))
-    detail = last_job_line(journal_tail(args[-1]))
-    message = build_message(args[0], socket.gethostname(), *args[1:], detail=detail)
+    invocation = unit_property(args[-1], "InvocationID") or None
+    detail = last_job_line(journal_tail(args[-1], invocation=invocation))
+    message = build_message(args[0], socket.gethostname(), *args[1:], detail=detail,
+                            result=unit_property(args[-1], "Result"))
     role = os.environ.get("ALERT_DISCORD_ROLE_ID")
     payload = {"content": f"<@&{role}> {message}" if role else message,
                "allowed_mentions": {"roles": [role]} if role else {"parse": []}}
