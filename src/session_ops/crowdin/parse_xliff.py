@@ -523,7 +523,7 @@ def parse_all_xliff_files(input_directory: str, skip_validation: bool = False) -
     return parsed_data, validation_result
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description='Parse XLIFF translation files into an intermediate JSON format'
     )
@@ -549,7 +549,7 @@ def main():
         '--validation-report',
         help='Path to save validation report JSON file'
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     try:
         parsed_data, validation_result = parse_all_xliff_files(
@@ -592,7 +592,8 @@ def main():
         if args.error_on_validation_failure and validation_result.has_errors():
             print(f"{Fore.RED}❌ Exiting with error due to validation failures{
                   Style.RESET_ALL}")
-            sys.exit(1)
+            sys.exit(f"{validation_result.get_error_count()} translation(s) failed "
+                     f"validation; see the validation report")
 
     except KeyboardInterrupt:
         print("\nProcess interrupted by user")
@@ -600,7 +601,7 @@ def main():
     except Exception as e:
         print(f"\033[2K{Fore.RED}❌ An error occurred: {
               str(e)}{Style.RESET_ALL}")
-        sys.exit(1)
+        sys.exit(f"Parsing the translations failed: {e}")
 
 
 if __name__ == "__main__":

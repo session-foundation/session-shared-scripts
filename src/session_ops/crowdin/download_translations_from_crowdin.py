@@ -151,7 +151,8 @@ def download():
         print(f"\033[2K{Fore.RED}❌ {len(failed_languages)} downloads failed:{Style.RESET_ALL}")
         for locale, error in failed_languages:
             print(f"  - {locale}: {error}")
-        sys.exit(1)
+        sys.exit(f"{len(failed_languages)} of {total_count} downloads failed, "
+                 f"first {failed_languages[0][0]}: {failed_languages[0][1]}")
     else:
         print(f"\033[2K{Fore.GREEN}✅ Downloaded {total_count} translations complete{Style.RESET_ALL}")
 
@@ -183,7 +184,7 @@ def main(argv=None, session=None):
         sys.exit(0)
     except Exception as e:
         print(f"\033[2K{Fore.RED}❌ An error occurred: {e}{Style.RESET_ALL}")
-        sys.exit(1)
+        sys.exit(f"Download failed: {e}")
 
 
 if __name__ == "__main__":

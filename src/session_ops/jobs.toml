@@ -73,3 +73,40 @@ env = ["ALERT_DISCORD_WEBHOOK_URL"]
 schedule = "hourly"
 max_age_hours = 3
 timeout = "5min"
+
+[[job]]
+name = "crowdin-sync"
+description = "Crowdin translations into the platform repos"
+entry = "session_ops.crowdin.sync:main"
+args = ["--runs", "{state}/runs"]
+user = "publisher"
+env_files = ["/etc/session-ops/crowdin.env", "/etc/session-ops/publish.env"]
+env = ["CROWDIN_API_TOKEN", "PUBLISH_GIT_AUTHOR"]
+channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
+schedule = "Mon 10:00 Australia/Melbourne"
+max_age_hours = 176
+timeout = "1h"
+# Readable by this unit alone, at $CREDENTIALS_DIRECTORY; empty when no App is set up.
+unit = ["LoadCredential=github-app.pem:/etc/session-ops/github-app.pem"]
+
+[[job]]
+name = "snode-list"
+description = "Fallback service node list into session-ios"
+entry = "session_ops.platforms.snode_list:main"
+user = "publisher"
+env_files = ["/etc/session-ops/publish.env"]
+env = ["PUBLISH_GIT_AUTHOR"]
+# Half an hour after session-desktop-dynamic-assets updates the list, at 10:00 UTC.
+schedule = "*-*-* 10:30 UTC"
+max_age_hours = 28
+timeout = "10min"
+unit = ["LoadCredential=github-app.pem:/etc/session-ops/github-app.pem"]
+
+[[job]]
+name = "release-stats"
+description = "Download counts of the latest Desktop and Android releases"
+entry = "session_ops.platforms.release_stats:main"
+args = ["--out", "{state}/runs"]
+user = "sessionops"
+env_files = ["/etc/session-ops/alerts.env"]
+timeout = "5min"

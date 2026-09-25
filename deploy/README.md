@@ -280,6 +280,41 @@ CROWDIN_WEBHOOK_SECRET=
 #CROWDIN_RELAY_DRY_RUN=1
 ```
 
+### `/etc/session-ops/publish.env`
+
+What the jobs that push to the platform repos read: `crowdin-sync` and `snode-list`.
+
+```sh
+# The commits' author, "Name <email>".
+PUBLISH_GIT_AUTHOR=
+
+# A GitHub App, once one exists: its key goes in /etc/session-ops/github-app.pem, and
+# each run mints a one-hour token for just the repositories it pushes to.
+#GITHUB_APP_ID=
+
+# Until then, a token that can push branches and open pull requests on session-android,
+# session-ios and session-localization: what the workflows used as CROWDIN_PR_TOKEN.
+GITHUB_PUBLISH_TOKEN=
+
+# Where their failures go.
+ALERT_DISCORD_WEBHOOK_URL=
+```
+
+#### The GitHub App
+
+Organisation settings → Developer settings → GitHub Apps → New. No webhook; repository
+permissions *Contents* and *Pull requests*, read and write; nothing else. Install it on
+session-android, session-ios and session-localization only, generate a private key, then:
+
+```bash
+install -m 600 /dev/stdin /etc/session-ops/github-app.pem < downloaded-key.pem
+"${EDITOR:-nano}" /etc/session-ops/publish.env    # GITHUB_APP_ID=, and drop the token
+```
+
+The key never reaches the job's account: `LoadCredential=` hands the unit a copy only it
+can read. Pull requests then show as the App rather than as a person, and a leaked token
+is worthless within the hour.
+
 ## Verifying, in order
 
 **1. Locally, before Zendesk knows the address.** An unsigned request must be refused:

@@ -1,0 +1,3505 @@
+{
+ "snapshot": "2026-09-25",
+ "exchanges": [
+  {
+   "method": "GET",
+   "url": "https://api.github.com/repos/session-foundation/session-desktop/releases",
+   "params": null,
+   "response": {
+    "status": 200,
+    "json": [
+     {
+      "tag_name": "v1.18.1",
+      "published_at": "2026-07-10T01:54:35Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 45618
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 70681
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 322233
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.18.1.deb",
+        "download_count": 5261
+       },
+       {
+        "name": "session-desktop-linux-x64-1.18.1.freebsd",
+        "download_count": 310
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.18.1.AppImage",
+        "download_count": 24620
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.18.1.rpm",
+        "download_count": 497
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.18.1.dmg",
+        "download_count": 47092
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.18.1.dmg.blockmap",
+        "download_count": 296
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.18.1.zip",
+        "download_count": 5668
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.18.1.zip.blockmap",
+        "download_count": 3448
+       },
+       {
+        "name": "session-desktop-mac-x64-1.18.1.dmg",
+        "download_count": 28576
+       },
+       {
+        "name": "session-desktop-mac-x64-1.18.1.dmg.blockmap",
+        "download_count": 289
+       },
+       {
+        "name": "session-desktop-mac-x64-1.18.1.zip",
+        "download_count": 1258
+       },
+       {
+        "name": "session-desktop-mac-x64-1.18.1.zip.blockmap",
+        "download_count": 854
+       },
+       {
+        "name": "session-desktop-win-x64-1.18.1.exe",
+        "download_count": 188815
+       },
+       {
+        "name": "session-desktop-win-x64-1.18.1.exe.blockmap",
+        "download_count": 65393
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 1029
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.18.0",
+      "published_at": "2026-04-09T03:44:44Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 51883
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 77385
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 384952
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.18.0.deb",
+        "download_count": 5122
+       },
+       {
+        "name": "session-desktop-linux-x64-1.18.0.freebsd",
+        "download_count": 335
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.18.0.AppImage",
+        "download_count": 28495
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.18.0.rpm",
+        "download_count": 472
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.18.0.dmg",
+        "download_count": 54948
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.18.0.dmg.blockmap",
+        "download_count": 299
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.18.0.zip",
+        "download_count": 6505
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.18.0.zip.blockmap",
+        "download_count": 7383
+       },
+       {
+        "name": "session-desktop-mac-x64-1.18.0.dmg",
+        "download_count": 34746
+       },
+       {
+        "name": "session-desktop-mac-x64-1.18.0.dmg.blockmap",
+        "download_count": 298
+       },
+       {
+        "name": "session-desktop-mac-x64-1.18.0.zip",
+        "download_count": 1582
+       },
+       {
+        "name": "session-desktop-mac-x64-1.18.0.zip.blockmap",
+        "download_count": 1603
+       },
+       {
+        "name": "session-desktop-win-x64-1.18.0.exe",
+        "download_count": 217882
+       },
+       {
+        "name": "session-desktop-win-x64-1.18.0.exe.blockmap",
+        "download_count": 116677
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 569
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.17.17",
+      "published_at": "2026-03-31T03:07:04Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 12559
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 15456
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 83288
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.17.17.deb",
+        "download_count": 1125
+       },
+       {
+        "name": "session-desktop-linux-x64-1.17.17.freebsd",
+        "download_count": 38
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.17.AppImage",
+        "download_count": 4982
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.17.rpm",
+        "download_count": 58
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.17.dmg",
+        "download_count": 6176
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.17.dmg.blockmap",
+        "download_count": 38
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.17.zip",
+        "download_count": 3070
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.17.zip.blockmap",
+        "download_count": 4862
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.17.dmg",
+        "download_count": 3715
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.17.dmg.blockmap",
+        "download_count": 33
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.17.zip",
+        "download_count": 600
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.17.zip.blockmap",
+        "download_count": 913
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.17.exe",
+        "download_count": 42970
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.17.exe.blockmap",
+        "download_count": 49966
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 98
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.17.16",
+      "published_at": "2026-03-26T03:40:04Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 9434
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 9954
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 52101
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.17.16.deb",
+        "download_count": 2555
+       },
+       {
+        "name": "session-desktop-linux-x64-1.17.16.freebsd",
+        "download_count": 24
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.16.AppImage",
+        "download_count": 3045
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.16.rpm",
+        "download_count": 51
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.16.dmg",
+        "download_count": 3358
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.16.dmg.blockmap",
+        "download_count": 32
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.16.zip",
+        "download_count": 2419
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.16.zip.blockmap",
+        "download_count": 3980
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.16.dmg",
+        "download_count": 2057
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.16.dmg.blockmap",
+        "download_count": 30
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.16.zip",
+        "download_count": 479
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.16.zip.blockmap",
+        "download_count": 745
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.16.exe",
+        "download_count": 29179
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.16.exe.blockmap",
+        "download_count": 38134
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 66
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.17.15",
+      "published_at": "2026-03-19T15:00:39Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 2921
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 4139
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 21946
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.17.15.deb",
+        "download_count": 431
+       },
+       {
+        "name": "session-desktop-linux-x64-1.17.15.freebsd",
+        "download_count": 11
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.15.AppImage",
+        "download_count": 1104
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.15.rpm",
+        "download_count": 15
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.15.dmg",
+        "download_count": 1185
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.15.dmg.blockmap",
+        "download_count": 14
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.15.zip",
+        "download_count": 903
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.15.zip.blockmap",
+        "download_count": 3005
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.15.dmg",
+        "download_count": 443
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.15.dmg.blockmap",
+        "download_count": 10
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.15.zip",
+        "download_count": 195
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.15.zip.blockmap",
+        "download_count": 539
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.15.exe",
+        "download_count": 11288
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.15.exe.blockmap",
+        "download_count": 28999
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 19
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.17.14",
+      "published_at": "2026-03-13T04:12:43Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 2943
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 3997
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 21395
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.17.14.deb",
+        "download_count": 355
+       },
+       {
+        "name": "session-desktop-linux-x64-1.17.14.freebsd",
+        "download_count": 29
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.14.AppImage",
+        "download_count": 1046
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.14.rpm",
+        "download_count": 42
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.14.dmg",
+        "download_count": 888
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.14.dmg.blockmap",
+        "download_count": 14
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.14.zip",
+        "download_count": 972
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.14.zip.blockmap",
+        "download_count": 1844
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.14.dmg",
+        "download_count": 268
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.14.dmg.blockmap",
+        "download_count": 13
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.14.zip",
+        "download_count": 205
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.14.zip.blockmap",
+        "download_count": 382
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.14.exe",
+        "download_count": 10771
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.14.exe.blockmap",
+        "download_count": 20557
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 18
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.17.13",
+      "published_at": "2026-03-12T23:30:41Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 574
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 760
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 1892
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.17.13.deb",
+        "download_count": 127
+       },
+       {
+        "name": "session-desktop-linux-x64-1.17.13.freebsd",
+        "download_count": 5
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.13.AppImage",
+        "download_count": 202
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.13.rpm",
+        "download_count": 11
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.13.dmg",
+        "download_count": 71
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.13.dmg.blockmap",
+        "download_count": 12
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.13.zip",
+        "download_count": 435
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.13.zip.blockmap",
+        "download_count": 709
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.13.dmg",
+        "download_count": 41
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.13.dmg.blockmap",
+        "download_count": 9
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.13.zip",
+        "download_count": 75
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.13.zip.blockmap",
+        "download_count": 102
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.13.exe",
+        "download_count": 2285
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.13.exe.blockmap",
+        "download_count": 3531
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 7
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.17.12",
+      "published_at": "2026-02-24T04:06:13Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 13459
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 19426
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 102619
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.17.12.deb",
+        "download_count": 1770
+       },
+       {
+        "name": "session-desktop-linux-x64-1.17.12.freebsd",
+        "download_count": 52
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.12.AppImage",
+        "download_count": 6430
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.12.rpm",
+        "download_count": 89
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.12.dmg",
+        "download_count": 8290
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.12.dmg.blockmap",
+        "download_count": 66
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.12.zip",
+        "download_count": 3277
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.12.zip.blockmap",
+        "download_count": 4148
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.12.dmg",
+        "download_count": 4919
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.12.dmg.blockmap",
+        "download_count": 59
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.12.zip",
+        "download_count": 719
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.12.zip.blockmap",
+        "download_count": 900
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.12.exe",
+        "download_count": 53496
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.12.exe.blockmap",
+        "download_count": 51457
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 109
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.17.11",
+      "published_at": "2026-02-23T22:42:12Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 832
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 1174
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 3960
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.17.11.deb",
+        "download_count": 132
+       },
+       {
+        "name": "session-desktop-linux-x64-1.17.11.freebsd",
+        "download_count": 12
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.11.AppImage",
+        "download_count": 390
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.11.rpm",
+        "download_count": 23
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.11.dmg",
+        "download_count": 212
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.11.dmg.blockmap",
+        "download_count": 19
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.11.zip",
+        "download_count": 703
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.11.zip.blockmap",
+        "download_count": 1248
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.11.dmg",
+        "download_count": 124
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.11.dmg.blockmap",
+        "download_count": 19
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.11.zip",
+        "download_count": 117
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.11.zip.blockmap",
+        "download_count": 180
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.11.exe",
+        "download_count": 3885
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.11.exe.blockmap",
+        "download_count": 6348
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 18
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.17.10",
+      "published_at": "2026-02-19T14:50:56Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 10286
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 8653
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 44807
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.17.10.deb",
+        "download_count": 1151
+       },
+       {
+        "name": "session-desktop-linux-x64-1.17.10.freebsd",
+        "download_count": 31
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.10.AppImage",
+        "download_count": 3211
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.10.rpm",
+        "download_count": 55
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.10.dmg",
+        "download_count": 3166
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.10.dmg.blockmap",
+        "download_count": 26
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.10.zip",
+        "download_count": 2001
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.10.zip.blockmap",
+        "download_count": 3144
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.10.dmg",
+        "download_count": 1838
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.10.dmg.blockmap",
+        "download_count": 23
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.10.zip",
+        "download_count": 463
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.10.zip.blockmap",
+        "download_count": 694
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.10.exe",
+        "download_count": 26267
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.10.exe.blockmap",
+        "download_count": 33673
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 64
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.17.9",
+      "published_at": "2026-02-19T00:42:46Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 467
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 862
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 1712
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.17.9.deb",
+        "download_count": 117
+       },
+       {
+        "name": "session-desktop-linux-x64-1.17.9.freebsd",
+        "download_count": 7
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.9.AppImage",
+        "download_count": 258
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.9.rpm",
+        "download_count": 12
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.9.dmg",
+        "download_count": 208
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.9.dmg.blockmap",
+        "download_count": 10
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.9.zip",
+        "download_count": 727
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.9.zip.blockmap",
+        "download_count": 669
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.9.dmg",
+        "download_count": 91
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.9.dmg.blockmap",
+        "download_count": 10
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.9.zip",
+        "download_count": 109
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.9.zip.blockmap",
+        "download_count": 94
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.9.exe",
+        "download_count": 2998
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.9.exe.blockmap",
+        "download_count": 4767
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 10
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.17.8",
+      "published_at": "2026-02-01T14:26:28Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 26340
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 24419
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 131194
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.17.8.deb",
+        "download_count": 2168
+       },
+       {
+        "name": "session-desktop-linux-x64-1.17.8.freebsd",
+        "download_count": 81
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.8.AppImage",
+        "download_count": 9114
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.8.rpm",
+        "download_count": 134
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.8.dmg",
+        "download_count": 11274
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.8.dmg.blockmap",
+        "download_count": 75
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.8.zip",
+        "download_count": 4028
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.8.zip.blockmap",
+        "download_count": 5972
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.8.dmg",
+        "download_count": 7174
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.8.dmg.blockmap",
+        "download_count": 68
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.8.zip",
+        "download_count": 938
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.8.zip.blockmap",
+        "download_count": 1263
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.8.exe",
+        "download_count": 67025
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.8.exe.blockmap",
+        "download_count": 65846
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 182
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.17.7",
+      "published_at": "2026-01-23T06:22:54Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 15543
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 15164
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 79630
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.17.7.deb",
+        "download_count": 1452
+       },
+       {
+        "name": "session-desktop-linux-x64-1.17.7.freebsd",
+        "download_count": 48
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.7.AppImage",
+        "download_count": 4927
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.7.rpm",
+        "download_count": 81
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.7.dmg",
+        "download_count": 5753
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.7.dmg.blockmap",
+        "download_count": 52
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.7.zip",
+        "download_count": 3149
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.7.zip.blockmap",
+        "download_count": 4892
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.7.dmg",
+        "download_count": 3715
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.7.dmg.blockmap",
+        "download_count": 45
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.7.zip",
+        "download_count": 680
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.7.zip.blockmap",
+        "download_count": 981
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.7.exe",
+        "download_count": 41011
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.7.exe.blockmap",
+        "download_count": 50132
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 98
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.17.6",
+      "published_at": "2026-01-07T23:42:30Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 17635
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 21888
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 114129
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.17.6.deb",
+        "download_count": 2864
+       },
+       {
+        "name": "session-desktop-linux-x64-1.17.6.freebsd",
+        "download_count": 72
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.6.AppImage",
+        "download_count": 6633
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.6.rpm",
+        "download_count": 111
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.6.dmg",
+        "download_count": 9004
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.6.dmg.blockmap",
+        "download_count": 79
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.6.zip",
+        "download_count": 3846
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.6.zip.blockmap",
+        "download_count": 5592
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.6.dmg",
+        "download_count": 5946
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.6.dmg.blockmap",
+        "download_count": 73
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.6.zip",
+        "download_count": 895
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.6.zip.blockmap",
+        "download_count": 1189
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.6.exe",
+        "download_count": 56340
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.6.exe.blockmap",
+        "download_count": 62865
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 152
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.17.5",
+      "published_at": "2025-12-17T00:49:16Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 21063
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 26486
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 131746
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.17.5.deb",
+        "download_count": 1827
+       },
+       {
+        "name": "session-desktop-linux-x64-1.17.5.freebsd",
+        "download_count": 99
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.5.AppImage",
+        "download_count": 8559
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.5.rpm",
+        "download_count": 133
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.5.dmg",
+        "download_count": 12739
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.5.dmg.blockmap",
+        "download_count": 99
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.5.zip",
+        "download_count": 3988
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.5.zip.blockmap",
+        "download_count": 6026
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.5.dmg",
+        "download_count": 8562
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.5.dmg.blockmap",
+        "download_count": 87
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.5.zip",
+        "download_count": 1020
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.5.zip.blockmap",
+        "download_count": 1361
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.5.exe",
+        "download_count": 70390
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.5.exe.blockmap",
+        "download_count": 69388
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 226
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.17.4",
+      "published_at": "2025-12-10T22:32:21Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 9374
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 11043
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 54431
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.17.4.deb",
+        "download_count": 2153
+       },
+       {
+        "name": "session-desktop-linux-x64-1.17.4.freebsd",
+        "download_count": 34
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.4.AppImage",
+        "download_count": 3273
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.4.rpm",
+        "download_count": 65
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.4.dmg",
+        "download_count": 3777
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.4.dmg.blockmap",
+        "download_count": 42
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.4.zip",
+        "download_count": 2662
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.4.zip.blockmap",
+        "download_count": 4196
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.4.dmg",
+        "download_count": 2438
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.4.dmg.blockmap",
+        "download_count": 41
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.4.zip",
+        "download_count": 595
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.4.zip.blockmap",
+        "download_count": 906
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.4.exe",
+        "download_count": 30342
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.4.exe.blockmap",
+        "download_count": 39806
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 77
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.17.3",
+      "published_at": "2025-11-27T04:29:18Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 13978
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 18771
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 92225
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.17.3.deb",
+        "download_count": 1936
+       },
+       {
+        "name": "session-desktop-linux-x64-1.17.3.freebsd",
+        "download_count": 71
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.3.AppImage",
+        "download_count": 6293
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.3.rpm",
+        "download_count": 92
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.3.dmg",
+        "download_count": 8406
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.3.dmg.blockmap",
+        "download_count": 61
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.3.zip",
+        "download_count": 3469
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.3.zip.blockmap",
+        "download_count": 5220
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.3.dmg",
+        "download_count": 5476
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.3.dmg.blockmap",
+        "download_count": 51
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.3.zip",
+        "download_count": 837
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.3.zip.blockmap",
+        "download_count": 1162
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.3.exe",
+        "download_count": 52393
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.3.exe.blockmap",
+        "download_count": 60691
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 132
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.17.2",
+      "published_at": "2025-11-02T23:28:10Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 17550
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 27761
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 126430
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.17.2.deb",
+        "download_count": 2627
+       },
+       {
+        "name": "session-desktop-linux-x64-1.17.2.freebsd",
+        "download_count": 103
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.2.AppImage",
+        "download_count": 9237
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.2.rpm",
+        "download_count": 142
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.2.dmg",
+        "download_count": 13860
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.2.dmg.blockmap",
+        "download_count": 87
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.2.zip",
+        "download_count": 4069
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.2.zip.blockmap",
+        "download_count": 5700
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.2.dmg",
+        "download_count": 9431
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.2.dmg.blockmap",
+        "download_count": 82
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.2.zip",
+        "download_count": 1104
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.2.zip.blockmap",
+        "download_count": 1402
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.2.exe",
+        "download_count": 73920
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.2.exe.blockmap",
+        "download_count": 72551
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 221
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.17.1",
+      "published_at": "2025-10-03T16:33:37Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 17219
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 28426
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 129223
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.17.1.deb",
+        "download_count": 2416
+       },
+       {
+        "name": "session-desktop-linux-x64-1.17.1.freebsd",
+        "download_count": 109
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.1.AppImage",
+        "download_count": 11813
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.1.rpm",
+        "download_count": 158
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.1.dmg",
+        "download_count": 12872
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.1.dmg.blockmap",
+        "download_count": 105
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.1.zip",
+        "download_count": 4166
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.1.zip.blockmap",
+        "download_count": 6039
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.1.dmg",
+        "download_count": 7564
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.1.dmg.blockmap",
+        "download_count": 102
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.1.zip",
+        "download_count": 1317
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.1.zip.blockmap",
+        "download_count": 1577
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.1.exe",
+        "download_count": 79760
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.1.exe.blockmap",
+        "download_count": 72625
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 286
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.17.0",
+      "published_at": "2025-10-02T23:37:57Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 1582
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 1971
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 5705
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.17.0.deb",
+        "download_count": 43
+       },
+       {
+        "name": "session-desktop-linux-x64-1.17.0.freebsd",
+        "download_count": 15
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.0.AppImage",
+        "download_count": 319
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.17.0.rpm",
+        "download_count": 23
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.0.dmg",
+        "download_count": 210
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.0.dmg.blockmap",
+        "download_count": 13
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.0.zip",
+        "download_count": 1101
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.17.0.zip.blockmap",
+        "download_count": 1851
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.0.dmg",
+        "download_count": 122
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.0.dmg.blockmap",
+        "download_count": 11
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.0.zip",
+        "download_count": 272
+       },
+       {
+        "name": "session-desktop-mac-x64-1.17.0.zip.blockmap",
+        "download_count": 403
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.0.exe",
+        "download_count": 5130
+       },
+       {
+        "name": "session-desktop-win-x64-1.17.0.exe.blockmap",
+        "download_count": 8342
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 18
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.16.10",
+      "published_at": "2025-09-19T16:39:36Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 15826
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 19847
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 85267
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.16.10.deb",
+        "download_count": 1744
+       },
+       {
+        "name": "session-desktop-linux-x64-1.16.10.freebsd",
+        "download_count": 59
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.10.AppImage",
+        "download_count": 6632
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.10.rpm",
+        "download_count": 90
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.10.dmg",
+        "download_count": 4148
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.10.dmg.blockmap",
+        "download_count": 52
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.10.zip",
+        "download_count": 3263
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.10.zip.blockmap",
+        "download_count": 4976
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.10.dmg",
+        "download_count": 1546
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.10.dmg.blockmap",
+        "download_count": 51
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.10.zip",
+        "download_count": 1034
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.10.zip.blockmap",
+        "download_count": 1543
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.10.exe",
+        "download_count": 42915
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.10.exe.blockmap",
+        "download_count": 44638
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 121
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.16.9",
+      "published_at": "2025-09-19T05:56:41Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 260
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 508
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 982
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.16.9.deb",
+        "download_count": 88
+       },
+       {
+        "name": "session-desktop-linux-x64-1.16.9.freebsd",
+        "download_count": 9
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.9.AppImage",
+        "download_count": 167
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.9.rpm",
+        "download_count": 12
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.9.dmg",
+        "download_count": 27
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.9.dmg.blockmap",
+        "download_count": 8
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.9.zip",
+        "download_count": 482
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.9.zip.blockmap",
+        "download_count": 830
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.9.dmg",
+        "download_count": 28
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.9.dmg.blockmap",
+        "download_count": 10
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.9.zip",
+        "download_count": 121
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.9.zip.blockmap",
+        "download_count": 199
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.9.exe",
+        "download_count": 2290
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.9.exe.blockmap",
+        "download_count": 3142
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 8
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.16.8",
+      "published_at": "2025-09-09T03:24:07Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 18309
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 25882
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 84420
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.16.8.deb",
+        "download_count": 1664
+       },
+       {
+        "name": "session-desktop-linux-x64-1.16.8.freebsd",
+        "download_count": 42
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.8.AppImage",
+        "download_count": 5268
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.8.rpm",
+        "download_count": 73
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.8.dmg",
+        "download_count": 3289
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.8.dmg.blockmap",
+        "download_count": 47
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.8.zip",
+        "download_count": 2989
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.8.zip.blockmap",
+        "download_count": 4574
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.8.dmg",
+        "download_count": 1354
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.8.dmg.blockmap",
+        "download_count": 38
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.8.zip",
+        "download_count": 967
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.8.zip.blockmap",
+        "download_count": 1445
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.8.exe",
+        "download_count": 36503
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.8.exe.blockmap",
+        "download_count": 40597
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 89
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.16.7",
+      "published_at": "2025-09-05T05:00:49Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 5812
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 7112
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 31664
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.16.7.deb",
+        "download_count": 1419
+       },
+       {
+        "name": "session-desktop-linux-x64-1.16.7.freebsd",
+        "download_count": 34
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.7.AppImage",
+        "download_count": 2498
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.7.rpm",
+        "download_count": 44
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.7.dmg",
+        "download_count": 1370
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.7.dmg.blockmap",
+        "download_count": 18
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.7.zip",
+        "download_count": 2183
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.7.zip.blockmap",
+        "download_count": 3457
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.7.dmg",
+        "download_count": 480
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.7.dmg.blockmap",
+        "download_count": 18
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.7.zip",
+        "download_count": 710
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.7.zip.blockmap",
+        "download_count": 1094
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.7.exe",
+        "download_count": 20100
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.7.exe.blockmap",
+        "download_count": 26791
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 49
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.16.6",
+      "published_at": "2025-08-14T05:27:42Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 15601
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 19817
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 95001
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.16.6.deb",
+        "download_count": 1922
+       },
+       {
+        "name": "session-desktop-linux-x64-1.16.6.freebsd",
+        "download_count": 86
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.6.AppImage",
+        "download_count": 9274
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.6.rpm",
+        "download_count": 121
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.6.dmg",
+        "download_count": 6263
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.6.dmg.blockmap",
+        "download_count": 82
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.6.zip",
+        "download_count": 3809
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.6.zip.blockmap",
+        "download_count": 5116
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.6.dmg",
+        "download_count": 2622
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.6.dmg.blockmap",
+        "download_count": 74
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.6.zip",
+        "download_count": 1377
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.6.zip.blockmap",
+        "download_count": 1728
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.6.exe",
+        "download_count": 61347
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.6.exe.blockmap",
+        "download_count": 55587
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 194
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.16.5",
+      "published_at": "2025-07-22T04:02:28Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 15243
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 19570
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 103069
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.16.5.deb",
+        "download_count": 2175
+       },
+       {
+        "name": "session-desktop-linux-x64-1.16.5.freebsd",
+        "download_count": 93
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.5.AppImage",
+        "download_count": 9101
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.5.rpm",
+        "download_count": 104
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.5.dmg",
+        "download_count": 6080
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.5.dmg.blockmap",
+        "download_count": 80
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.5.zip",
+        "download_count": 3595
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.5.zip.blockmap",
+        "download_count": 4875
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.5.dmg",
+        "download_count": 2560
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.5.dmg.blockmap",
+        "download_count": 75
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.5.zip",
+        "download_count": 1321
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.5.zip.blockmap",
+        "download_count": 1727
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.5.exe",
+        "download_count": 60951
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.5.exe.blockmap",
+        "download_count": 54560
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 170
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.16.4",
+      "published_at": "2025-07-18T01:34:26Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 683
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 1141
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 2827
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.16.4.deb",
+        "download_count": 174
+       },
+       {
+        "name": "session-desktop-linux-x64-1.16.4.freebsd",
+        "download_count": 23
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.4.AppImage",
+        "download_count": 337
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.4.rpm",
+        "download_count": 28
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.4.dmg",
+        "download_count": 188
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.4.dmg.blockmap",
+        "download_count": 21
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.4.zip",
+        "download_count": 759
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.4.zip.blockmap",
+        "download_count": 1260
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.4.dmg",
+        "download_count": 81
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.4.dmg.blockmap",
+        "download_count": 22
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.4.zip",
+        "download_count": 212
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.4.zip.blockmap",
+        "download_count": 339
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.4.exe",
+        "download_count": 3895
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.4.exe.blockmap",
+        "download_count": 5005
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 26
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.16.3",
+      "published_at": "2025-07-04T00:53:13Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 76646
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 116310
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 285710
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.16.3.deb",
+        "download_count": 2186
+       },
+       {
+        "name": "session-desktop-linux-x64-1.16.3.freebsd",
+        "download_count": 76
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.3.AppImage",
+        "download_count": 7017
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.3.rpm",
+        "download_count": 88
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.3.dmg",
+        "download_count": 4700
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.3.dmg.blockmap",
+        "download_count": 70
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.3.zip",
+        "download_count": 3044
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.3.zip.blockmap",
+        "download_count": 4158
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.3.dmg",
+        "download_count": 1905
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.3.dmg.blockmap",
+        "download_count": 60
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.3.zip",
+        "download_count": 1164
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.3.zip.blockmap",
+        "download_count": 1513
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.3.exe",
+        "download_count": 49412
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.3.exe.blockmap",
+        "download_count": 48456
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 154
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.16.2",
+      "published_at": "2025-06-05T23:37:48Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 14146
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 18501
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 104285
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.16.2.deb",
+        "download_count": 2036
+       },
+       {
+        "name": "session-desktop-linux-x64-1.16.2.freebsd",
+        "download_count": 116
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.2.AppImage",
+        "download_count": 9246
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.2.rpm",
+        "download_count": 156
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.2.dmg",
+        "download_count": 6616
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.2.dmg.blockmap",
+        "download_count": 109
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.2.zip",
+        "download_count": 3464
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.2.zip.blockmap",
+        "download_count": 4325
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.2.dmg",
+        "download_count": 2874
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.2.dmg.blockmap",
+        "download_count": 123
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.2.zip",
+        "download_count": 1384
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.2.zip.blockmap",
+        "download_count": 1614
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.2.exe",
+        "download_count": 65228
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.2.exe.blockmap",
+        "download_count": 55771
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 216
+       }
+      ]
+     },
+     {
+      "tag_name": "v1.16.1",
+      "published_at": "2025-05-23T21:25:08Z",
+      "assets": [
+       {
+        "name": "latest-linux.yml",
+        "download_count": 10465
+       },
+       {
+        "name": "latest-mac.yml",
+        "download_count": 10747
+       },
+       {
+        "name": "latest.yml",
+        "download_count": 62140
+       },
+       {
+        "name": "session-desktop-linux-amd64-1.16.1.deb",
+        "download_count": 1234
+       },
+       {
+        "name": "session-desktop-linux-x64-1.16.1.freebsd",
+        "download_count": 14
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.1.AppImage",
+        "download_count": 5078
+       },
+       {
+        "name": "session-desktop-linux-x86_64-1.16.1.rpm",
+        "download_count": 29
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.1.dmg",
+        "download_count": 3373
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.1.dmg.blockmap",
+        "download_count": 13
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.1.zip",
+        "download_count": 2567
+       },
+       {
+        "name": "session-desktop-mac-arm64-1.16.1.zip.blockmap",
+        "download_count": 3471
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.1.dmg",
+        "download_count": 1406
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.1.dmg.blockmap",
+        "download_count": 11
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.1.zip",
+        "download_count": 1019
+       },
+       {
+        "name": "session-desktop-mac-x64-1.16.1.zip.blockmap",
+        "download_count": 1298
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.1.exe",
+        "download_count": 38724
+       },
+       {
+        "name": "session-desktop-win-x64-1.16.1.exe.blockmap",
+        "download_count": 41321
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 90
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "method": "GET",
+   "url": "https://api.github.com/repos/session-foundation/session-android/releases",
+   "params": null,
+   "response": {
+    "status": 200,
+    "json": [
+     {
+      "tag_name": "1.33.5",
+      "published_at": "2026-07-13T14:17:23Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 2926
+       },
+       {
+        "name": "session-1.33.5-arm64-v8a-play-release.apk",
+        "download_count": 41656
+       },
+       {
+        "name": "session-1.33.5-armeabi-v7a-play-release.apk",
+        "download_count": 1118
+       },
+       {
+        "name": "session-1.33.5-universal-huawei-release.apk",
+        "download_count": 1342
+       },
+       {
+        "name": "session-1.33.5-universal-play-release.apk",
+        "download_count": 5732
+       },
+       {
+        "name": "session-1.33.5-x86-play-release.apk",
+        "download_count": 899
+       },
+       {
+        "name": "session-1.33.5-x86_64-play-release.apk",
+        "download_count": 896
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 137
+       }
+      ]
+     },
+     {
+      "tag_name": "1.33.4",
+      "published_at": "2026-04-09T04:16:41Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 4043
+       },
+       {
+        "name": "session-1.33.4-arm64-v8a-play-release.apk",
+        "download_count": 25862
+       },
+       {
+        "name": "session-1.33.4-armeabi-v7a-play-release.apk",
+        "download_count": 1612
+       },
+       {
+        "name": "session-1.33.4-universal-huawei-release.apk",
+        "download_count": 1878
+       },
+       {
+        "name": "session-1.33.4-universal-play-release.apk",
+        "download_count": 7040
+       },
+       {
+        "name": "session-1.33.4-x86-play-release.apk",
+        "download_count": 1454
+       },
+       {
+        "name": "session-1.33.4-x86_64-play-release.apk",
+        "download_count": 1418
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 192
+       }
+      ]
+     },
+     {
+      "tag_name": "1.33.3",
+      "published_at": "2026-04-08T05:19:16Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 96
+       },
+       {
+        "name": "session-1.33.3-arm64-v8a-play-release.apk",
+        "download_count": 1708
+       },
+       {
+        "name": "session-1.33.3-armeabi-v7a-play-release.apk",
+        "download_count": 52
+       },
+       {
+        "name": "session-1.33.3-universal-huawei-release.apk",
+        "download_count": 45
+       },
+       {
+        "name": "session-1.33.3-universal-play-release.apk",
+        "download_count": 186
+       },
+       {
+        "name": "session-1.33.3-x86-play-release.apk",
+        "download_count": 52
+       },
+       {
+        "name": "session-1.33.3-x86_64-play-release.apk",
+        "download_count": 51
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 22
+       }
+      ]
+     },
+     {
+      "tag_name": "1.33.2",
+      "published_at": "2026-04-07T22:26:26Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 34
+       },
+       {
+        "name": "session-1.33.2-arm64-v8a-play-release.apk",
+        "download_count": 746
+       },
+       {
+        "name": "session-1.33.2-armeabi-v7a-play-release.apk",
+        "download_count": 28
+       },
+       {
+        "name": "session-1.33.2-universal-huawei-release.apk",
+        "download_count": 24
+       },
+       {
+        "name": "session-1.33.2-universal-play-release.apk",
+        "download_count": 70
+       },
+       {
+        "name": "session-1.33.2-x86-play-release.apk",
+        "download_count": 16
+       },
+       {
+        "name": "session-1.33.2-x86_64-play-release.apk",
+        "download_count": 19
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 10
+       }
+      ]
+     },
+     {
+      "tag_name": "1.33.1",
+      "published_at": "2026-03-31T14:23:50Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 470
+       },
+       {
+        "name": "session-1.33.1-arm64-v8a-play-release.apk",
+        "download_count": 4339
+       },
+       {
+        "name": "session-1.33.1-armeabi-v7a-play-release.apk",
+        "download_count": 227
+       },
+       {
+        "name": "session-1.33.1-universal-huawei-release.apk",
+        "download_count": 172
+       },
+       {
+        "name": "session-1.33.1-universal-play-release.apk",
+        "download_count": 839
+       },
+       {
+        "name": "session-1.33.1-x86-play-release.apk",
+        "download_count": 180
+       },
+       {
+        "name": "session-1.33.1-x86_64-play-release.apk",
+        "download_count": 190
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 38
+       }
+      ]
+     },
+     {
+      "tag_name": "1.33.0",
+      "published_at": "2026-03-30T22:43:44Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 27
+       },
+       {
+        "name": "session-1.33.0-arm64-v8a-play-release.apk",
+        "download_count": 641
+       },
+       {
+        "name": "session-1.33.0-armeabi-v7a-play-release.apk",
+        "download_count": 34
+       },
+       {
+        "name": "session-1.33.0-universal-huawei-release.apk",
+        "download_count": 28
+       },
+       {
+        "name": "session-1.33.0-universal-play-release.apk",
+        "download_count": 68
+       },
+       {
+        "name": "session-1.33.0-x86-play-release.apk",
+        "download_count": 26
+       },
+       {
+        "name": "session-1.33.0-x86_64-play-release.apk",
+        "download_count": 22
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 13
+       }
+      ]
+     },
+     {
+      "tag_name": "1.32.2",
+      "published_at": "2026-03-19T21:38:57Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 390
+       },
+       {
+        "name": "session-1.32.2-arm64-v8a-play-release.apk",
+        "download_count": 5311
+       },
+       {
+        "name": "session-1.32.2-armeabi-v7a-play-release.apk",
+        "download_count": 172
+       },
+       {
+        "name": "session-1.32.2-universal-huawei-release.apk",
+        "download_count": 161
+       },
+       {
+        "name": "session-1.32.2-universal-play-release.apk",
+        "download_count": 716
+       },
+       {
+        "name": "session-1.32.2-x86-play-release.apk",
+        "download_count": 145
+       },
+       {
+        "name": "session-1.32.2-x86_64-play-release.apk",
+        "download_count": 142
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 22
+       }
+      ]
+     },
+     {
+      "tag_name": "1.32.1",
+      "published_at": "2026-02-26T03:26:07Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 704
+       },
+       {
+        "name": "session-1.32.1-arm64-v8a-play-release.apk",
+        "download_count": 6165
+       },
+       {
+        "name": "session-1.32.1-armeabi-v7a-play-release.apk",
+        "download_count": 289
+       },
+       {
+        "name": "session-1.32.1-universal-huawei-release.apk",
+        "download_count": 237
+       },
+       {
+        "name": "session-1.32.1-universal-play-release.apk",
+        "download_count": 1256
+       },
+       {
+        "name": "session-1.32.1-x86-play-release.apk",
+        "download_count": 212
+       },
+       {
+        "name": "session-1.32.1-x86_64-play-release.apk",
+        "download_count": 242
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 43
+       }
+      ]
+     },
+     {
+      "tag_name": "1.32.0",
+      "published_at": "2026-02-24T21:27:01Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 21
+       },
+       {
+        "name": "session-1.32.0-arm64-v8a-play-release.apk",
+        "download_count": 551
+       },
+       {
+        "name": "session-1.32.0-armeabi-v7a-play-release.apk",
+        "download_count": 27
+       },
+       {
+        "name": "session-1.32.0-universal-huawei-release.apk",
+        "download_count": 23
+       },
+       {
+        "name": "session-1.32.0-universal-play-release.apk",
+        "download_count": 92
+       },
+       {
+        "name": "session-1.32.0-x86-play-release.apk",
+        "download_count": 26
+       },
+       {
+        "name": "session-1.32.0-x86_64-play-release.apk",
+        "download_count": 18
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 13
+       }
+      ]
+     },
+     {
+      "tag_name": "1.31.3",
+      "published_at": "2026-02-20T10:16:49Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 266
+       },
+       {
+        "name": "session-1.31.3-arm64-v8a-play-release.apk",
+        "download_count": 3398
+       },
+       {
+        "name": "session-1.31.3-armeabi-v7a-play-release.apk",
+        "download_count": 154
+       },
+       {
+        "name": "session-1.31.3-universal-huawei-release.apk",
+        "download_count": 162
+       },
+       {
+        "name": "session-1.31.3-universal-play-release.apk",
+        "download_count": 627
+       },
+       {
+        "name": "session-1.31.3-x86-play-release.apk",
+        "download_count": 105
+       },
+       {
+        "name": "session-1.31.3-x86_64-play-release.apk",
+        "download_count": 122
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 22
+       }
+      ]
+     },
+     {
+      "tag_name": "1.31.2",
+      "published_at": "2026-02-17T20:59:07Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 159
+       },
+       {
+        "name": "session-1.31.2-arm64-v8a-play-release.apk",
+        "download_count": 2429
+       },
+       {
+        "name": "session-1.31.2-armeabi-v7a-play-release.apk",
+        "download_count": 82
+       },
+       {
+        "name": "session-1.31.2-universal-huawei-release.apk",
+        "download_count": 97
+       },
+       {
+        "name": "session-1.31.2-universal-play-release.apk",
+        "download_count": 294
+       },
+       {
+        "name": "session-1.31.2-x86-play-release.apk",
+        "download_count": 65
+       },
+       {
+        "name": "session-1.31.2-x86_64-play-release.apk",
+        "download_count": 84
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 21
+       }
+      ]
+     },
+     {
+      "tag_name": "1.31.1",
+      "published_at": "2026-02-13T21:53:55Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 215
+       },
+       {
+        "name": "session-1.31.1-arm64-v8a-play-release.apk",
+        "download_count": 3000
+       },
+       {
+        "name": "session-1.31.1-armeabi-v7a-play-release.apk",
+        "download_count": 102
+       },
+       {
+        "name": "session-1.31.1-universal-huawei-release.apk",
+        "download_count": 105
+       },
+       {
+        "name": "session-1.31.1-universal-play-release.apk",
+        "download_count": 466
+       },
+       {
+        "name": "session-1.31.1-x86-play-release.apk",
+        "download_count": 83
+       },
+       {
+        "name": "session-1.31.1-x86_64-play-release.apk",
+        "download_count": 84
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 20
+       }
+      ]
+     },
+     {
+      "tag_name": "1.31.0",
+      "published_at": "2026-02-12T23:08:00Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 15
+       },
+       {
+        "name": "session-1.31.0-arm64-v8a-play-release.apk",
+        "download_count": 143
+       },
+       {
+        "name": "session-1.31.0-armeabi-v7a-play-release.apk",
+        "download_count": 24
+       },
+       {
+        "name": "session-1.31.0-universal-huawei-release.apk",
+        "download_count": 18
+       },
+       {
+        "name": "session-1.31.0-universal-play-release.apk",
+        "download_count": 62
+       },
+       {
+        "name": "session-1.31.0-x86-play-release.apk",
+        "download_count": 20
+       },
+       {
+        "name": "session-1.31.0-x86_64-play-release.apk",
+        "download_count": 19
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 13
+       }
+      ]
+     },
+     {
+      "tag_name": "1.30.3",
+      "published_at": "2026-01-07T22:13:41Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 1648
+       },
+       {
+        "name": "session-1.30.3-arm64-v8a-play-release.apk",
+        "download_count": 11885
+       },
+       {
+        "name": "session-1.30.3-armeabi-v7a-play-release.apk",
+        "download_count": 703
+       },
+       {
+        "name": "session-1.30.3-universal-huawei-release.apk",
+        "download_count": 636
+       },
+       {
+        "name": "session-1.30.3-universal-play-release.apk",
+        "download_count": 3305
+       },
+       {
+        "name": "session-1.30.3-x86-play-release.apk",
+        "download_count": 575
+       },
+       {
+        "name": "session-1.30.3-x86_64-play-release.apk",
+        "download_count": 573
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 119
+       }
+      ]
+     },
+     {
+      "tag_name": "1.30.2",
+      "published_at": "2025-12-21T22:15:07Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 918
+       },
+       {
+        "name": "session-1.30.2-arm64-v8a-play-release.apk",
+        "download_count": 6000
+       },
+       {
+        "name": "session-1.30.2-armeabi-v7a-play-release.apk",
+        "download_count": 333
+       },
+       {
+        "name": "session-1.30.2-universal-huawei-release.apk",
+        "download_count": 506
+       },
+       {
+        "name": "session-1.30.2-universal-play-release.apk",
+        "download_count": 1375
+       },
+       {
+        "name": "session-1.30.2-x86-play-release.apk",
+        "download_count": 292
+       },
+       {
+        "name": "session-1.30.2-x86_64-play-release.apk",
+        "download_count": 302
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 47
+       }
+      ]
+     },
+     {
+      "tag_name": "1.30.1",
+      "published_at": "2025-12-03T06:07:19Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 780
+       },
+       {
+        "name": "session-1.30.1-arm64-v8a-play-release.apk",
+        "download_count": 5891
+       },
+       {
+        "name": "session-1.30.1-armeabi-v7a-play-release.apk",
+        "download_count": 384
+       },
+       {
+        "name": "session-1.30.1-universal-huawei-release.apk",
+        "download_count": 350
+       },
+       {
+        "name": "session-1.30.1-universal-play-release.apk",
+        "download_count": 1394
+       },
+       {
+        "name": "session-1.30.1-x86-play-release.apk",
+        "download_count": 273
+       },
+       {
+        "name": "session-1.30.1-x86_64-play-release.apk",
+        "download_count": 299
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 63
+       }
+      ]
+     },
+     {
+      "tag_name": "1.30.0",
+      "published_at": "2025-11-30T23:28:50Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 45
+       },
+       {
+        "name": "session-1.30.0-arm64-v8a-play-release.apk",
+        "download_count": 312
+       },
+       {
+        "name": "session-1.30.0-armeabi-v7a-play-release.apk",
+        "download_count": 45
+       },
+       {
+        "name": "session-1.30.0-universal-huawei-release.apk",
+        "download_count": 35
+       },
+       {
+        "name": "session-1.30.0-universal-play-release.apk",
+        "download_count": 131
+       },
+       {
+        "name": "session-1.30.0-x86-play-release.apk",
+        "download_count": 26
+       },
+       {
+        "name": "session-1.30.0-x86_64-play-release.apk",
+        "download_count": 31
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 11
+       }
+      ]
+     },
+     {
+      "tag_name": "1.29.3",
+      "published_at": "2025-11-25T23:48:11Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 321
+       },
+       {
+        "name": "session-1.29.3-arm64-v8a-play-release.apk",
+        "download_count": 3453
+       },
+       {
+        "name": "session-1.29.3-armeabi-v7a-play-release.apk",
+        "download_count": 166
+       },
+       {
+        "name": "session-1.29.3-universal-huawei-release.apk",
+        "download_count": 154
+       },
+       {
+        "name": "session-1.29.3-universal-play-release.apk",
+        "download_count": 685
+       },
+       {
+        "name": "session-1.29.3-x86-play-release.apk",
+        "download_count": 141
+       },
+       {
+        "name": "session-1.29.3-x86_64-play-release.apk",
+        "download_count": 140
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 34
+       }
+      ]
+     },
+     {
+      "tag_name": "1.29.2",
+      "published_at": "2025-11-19T21:40:59Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 293
+       },
+       {
+        "name": "session-1.29.2-arm64-v8a-play-release.apk",
+        "download_count": 3048
+       },
+       {
+        "name": "session-1.29.2-armeabi-v7a-play-release.apk",
+        "download_count": 122
+       },
+       {
+        "name": "session-1.29.2-universal-huawei-release.apk",
+        "download_count": 122
+       },
+       {
+        "name": "session-1.29.2-universal-play-release.apk",
+        "download_count": 514
+       },
+       {
+        "name": "session-1.29.2-x86-play-release.apk",
+        "download_count": 85
+       },
+       {
+        "name": "session-1.29.2-x86_64-play-release.apk",
+        "download_count": 104
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 26
+       }
+      ]
+     },
+     {
+      "tag_name": "1.29.1",
+      "published_at": "2025-11-13T22:51:25Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 300
+       },
+       {
+        "name": "session-1.29.1-arm64-v8a-play-release.apk",
+        "download_count": 2886
+       },
+       {
+        "name": "session-1.29.1-armeabi-v7a-play-release.apk",
+        "download_count": 109
+       },
+       {
+        "name": "session-1.29.1-universal-huawei-release.apk",
+        "download_count": 106
+       },
+       {
+        "name": "session-1.29.1-universal-play-release.apk",
+        "download_count": 484
+       },
+       {
+        "name": "session-1.29.1-x86-play-release.apk",
+        "download_count": 81
+       },
+       {
+        "name": "session-1.29.1-x86_64-play-release.apk",
+        "download_count": 86
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 28
+       }
+      ]
+     },
+     {
+      "tag_name": "1.29.0",
+      "published_at": "2025-11-06T23:30:54Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 130
+       },
+       {
+        "name": "session-1.29.0-arm64-v8a-play-release.apk",
+        "download_count": 1865
+       },
+       {
+        "name": "session-1.29.0-armeabi-v7a-play-release.apk",
+        "download_count": 88
+       },
+       {
+        "name": "session-1.29.0-universal-huawei-release.apk",
+        "download_count": 64
+       },
+       {
+        "name": "session-1.29.0-universal-play-release.apk",
+        "download_count": 309
+       },
+       {
+        "name": "session-1.29.0-x86-play-release.apk",
+        "download_count": 69
+       },
+       {
+        "name": "session-1.29.0-x86_64-play-release.apk",
+        "download_count": 66
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 19
+       }
+      ]
+     },
+     {
+      "tag_name": "1.28.2",
+      "published_at": "2025-10-28T03:17:57Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 530
+       },
+       {
+        "name": "session-1.28.2-arm64-v8a-play-release.apk",
+        "download_count": 4538
+       },
+       {
+        "name": "session-1.28.2-armeabi-v7a-play-release.apk",
+        "download_count": 237
+       },
+       {
+        "name": "session-1.28.2-universal-huawei-release.apk",
+        "download_count": 211
+       },
+       {
+        "name": "session-1.28.2-universal-play-release.apk",
+        "download_count": 978
+       },
+       {
+        "name": "session-1.28.2-x86-play-release.apk",
+        "download_count": 188
+       },
+       {
+        "name": "session-1.28.2-x86_64-play-release.apk",
+        "download_count": 189
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 36
+       }
+      ]
+     },
+     {
+      "tag_name": "1.28.1",
+      "published_at": "2025-10-09T06:01:10Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 798
+       },
+       {
+        "name": "session-1.28.1-arm64-v8a-play-release.apk",
+        "download_count": 5595
+       },
+       {
+        "name": "session-1.28.1-armeabi-v7a-play-release.apk",
+        "download_count": 335
+       },
+       {
+        "name": "session-1.28.1-universal-huawei-release.apk",
+        "download_count": 261
+       },
+       {
+        "name": "session-1.28.1-universal-play-release.apk",
+        "download_count": 1338
+       },
+       {
+        "name": "session-1.28.1-x86-play-release.apk",
+        "download_count": 251
+       },
+       {
+        "name": "session-1.28.1-x86_64-play-release.apk",
+        "download_count": 264
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 30
+       }
+      ]
+     },
+     {
+      "tag_name": "1.28.0",
+      "published_at": "2025-10-02T01:12:37Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 128
+       },
+       {
+        "name": "session-1.28.0-arm64-v8a-play-release.apk",
+        "download_count": 2245
+       },
+       {
+        "name": "session-1.28.0-armeabi-v7a-play-release.apk",
+        "download_count": 107
+       },
+       {
+        "name": "session-1.28.0-universal-huawei-release.apk",
+        "download_count": 97
+       },
+       {
+        "name": "session-1.28.0-universal-play-release.apk",
+        "download_count": 400
+       },
+       {
+        "name": "session-1.28.0-x86-play-release.apk",
+        "download_count": 69
+       },
+       {
+        "name": "session-1.28.0-x86_64-play-release.apk",
+        "download_count": 84
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 13
+       }
+      ]
+     },
+     {
+      "tag_name": "1.27.1",
+      "published_at": "2025-09-17T23:54:48Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 668
+       },
+       {
+        "name": "session-1.27.1-arm64-v8a-play-release.apk",
+        "download_count": 8254
+       },
+       {
+        "name": "session-1.27.1-armeabi-v7a-play-release.apk",
+        "download_count": 278
+       },
+       {
+        "name": "session-1.27.1-universal-huawei-release.apk",
+        "download_count": 230
+       },
+       {
+        "name": "session-1.27.1-universal-play-release.apk",
+        "download_count": 1057
+       },
+       {
+        "name": "session-1.27.1-x86-play-release.apk",
+        "download_count": 218
+       },
+       {
+        "name": "session-1.27.1-x86_64-play-release.apk",
+        "download_count": 240
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 35
+       }
+      ]
+     },
+     {
+      "tag_name": "1.27.0",
+      "published_at": "2025-08-10T23:41:41Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 1222
+       },
+       {
+        "name": "session-1.27.0-arm64-v8a-play-release.apk",
+        "download_count": 9747
+       },
+       {
+        "name": "session-1.27.0-armeabi-v7a-play-release.apk",
+        "download_count": 743
+       },
+       {
+        "name": "session-1.27.0-universal-huawei-release.apk",
+        "download_count": 1152
+       },
+       {
+        "name": "session-1.27.0-universal-play-release.apk",
+        "download_count": 3184
+       },
+       {
+        "name": "session-1.27.0-x86-play-release.apk",
+        "download_count": 574
+       },
+       {
+        "name": "session-1.27.0-x86_64-play-release.apk",
+        "download_count": 603
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 97
+       }
+      ]
+     },
+     {
+      "tag_name": "1.26.0",
+      "published_at": "2025-07-20T21:55:13Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 524
+       },
+       {
+        "name": "session-1.26.0-arm64-v8a-play.apk",
+        "download_count": 5067
+       },
+       {
+        "name": "session-1.26.0-armeabi-v7a-play.apk",
+        "download_count": 388
+       },
+       {
+        "name": "session-1.26.0-universal-huawei.apk",
+        "download_count": 342
+       },
+       {
+        "name": "session-1.26.0-universal-play.apk",
+        "download_count": 1456
+       },
+       {
+        "name": "session-1.26.0-x86-play.apk",
+        "download_count": 227
+       },
+       {
+        "name": "session-1.26.0-x86_64-play.apk",
+        "download_count": 252
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 46
+       }
+      ]
+     },
+     {
+      "tag_name": "1.25.2",
+      "published_at": "2025-07-02T05:31:10Z",
+      "assets": [
+       {
+        "name": "session-1.25.2-arm64-v8a-play.apk",
+        "download_count": 5083
+       },
+       {
+        "name": "session-1.25.2-armeabi-v7a-play.apk",
+        "download_count": 470
+       },
+       {
+        "name": "session-1.25.2-play-release.aab",
+        "download_count": 128
+       },
+       {
+        "name": "session-1.25.2-universal-huawei.apk",
+        "download_count": 202
+       },
+       {
+        "name": "session-1.25.2-universal-play.apk",
+        "download_count": 985
+       },
+       {
+        "name": "session-1.25.2-x86-play.apk",
+        "download_count": 147
+       },
+       {
+        "name": "session-1.25.2-x86_64-play.apk",
+        "download_count": 195
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 33
+       }
+      ]
+     },
+     {
+      "tag_name": "1.25.1",
+      "published_at": "2025-06-29T23:26:07Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 75
+       },
+       {
+        "name": "session-1.25.1-arm64-v8a-play.apk",
+        "download_count": 1204
+       },
+       {
+        "name": "session-1.25.1-armeabi-v7a-play.apk",
+        "download_count": 57
+       },
+       {
+        "name": "session-1.25.1-universal-huawei.apk",
+        "download_count": 44
+       },
+       {
+        "name": "session-1.25.1-universal-play.apk",
+        "download_count": 184
+       },
+       {
+        "name": "session-1.25.1-x86-play.apk",
+        "download_count": 24
+       },
+       {
+        "name": "session-1.25.1-x86_64-play.apk",
+        "download_count": 30
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 12
+       }
+      ]
+     },
+     {
+      "tag_name": "1.25.0",
+      "published_at": "2025-06-25T06:22:46Z",
+      "assets": [
+       {
+        "name": "app-play-release.aab",
+        "download_count": 156
+       },
+       {
+        "name": "session-1.25.0-arm64-v8a-play.apk",
+        "download_count": 1750
+       },
+       {
+        "name": "session-1.25.0-armeabi-v7a-play.apk",
+        "download_count": 89
+       },
+       {
+        "name": "session-1.25.0-universal-huawei.apk",
+        "download_count": 84
+       },
+       {
+        "name": "session-1.25.0-universal-play.apk",
+        "download_count": 345
+       },
+       {
+        "name": "session-1.25.0-x86-play.apk",
+        "download_count": 52
+       },
+       {
+        "name": "session-1.25.0-x86_64-play.apk",
+        "download_count": 67
+       },
+       {
+        "name": "signature.asc",
+        "download_count": 9
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ]
+}

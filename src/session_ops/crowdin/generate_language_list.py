@@ -158,7 +158,7 @@ export const languageTerritories: Record<CrowdinLocale, string | null> = {ts_rec
     )
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description='Generate the localization module language list from parsed translations'
     )
@@ -170,7 +170,7 @@ def main():
         'output_directory',
         help='Directory to write the output file (languages.ts)'
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     print_progress("Loading parsed translations...")
     parsed_data = load_parsed_translations(args.parsed_translations_file)
