@@ -36,11 +36,17 @@ would be reported again. Seed a new one with `--seed`, which records without pos
 
 ## Cost
 
+The timer runs with `--croql`: a locale is one query for the strings CroQL counts two or
+more translations for, then one request per candidate, about 50 of the project's 1,371
+strings. A plural string with a single translation per category is a candidate too,
+since CroQL cannot tell categories apart. Checked on 2026-09-25 against a full scan:
+a planted second suggestion on a singular string in `fr` was the one singular candidate
+across all 80 locales, and both found the same slot.
+
 Without `--croql`, a locale is one request per string: about 110,000 requests for the
-whole project, an hour at the 30 requests a second the client allows itself. With
-`--croql`, a locale is one query for the strings CroQL counts two or more translations
-for, then one request per candidate. A plural string with a single translation per
-category is a candidate too, since CroQL cannot tell categories apart.
+whole project, an hour at the 30 requests a second the client allows itself.
+`session-ops run crowdin-duplicates -- --locales fr` without it is the way to check
+the narrowing again.
 
 ## The sharded report
 

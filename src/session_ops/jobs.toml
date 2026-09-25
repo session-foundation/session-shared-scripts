@@ -52,15 +52,17 @@ unit = [
 name = "crowdin-duplicates"
 description = "Reconcile Crowdin duplicate translations and post what changed"
 entry = "session_ops.crowdin.reconcile:main"
-args = ["--state", "{state}/duplicates.json"]
+# CroQL narrows each locale to the strings holding 2+ translations at all, ~50 of
+# ~1,400; checked live against a planted duplicate and a full scan of every locale.
+args = ["--state", "{state}/duplicates.json", "--croql"]
 user = "crowdin"
 env_files = ["/etc/session-ops/crowdin.env"]
 env = ["CROWDIN_API_TOKEN", "CROWDIN_DISCORD_WEBHOOK_URL"]
 channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
 schedule = "*-*-* 03:00 UTC"
 max_age_hours = 28
-# ~110k requests at 30/s without --croql; twice that is Crowdin throttling the run.
-timeout = "3h"
+# About 20 minutes; a full scan without --croql is ~110k requests, an hour at 30/s.
+timeout = "2h"
 
 [[job]]
 name = "session-ops-silence"
