@@ -11,16 +11,22 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
+from github.Issue import IssueSearchResult
+from github.Requester import Requester
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import digest  # noqa: E402
 from shared import discord  # noqa: E402
+from shared.testing import NoSleep  # noqa: E402
 
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
 CUTOFF = NOW - timedelta(hours=25)
+GH = digest.github_client("token")
 
 
-def pr(number=1, login="octocat", repo="session-android", created="2026-09-24T08:00:00Z",
-       updated=None, title="Fix a thing", user_type="User", **extra):
+def pr_item(number=1, login="octocat", repo="session-android", created="2026-09-24T08:00:00Z",
+            updated=None, title="Fix a thing", user_type="User", **extra):
+    """A search result as the API returns one."""
     item = {
         "id": 10_000 + number,
         "number": number,
@@ -30,9 +36,16 @@ def pr(number=1, login="octocat", repo="session-android", created="2026-09-24T08
         "user": {"login": login, "type": user_type},
         "created_at": created,
         "updated_at": updated or created,
+        "draft": False,
+        "comments": 0,
     }
     item.update(extra)
     return item
+
+
+def pr(*args, **kwargs):
+    """A search result as PyGithub hands it to the digest."""
+    return IssueSearchResult(GH.requester, {}, pr_item(*args, **kwargs), completed=True)
 
 
 class TestMaintainers(unittest.TestCase):
@@ -73,8 +86,7 @@ class TestWindow(unittest.TestCase):
     def test_only_prs_that_moved_since_the_cutoff_are_considered(self):
         fresh = pr(1, updated="2026-09-24T09:00:00Z")
         stale = pr(2, created="2026-08-01T08:00:00Z", updated="2026-08-02T08:00:00Z")
-        self.assertEqual([p["number"] for p in digest.in_window([fresh, stale], CUTOFF)],
-                         [1])
+        self.assertEqual([p.number for p in digest.in_window([fresh, stale], CUTOFF)], [1])
 
     def test_the_cutoff_itself_counts_as_inside_the_window(self):
         edge = pr(1, updated=CUTOFF.strftime("%Y-%m-%dT%H:%M:%SZ"))
@@ -94,21 +106,21 @@ class TestPartitionByState(unittest.TestCase):
 
     def test_a_pr_never_reported_is_new(self):
         new, changed, unchanged = digest.STATE.partition([pr(1)], digest.STATE.empty())
-        self.assertEqual([p["number"] for p in new], [1])
+        self.assertEqual([p.number for p in new], [1])
         self.assertEqual((changed, unchanged), ([], []))
 
     def test_a_pr_that_moved_since_it_was_reported_is_changed(self):
         item = pr(1, updated="2026-09-24T09:00:00Z")
         new, changed, unchanged = digest.STATE.partition(
             [item], self.state((digest.pr_id(item), "2026-09-20T09:00:00Z")))
-        self.assertEqual([p["number"] for p in changed], [1])
+        self.assertEqual([p.number for p in changed], [1])
         self.assertEqual((new, unchanged), ([], []))
 
     def test_a_pr_that_has_not_moved_is_dropped(self):
         item = pr(1, updated="2026-09-24T09:00:00Z")
         new, changed, unchanged = digest.STATE.partition(
             [item], self.state((digest.pr_id(item), "2026-09-24T09:00:00Z")))
-        self.assertEqual([p["number"] for p in unchanged], [1])
+        self.assertEqual([p.number for p in unchanged], [1])
         self.assertEqual((new, changed), ([], []))
 
 
@@ -300,38 +312,91 @@ class TestMessages(unittest.TestCase):
             self.assertLess(len(rendered), discord.MAX_MESSAGE_TEXT_CHARS * 2)
 
 
+class FakeHttpResponse:
+    def __init__(self, status, headers, payload):
+        self.status, self.headers, self.payload = status, headers, payload
+
+    def getheaders(self):
+        return self.headers.items()
+
+    def read(self):
+        return json.dumps(self.payload)
+
+
+class FakeConnection:
+    """PyGithub's connection interface, answering from a queue and recording each request."""
+    queue, calls = [], []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def request(self, verb, url, input, headers, stream=False):
+        self.calls.append((verb, url))
+
+    def getresponse(self):
+        return FakeHttpResponse(*self.queue.pop(0))
+
+    def close(self):
+        pass
+
+
+def page(payload, next_page=None):
+    headers = {"content-type": "application/json"}
+    if next_page is not None:
+        headers["link"] = f'<https://api.github.com/x?page={next_page}>; rel="next"'
+    return 200, headers, payload
+
+
+def repo(name, **flags):
+    return {"name": name, "fork": False, "archived": False, "private": False, **flags}
+
+
+ORG = {"login": "org", "url": "https://api.github.com/orgs/org"}
+
+
 class TestFetching(unittest.TestCase):
+    def setUp(self):
+        FakeConnection.queue.clear()
+        FakeConnection.calls.clear()
+        Requester.injectConnectionClasses(FakeConnection, FakeConnection)
+        self.addCleanup(Requester.resetConnectionClasses)
+
+    def fetch(self, *responses, call):
+        FakeConnection.queue.extend(responses)
+        with NoSleep():
+            return call(digest.github_client("token"), "org")
+
     def test_forks_archived_and_private_repos_are_left_out(self):
-        page = [{"name": "session-android", "fork": False, "archived": False},
-                {"name": "session-pysogs", "fork": True, "archived": False},
-                {"name": "retired", "fork": False, "archived": True},
-                {"name": "internal", "fork": False, "archived": False, "private": True}]
-        with mock.patch.object(digest, "fetch_json", return_value=page):
-            self.assertEqual(digest.fetch_repos(None, "org"), {"session-android"})
+        listing = [repo("session-android"), repo("session-pysogs", fork=True),
+                   repo("retired", archived=True), repo("internal", private=True)]
+        self.assertEqual(self.fetch(page(ORG), page(listing), call=digest.fetch_repos),
+                         {"session-android"})
 
     def test_repo_pagination_follows_full_pages(self):
-        pages = [[{"name": f"r{n}", "fork": False, "archived": False}
-                  for n in range(digest.PER_PAGE)],
-                 [{"name": "last", "fork": False, "archived": False}]]
-        with mock.patch.object(digest, "fetch_json", side_effect=pages):
-            self.assertEqual(len(digest.fetch_repos(None, "org")), digest.PER_PAGE + 1)
+        first = [repo(f"r{n}") for n in range(digest.PER_PAGE)]
+        names = self.fetch(page(ORG), page(first, next_page=2), page([repo("last")]),
+                           call=digest.fetch_repos)
+        self.assertEqual(len(names), digest.PER_PAGE + 1)
+        self.assertEqual(len(FakeConnection.calls), 3)
 
     def test_search_stops_when_the_results_run_out(self):
-        payload = {"total_count": 2, "items": [pr(1), pr(2)]}
-        with mock.patch.object(digest, "fetch_json", return_value=payload) as fetch:
-            items, truncated = digest.search_open_prs(None, "org")
-        self.assertEqual(len(items), 2)
+        payload = {"total_count": 2, "incomplete_results": False,
+                   "items": [pr_item(1), pr_item(2)]}
+        items, truncated = self.fetch(page(payload), call=digest.search_open_prs)
+        self.assertEqual([p.number for p in items], [1, 2])
         self.assertFalse(truncated)
-        self.assertEqual(fetch.call_count, 1)
+        self.assertEqual(len(FakeConnection.calls), 1)
 
     def test_search_stops_at_the_result_ceiling_rather_than_erroring(self):
-        full = {"total_count": 1500,
-                "items": [pr(n) for n in range(digest.PER_PAGE)]}
-        with mock.patch.object(digest, "fetch_json", return_value=full) as fetch:
-            items, truncated = digest.search_open_prs(None, "org")
+        pages = digest.SEARCH_RESULT_LIMIT // digest.PER_PAGE
+        full = [page({"total_count": 1500, "incomplete_results": False,
+                      "items": [pr_item(n) for n in range(digest.PER_PAGE)]},
+                     next_page=n + 2)
+                for n in range(pages)]
+        items, truncated = self.fetch(*full, call=digest.search_open_prs)
         self.assertEqual(len(items), digest.SEARCH_RESULT_LIMIT)
         self.assertTrue(truncated)
-        self.assertEqual(fetch.call_count, digest.SEARCH_RESULT_LIMIT // digest.PER_PAGE)
+        self.assertEqual(len(FakeConnection.calls), pages)
 
 
 if __name__ == "__main__":

@@ -44,15 +44,15 @@ import json
 import os
 import subprocess
 import sys
-import threading
 
 import requests
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from shared import discord, retry  # noqa: E402
+import crowdin_sdk  # noqa: E402
+from shared import discord  # noqa: E402
 from shared.text import clip  # noqa: E402
 
-API = "https://api.crowdin.com/api/v2"
 DEFAULT_PROJECT = "618696"
 KEYRING_ATTRS = ["service", "crowdin", "key", "translation-api-token"]
 
@@ -83,27 +83,10 @@ def get_token(cli_token):
              "or store it via secret-tool).")
 
 
-def request_with_retry(session, method, url, **kw):
-    """A Crowdin API call. A non-retryable 4xx raises, so a caller can read the
-    body of what it asked for without checking the status first."""
-    r = retry.request_with_retry(session, method, url, attempts=10, timeout=60, **kw)
-    r.raise_for_status()
-    return r
-
-
-def paged(session, path, **params):
-    """Yield every item from a paginated Crowdin list endpoint."""
-    offset = 0
-    limit = 500
-    while True:
-        r = request_with_retry(session, "GET", f"{API}{path}",
-                               params={**params, "limit": limit, "offset": offset})
-        data = r.json()["data"]
-        for row in data:
-            yield row["data"]
-        if len(data) < limit:
-            return
-        offset += limit
+def crowdin_client(token, project_id):
+    """Ten attempts at sixty seconds: a locale is ~1,400 requests at Crowdin's rate
+    limit, so a 429 partway through is expected rather than exceptional."""
+    return crowdin_sdk.client(token, project_id, attempts=10, timeout=60)
 
 
 def user_label(u):
@@ -124,30 +107,18 @@ def user_label(u):
 # full 80-locale scan is ~1366*80 requests ≈ 40 min. To keep a daily job fast we
 # scan a ROTATING shard of locales each run (see pick_locales), covering them all
 # over a cycle. Within a locale we fan strings out across a bounded thread pool.
-def scan_locale(session, pid, lang, string_ids, strings, editor_url, max_workers):
+def scan_locale(client, lang, string_ids, strings, editor_url, max_workers):
     """Return the finding dicts for one locale (one slot per 2+-translation group)."""
     approved_here = {}  # stringId -> set(translationId) that are approved
-    for a in paged(session, f"/projects/{pid}/approvals", languageId=lang):
+    for a in crowdin_sdk.fetch_all(client.string_translations, "list_translation_approvals",
+                                   languageId=lang):
         approved_here.setdefault(a["stringId"], set()).add(a["translationId"])
     print(f"[{lang}] scanning {len(string_ids)} strings "
           f"({len(approved_here)} with approvals) …", file=sys.stderr)
 
-    # requests.Session is not guaranteed thread-safe, so instead of sharing the
-    # caller's session across the pool, give each worker its own (lazily created,
-    # carrying the same auth header).
-    tls = threading.local()
-
-    def worker_session():
-        s = getattr(tls, "session", None)
-        if s is None:
-            s = requests.Session()
-            s.headers.update(session.headers)
-            tls.session = s
-        return s
-
     def process(sid):
-        trans = list(paged(worker_session(), f"/projects/{pid}/translations",
-                           stringId=sid, languageId=lang))
+        trans = crowdin_sdk.fetch_all(client.string_translations, "list_string_translations",
+                                      stringId=sid, languageId=lang)
         approved_tids = approved_here.get(sid, set())
         by_cat = collections.defaultdict(list)
         for t in trans:
@@ -198,13 +169,13 @@ def scan_locale(session, pid, lang, string_ids, strings, editor_url, max_workers
     return found
 
 
-def scan(session, pid, locales, strings, editor_url, max_workers):
+def scan(client, locales, strings, editor_url, max_workers):
     """Return a flat list of finding dicts, one per slot with 2+ translations."""
     string_ids = list(strings.keys())
     findings = []
     for lang in locales:
-        findings.extend(scan_locale(session, pid, lang, string_ids, strings,
-                                    editor_url, max_workers))
+        findings.extend(scan_locale(client, lang, string_ids, strings, editor_url,
+                                    max_workers))
     findings.sort(key=lambda f: (f["locale"], f["identifier"] or "", str(f["pluralCategory"])))
     return findings
 
@@ -379,13 +350,12 @@ def main():
         sys.exit("No Discord webhook (pass --webhook, set DISCORD_WEBHOOK_URL, or use --dry-run).")
 
     pid = args.project_id
-    session = requests.Session()
-    session.headers.update({"Authorization": f"Bearer {token}"})
+    client = crowdin_client(token, pid)
 
     # Project details: identifier + per-language editor codes, used to build
     # editor URLs that actually point at the right locale. (A string's own webUrl
     # always targets the first target language, regardless of the locale.)
-    proj = request_with_retry(session, "GET", f"{API}/projects/{pid}").json()["data"]
+    proj = client.projects.get_project()["data"]
     project_slug = proj["identifier"]
     src_code = proj["sourceLanguage"].get("editorCode") or proj["sourceLanguage"]["id"]
     editor_code = {l["id"]: (l.get("editorCode") or l["id"]) for l in proj["targetLanguages"]}
@@ -412,12 +382,12 @@ def main():
 
     print(f"Loading strings for project {pid} …", file=sys.stderr)
     strings = {}
-    for s in paged(session, f"/projects/{pid}/strings"):
+    for s in crowdin_sdk.fetch_all(client.source_strings, "list_strings"):
         strings[s["id"]] = {"identifier": s.get("identifier"), "text": s.get("text")}
     print(f"  {len(strings)} strings; scanning {len(locales)} locale(s): "
           f"{', '.join(locales)}", file=sys.stderr)
 
-    findings = scan(session, pid, locales, strings, editor_url, args.max_workers)
+    findings = scan(client, locales, strings, editor_url, args.max_workers)
 
     print("\n" + "=" * 80, file=sys.stderr)
     print(f"Found {len(findings)} slot(s) with 2+ translations across "

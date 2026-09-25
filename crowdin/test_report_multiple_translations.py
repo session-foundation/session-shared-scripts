@@ -7,27 +7,44 @@ import os
 import sys
 import unittest
 
-import requests
+from crowdin_api.exceptions import APIException
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import crowdin_sdk  # noqa: E402
 import report_multiple_translations as report  # noqa: E402
 from shared.testing import FakeResponse, FakeSession, NoSleep, Patched  # noqa: E402
 
 
-class TestRequestWithRetry(unittest.TestCase):
+class TestClient(unittest.TestCase):
+    def client(self, responses):
+        client = report.crowdin_client("tok", "618696")
+        session = FakeSession(responses)
+        crowdin_sdk.use_session(client, session)
+        return client, session
+
     def test_a_client_error_raises_rather_than_returning(self):
         """Callers read the body straight off the response, so a 4xx has to stop them."""
-        with self.assertRaises(requests.HTTPError):
-            report.request_with_retry(FakeSession([FakeResponse({}, status_code=404)]),
-                                      "GET", "https://x")
+        client, _ = self.client([FakeResponse({}, status_code=404)])
+        with self.assertRaises(APIException):
+            client.projects.get_project()
 
     def test_crowdins_budget_is_ten_attempts_at_sixty_seconds(self):
-        session = FakeSession([FakeResponse({}, status_code=503)] * 9 + [FakeResponse({"ok": 1})])
+        client, session = self.client([FakeResponse({}, status_code=503)] * 9
+                                      + [FakeResponse({"data": {"ok": 1}})])
         with NoSleep():
-            self.assertEqual(report.request_with_retry(session, "GET", "https://x").json(), {"ok": 1})
+            self.assertEqual(client.projects.get_project()["data"], {"ok": 1})
         self.assertEqual(len(session.calls), 10)
         self.assertEqual({kw["timeout"] for _, _, kw in session.calls}, {60})
+
+    def test_fetch_all_follows_full_pages_and_unwraps_the_envelopes(self):
+        full = {"data": [{"data": {"id": n}} for n in range(500)]}
+        client, session = self.client([FakeResponse(full),
+                                       FakeResponse({"data": [{"data": {"id": 500}}]})])
+        items = crowdin_sdk.fetch_all(client.source_strings, "list_strings")
+        self.assertEqual(len(items), 501)
+        self.assertEqual(items[-1], {"id": 500})
+        self.assertEqual([kw["params"]["offset"] for _, _, kw in session.calls], [0, 500])
 
 
 class TestPostToDiscord(unittest.TestCase):

@@ -18,6 +18,10 @@ class FakeResponse:
     def json(self):
         return self._payload
 
+    @property
+    def content(self):
+        return self.text.encode()
+
     def raise_for_status(self):
         if self.status_code >= 400:
             raise requests.HTTPError(f"{self.status_code}", response=self)

@@ -34,9 +34,13 @@ import subprocess
 import sys
 import time
 
-import requests
+from crowdin_api.api_resources.source_strings.enums import ScopeFilter
+from crowdin_api.exceptions import APIException, ValidationError
 
-API = "https://api.crowdin.com/api/v2"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import crowdin_sdk  # noqa: E402
+
 DEFAULT_PROJECT = "618696"
 
 # libsecret attributes identifying the token in the keyring; must match the
@@ -128,14 +132,7 @@ def main():
     token = get_token()
 
     identifiers = args.identifiers
-    pid = args.project_id
-    s = requests.Session()
-    s.headers.update({"Authorization": f"Bearer {token}"})
-
-    def get(path, **params):
-        r = s.get(f"{API}{path}", params=params, timeout=30)
-        r.raise_for_status()
-        return r.json()
+    client = crowdin_sdk.client(token, args.project_id, attempts=6, timeout=30)
 
     # 1) Resolve identifiers -> string IDs
     string_ids = {}
@@ -143,8 +140,8 @@ def main():
         found = None
         offset = 0
         while True:
-            data = get(f"/projects/{pid}/strings", filter=ident,
-                       scope="identifier", limit=500, offset=offset)["data"]
+            data = client.source_strings.list_strings(
+                filter=ident, scope=ScopeFilter.IDENTIFIER, limit=500, offset=offset)["data"]
             for row in data:
                 if row["data"]["identifier"] == ident:
                     found = row["data"]["id"]
@@ -158,7 +155,7 @@ def main():
         print(f"  string '{ident}' -> id {found}")
 
     # 2) Target languages
-    proj = get(f"/projects/{pid}")["data"]
+    proj = client.projects.get_project()["data"]
     target_langs = proj["targetLanguageIds"]
     print(f"\n{len(target_langs)} target languages: {', '.join(target_langs)}\n")
 
@@ -169,15 +166,15 @@ def main():
     approved, skipped, already, errors = 0, 0, 0, 0
     for ident, sid in string_ids.items():
         for lang in target_langs:
-            raw = get(f"/projects/{pid}/translations",
-                      stringId=sid, languageId=lang, limit=500)["data"]
+            raw = client.string_translations.list_string_translations(
+                stringId=sid, languageId=lang, limit=500)["data"]
             trans = [t["data"] for t in raw]
 
             if args.list:
                 # Show only unapproved translations (i.e. what a run would approve),
                 # honouring the --by-user filter if one was given.
-                approvals = get(f"/projects/{pid}/approvals",
-                                stringId=sid, languageId=lang, limit=500)["data"]
+                approvals = client.string_translations.list_translation_approvals(
+                    stringId=sid, languageId=lang, limit=500)["data"]
                 approved_tids = {a["data"]["translationId"] for a in approvals}
                 pending = [t for t in trans
                            if t["id"] not in approved_tids
@@ -209,17 +206,19 @@ def main():
                 approved += 1
                 continue
 
-            r = s.post(f"{API}/projects/{pid}/approvals",
-                       json={"translationId": tid}, timeout=30)
-            if r.status_code == 201:
+            try:
+                client.string_translations.add_approval(translationId=tid)
+            except APIException as exc:
+                message = crowdin_sdk.error_message(exc)
+                if isinstance(exc, ValidationError) and "already" in message.lower():
+                    print(f"  [ -- ] {ident} / {lang}: already approved {info}")
+                    already += 1
+                else:
+                    print(f"  [ERR ] {ident} / {lang}: {exc.http_status} {message}")
+                    errors += 1
+            else:
                 print(f"  [ ok ] {ident} / {lang}: approved {info}")
                 approved += 1
-            elif r.status_code == 400 and "already" in r.text.lower():
-                print(f"  [ -- ] {ident} / {lang}: already approved {info}")
-                already += 1
-            else:
-                print(f"  [ERR ] {ident} / {lang}: {r.status_code} {r.text}")
-                errors += 1
             time.sleep(0.1)  # gentle on rate limits
 
     if args.list:

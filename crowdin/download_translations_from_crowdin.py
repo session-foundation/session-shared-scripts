@@ -14,13 +14,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock, Semaphore
 
 import requests
+from crowdin_api.api_resources.enums import ExportProjectTranslationFormat
+from crowdin_api.exceptions import APIException
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import crowdin_sdk  # noqa: E402
 from generate_shared import print_error, print_progress, print_success, run_main  # noqa: E402
 from shared.retry import request_with_retry  # noqa: E402
 
-API = "https://api.crowdin.com/api/v2"
 # Crowdin allows 20 simultaneous requests per account.
 MAX_CONCURRENT_REQUESTS = 20
 REQUEST_TIMEOUT_S = 30
@@ -31,35 +33,25 @@ class CrowdinError(Exception):
     pass
 
 
-def error_message(response):
-    """Crowdin's error message, or the start of the body when it is not that envelope."""
-    try:
-        return response.json().get("error", {}).get("message", "Unknown error")
-    except ValueError:
-        return response.text[:200] or "Unknown error"
-
-
 class Crowdin:
     """One project's API, gated to Crowdin's concurrency limit across the worker threads."""
 
     def __init__(self, token, project_id, max_workers):
         self.project_id = project_id
-        self.session = requests.Session()
-        self.session.headers["Authorization"] = f"Bearer {token}"
+        self.api = crowdin_sdk.client(token, project_id, attempts=MAX_ATTEMPTS,
+                                      timeout=REQUEST_TIMEOUT_S)
         # Exports are served from a signed URL on another host, which must not see the token.
         self.downloads = requests.Session()
         self.gate = Semaphore(min(max_workers, MAX_CONCURRENT_REQUESTS))
 
-    def request(self, method, path, context, **kwargs):
-        """One API response's JSON, or CrowdinError naming `context`."""
+    def call(self, context, method, **kwargs):
+        """One SDK call's JSON, or CrowdinError naming `context`."""
         with self.gate:
-            response = request_with_retry(self.session, method, f"{API}/{path}",
-                                          attempts=MAX_ATTEMPTS, timeout=REQUEST_TIMEOUT_S,
-                                          **kwargs)
-        if response.status_code != 200:
-            raise CrowdinError(f"{context}: {error_message(response)} "
-                               f"(Code: {response.status_code})")
-        return response.json()
+            try:
+                return method(**kwargs)
+            except APIException as exc:
+                raise CrowdinError(f"{context}: {crowdin_sdk.error_message(exc)} "
+                                   f"(Code: {exc.http_status})") from exc
 
     def download(self, url, output_path):
         response = request_with_retry(self.downloads, "GET", url, attempts=MAX_ATTEMPTS,
@@ -84,14 +76,12 @@ def export_and_download_language(client, language, directory, is_source, skip_un
                                  allow_unapproved):
     """Export one language and save it as <locale>.xliff. Returns the locale."""
     locale = language["locale"]
-    payload = {
-        "targetLanguageId": language["id"],
-        "format": "xliff",
-        "skipUntranslatedStrings": False if is_source else skip_untranslated,
-        "exportApprovedOnly": False if is_source else not allow_unapproved,
-    }
-    export = client.request("POST", f"projects/{client.project_id}/translations/exports",
-                            f"Export failed for {locale}", json=payload)
+    export = client.call(f"Export failed for {locale}",
+                         client.api.translations.export_project_translation,
+                         targetLanguageId=language["id"],
+                         format=ExportProjectTranslationFormat.XLIFF,
+                         skipUntranslatedStrings=False if is_source else skip_untranslated,
+                         exportApprovedOnly=False if is_source else not allow_unapproved)
     client.download(export["data"]["url"], os.path.join(directory, f"{locale}.xliff"))
     return locale
 
@@ -118,8 +108,7 @@ def main():
     client = Crowdin(args.api_token, args.project_id, args.max_workers)
 
     print_progress("Retrieving project details...")
-    project = client.request("GET", f"projects/{args.project_id}",
-                             "Failed to retrieve project details")
+    project = client.call("Failed to retrieve project details", client.api.projects.get_project)
     if args.verbose:
         print(json.dumps(project, indent=2))
     source_language = project["data"]["sourceLanguage"]
@@ -157,10 +146,9 @@ def main():
 
     if args.glossary_id is not None and args.concept_id is not None:
         print_progress("Retrieving non-translatable strings...")
-        terms = client.request(
-            "GET", f"glossaries/{args.glossary_id}/terms",
-            "Failed to retrieve non-translatable strings",
-            params={"conceptId": args.concept_id, "limit": 500})
+        terms = client.call("Failed to retrieve non-translatable strings",
+                            client.api.glossaries.list_terms,
+                            glossaryId=args.glossary_id, conceptId=args.concept_id, limit=500)
         if args.verbose:
             print(json.dumps(terms, indent=2))
         with open(os.path.join(args.download_directory, "_non_translatable_strings.json"), "w",
