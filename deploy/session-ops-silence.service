@@ -10,7 +10,7 @@ Type=oneshot
 User=sessionops
 Group=sessionops
 EnvironmentFile=/etc/session-ops/env
-ExecStart=/opt/github-prs/venv/bin/python /opt/zendesk/deploy/silence.py \
+ExecStart=/opt/zendesk/.venv/bin/session-ops-silence \
     --state /var/lib/session-ops/silence/state.json
 TimeoutStartSec=5min
 

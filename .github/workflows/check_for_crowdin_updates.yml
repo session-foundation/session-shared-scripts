@@ -56,12 +56,12 @@ jobs:
       - name: Install Dependencies
         shell: bash
         run: |
-          pip install -r ${{ github.workspace }}/scripts/crowdin/requirements.txt
+          pip install ${{ github.workspace }}/scripts
       - name: Download Translations
         env:
           CROWDIN_API_TOKEN: ${{ secrets.CROWDIN_API_TOKEN }}
         run: |
-          python "${{ github.workspace }}/scripts/crowdin/download_translations_from_crowdin.py" \
+          python -m session_ops.crowdin.download_translations_from_crowdin \
             "$CROWDIN_API_TOKEN" \
             618696 \
             "${{ github.workspace }}/raw_translations" \
@@ -99,7 +99,7 @@ jobs:
       - name: Install Dependencies
         shell: bash
         run: |
-          pip install -r ${{ github.workspace }}/scripts/crowdin/requirements.txt
+          pip install ${{ github.workspace }}/scripts
 
       - name: Download raw translations
         uses: actions/download-artifact@v8
@@ -109,7 +109,7 @@ jobs:
 
       - name: Parse and validate XLIFF files
         run: |
-          python "${{ github.workspace }}/scripts/crowdin/parse_xliff.py" \
+          python -m session_ops.crowdin.parse_xliff \
             "${{ github.workspace }}/raw_translations" \
             "${{ github.workspace }}/parsed_translations.json" \
             ${{ inputs.SKIP_VALIDATION_ERRORS != true && '--error-on-validation-failure' || '' }} \
@@ -150,7 +150,7 @@ jobs:
 
       - name: Prepare iOS Strings
         run: |
-          python "${{ github.workspace }}/scripts/crowdin/generate_ios_strings.py" \
+          python -m session_ops.crowdin.generate_ios_strings \
             "${{ github.workspace }}/parsed_translations.json" \
             "${{ github.workspace }}/ios/Session/Meta/Translations" \
             "${{ github.workspace }}/ios/SessionUIKit/Style Guide/Constants.swift"
@@ -186,13 +186,13 @@ jobs:
 
       - name: Generate TypeScript
         run: |
-          python "${{ github.workspace }}/scripts/crowdin/codegen_localization.py" \
+          python -m session_ops.crowdin.codegen_localization \
             "${{ github.workspace }}/parsed_translations.json" \
             "${{ github.workspace }}/output/generated"
 
       - name: Generate the language list
         run: |
-          python "${{ github.workspace }}/scripts/crowdin/generate_language_list.py" \
+          python -m session_ops.crowdin.generate_language_list \
             "${{ github.workspace }}/parsed_translations.json" \
             "${{ github.workspace }}/output/generated"
 
@@ -248,7 +248,7 @@ jobs:
       - name: Prepare Android Strings
         run: |
           rm -rf ${{ github.workspace }}/android/app/src/main/res/values*/strings.xml
-          python "${{ github.workspace }}/scripts/crowdin/generate_android_strings.py" \
+          python -m session_ops.crowdin.generate_android_strings \
             "${{ github.workspace }}/parsed_translations.json" \
             "${{ github.workspace }}/android/app/src/main/res" \
             "${{ github.workspace }}/android/app/src/main/java/org/session/libsession/utilities/NonTranslatableStringConstants.kt"

@@ -12,7 +12,7 @@ EnvironmentFile=/etc/zendesk/env
 # one-liner because the message needs JSON encoding, and quoting that through
 # systemd -> sh -> jq is the kind of thing that works until a unit name has a
 # character nobody thought about.
-ExecStart=/opt/zendesk/venv/bin/python /opt/zendesk/deploy/alert.py %i
+ExecStart=/opt/zendesk/.venv/bin/session-ops-alert %i
 
 # Read-only access to the failed unit's journal, which is where the alert gets the
 # line it quotes. Without it journalctl exits non-zero, the excerpt is dropped and

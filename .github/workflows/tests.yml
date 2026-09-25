@@ -19,45 +19,26 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install ruff==0.16.9
+      - run: pip install uv==0.12.19
 
-      - run: ruff check --output-format=github .
+      - run: uv run --locked --only-dev ruff check --output-format=github .
 
   unittest:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - suite: shared
-            requirements: github_prs/requirements.txt
-          - suite: github_prs
-            requirements: github_prs/requirements.txt
-          - suite: zendesk_triage
-            requirements: zendesk_triage/requirements.txt zendesk_triage/requirements-dev.txt
-          - suite: deploy
-            requirements: github_prs/requirements.txt
-          - suite: crowdin
-            requirements: crowdin/requirements.txt
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: "**/requirements*.txt"
 
-      - name: Install dependencies
-        run: |
-          for file in ${{ matrix.requirements }}; do
-            pip install -r "$file"
-          done
+      - run: pip install uv==0.12.19
 
-      - name: Run ${{ matrix.suite }} tests
-        working-directory: ${{ matrix.suite }}
-        run: python -m unittest discover -v
+      - run: uv sync --locked
+
+      # tests/sogs skips itself here: session_util is not installable from PyPI.
+      - run: uv run --locked python -m unittest discover -s tests -t . -v
 
   sogs_moderation:
     runs-on: ubuntu-latest
@@ -75,11 +56,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3-session-util
 
+      # pipx, since the system pip refuses to install outside a venv (PEP 668).
+      - run: pipx install uv==0.12.19
+
       - name: Install dependencies
         run: |
-          python3 -m venv --system-site-packages .venv
-          .venv/bin/pip install -r sogs_moderation/requirements.txt
+          uv venv --system-site-packages --python /usr/bin/python3
+          uv sync --locked
 
-      - name: Run sogs_moderation tests
-        working-directory: sogs_moderation
-        run: ../.venv/bin/python -m unittest discover -v
+      # Fails here rather than letting tests/sogs skip itself.
+      - run: uv run --locked python -c "import session_util"
+
+      - run: uv run --locked python -m unittest discover -s tests/sogs -t . -v

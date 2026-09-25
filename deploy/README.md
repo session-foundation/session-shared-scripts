@@ -17,17 +17,21 @@ to.
 `OnFailure=` only sees a run that failed. A run that never happened (a timer left
 disabled, a host down through a whole schedule) is what the silence checker is for:
 every scheduled unit touches `/var/lib/session-ops/stamps/<name>` on success, and
-`silence.py` compares each stamp's age with `jobs.toml`. A new scheduled job needs both
-its `ExecStartPost=` line and a `jobs.toml` entry; `test_silence.py` fails without
+`session-ops-silence` compares each stamp's age with `jobs.toml`. A new scheduled job needs both
+its `ExecStartPost=` line and an entry in
+[`jobs.toml`](../src/session_ops/monitor/jobs.toml); `tests/monitor/test_silence.py` fails without
 either.
 
 One clone at `/opt/zendesk` holds all of it — the directory is named after its first
-tenant, not its contents. The venvs are separate, because the two jobs pin `requests`
-differently and a shared one would silently be whichever was installed last.
+tenant, not its contents. One venv, `/opt/zendesk/.venv`, built from `uv.lock`, serves
+every unit: each job is a console script in it.
 
 ## Host requirements
 
 - Linux with systemd 252 or newer (the timer needs a timezone in `OnCalendar=`), and Python 3.12+
+- [uv](https://docs.astral.sh/uv/) on root's `PATH`. The venv must use the system
+  Python, not one uv downloads: that would live under `/home/zendesk`, which
+  `ProtectHome=yes` hides from every unit not running as `zendesk`.
 - **The Claude Code CLI installed and logged in as the service user.** Both Claude
   calls go through it — the digest's classification and the reply flow's
   translation — so its login is the only Claude credential this box holds. It must be
@@ -71,10 +75,11 @@ runuser -u zendesk -- env HOME=/home/zendesk sh -c 'curl -fsSL https://claude.ai
 runuser -u zendesk -- env HOME=/home/zendesk /home/zendesk/.local/bin/claude
 
 # 2. The code and its venv
+curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 git clone https://github.com/session-foundation/session-shared-scripts /opt/zendesk
-python3 -m venv /opt/zendesk/venv
-/opt/zendesk/venv/bin/pip install -r /opt/zendesk/zendesk_triage/requirements.txt
 chown -R zendesk:zendesk /opt/zendesk
+runuser -u zendesk -- env HOME=/home/zendesk UV_PYTHON_DOWNLOADS=never \
+  uv sync --locked --no-dev --python /usr/bin/python3 --directory /opt/zendesk
 
 # 3. State
 install -d -o zendesk -g zendesk -m 750 /var/lib/zendesk
@@ -122,7 +127,7 @@ nginx -t && systemctl reload nginx                # validate what certbot wrote
 
 ### Adding the pull request digest
 
-Its own user, its own environment file and its own venv, out of the same clone. A
+Its own user and its own environment file, out of the same clone and venv. A
 token that can read the org's repositories has no business in the environment of the
 relay, which is the one process here reachable from the internet.
 
@@ -132,9 +137,6 @@ wanted here at all.
 
 ```bash
 useradd --system --no-create-home --home /nonexistent --shell /usr/sbin/nologin ghdigest
-python3 -m venv /opt/github-prs/venv
-/opt/github-prs/venv/bin/pip install -r /opt/zendesk/github_prs/requirements.txt
-chown -R ghdigest:ghdigest /opt/github-prs
 
 install -d -m 750 -o root -g ghdigest /etc/github-prs
 [ -e /etc/github-prs/env ] || install -m 640 -o root -g ghdigest /dev/null /etc/github-prs/env
@@ -266,7 +268,7 @@ GITHUB_PRS_TOKEN=
 # in, so this one value decides where the digest goes.
 GITHUB_PRS_DISCORD_WEBHOOK_URL=
 
-# Required, and normally the same webhook: without it alert.py falls back to
+# Required, and normally the same webhook: without it session-ops-alert falls back to
 # ZENDESK_DISCORD_WEBHOOK_URL, which is not in this file, and the failure notifier
 # fails instead of reporting.
 ALERT_DISCORD_WEBHOOK_URL=
@@ -377,7 +379,7 @@ Updating. A permission error from the second command costs the excerpt and nothi
 else: the alert still sends, with the message it always sent.
 
 ```sh
-cd deploy && python -m unittest discover     # the alert's own tests
+uv run python -m unittest discover -s tests/monitor -t .     # the alert's own tests
 ```
 **6. The pull request digest.** A dry run under the unit's own confinement renders the
 digest and posts nothing. `systemd-run` rather than `runuser` because the token then
@@ -386,8 +388,7 @@ read out of `ps`:
 
 ```bash
 systemd-run --pty --uid=ghdigest -p EnvironmentFile=/etc/github-prs/env \
-  -p WorkingDirectory=/opt/zendesk/github_prs \
-  /opt/github-prs/venv/bin/python digest.py --dry-run
+  /opt/zendesk/.venv/bin/github-prs-digest --dry-run
 ```
 
 Then for real: `systemctl start github-prs-digest.service`,
@@ -411,7 +412,7 @@ it would post, and writes no state:
 
 ```bash
 systemd-run --pipe --wait --uid=sessionops -p EnvironmentFile=/etc/session-ops/env \
-  /opt/github-prs/venv/bin/python /opt/zendesk/deploy/silence.py --dry-run
+  /opt/zendesk/.venv/bin/session-ops-silence --dry-run
 ls -l /var/lib/session-ops/stamps/     # one file per job that has succeeded since
 ```
 
@@ -421,8 +422,8 @@ ls -l /var/lib/session-ops/stamps/     # one file per job that has succeeded sin
 
 ```bash
 runuser -u zendesk -- git -C /opt/zendesk pull
-/opt/zendesk/venv/bin/pip install -r /opt/zendesk/zendesk_triage/requirements.txt
-/opt/github-prs/venv/bin/pip install -r /opt/zendesk/github_prs/requirements.txt
+runuser -u zendesk -- env HOME=/home/zendesk UV_PYTHON_DOWNLOADS=never \
+  uv sync --locked --no-dev --python /usr/bin/python3 --directory /opt/zendesk
 systemctl restart zendesk-relay
 ```
 

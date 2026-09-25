@@ -9,12 +9,11 @@ OnFailure=github-prs-alert@%n.service
 Type=oneshot
 User=ghdigest
 Group=ghdigest
-WorkingDirectory=/opt/zendesk/github_prs
 EnvironmentFile=/etc/github-prs/env
 
-ExecStart=/opt/github-prs/venv/bin/python digest.py --window-hours 72 \
+ExecStart=/opt/zendesk/.venv/bin/github-prs-digest --window-hours 72 \
     --state /var/lib/github-prs/seen.json
-# The silence checker's evidence that this ran (deploy/silence.py). `+` runs it
+# The silence checker's evidence that this ran (session-ops-silence). `+` runs it
 # outside the sandbox, so the job itself gets no new write path.
 ExecStartPost=+/usr/bin/touch /var/lib/session-ops/stamps/github-prs-digest
 
