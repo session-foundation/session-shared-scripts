@@ -105,6 +105,14 @@ class TestSparseCheckout(RepoTest):
         self.assertEqual(base64.b64decode(header), b"x-access-token:ghs_secret")
 
 
+class TestGitErrors(unittest.TestCase):
+    def test_the_alert_quotes_gits_error_not_a_wrappers_chatter(self):
+        from session_ops.shared.git import reason
+        stderr = ("2026-09-25 Starting Update of /mirror\nuser@github.com: Permission denied\n"
+                  "fatal: Could not read from remote repository.\n")
+        self.assertEqual(reason(stderr), "fatal: Could not read from remote repository.")
+
+
 class TestPullRequest(RepoTest):
     def setUp(self):
         super().setUp()
@@ -152,9 +160,13 @@ class TestPullRequest(RepoTest):
         self.assertEqual([c[0] for c in api.calls], ["GET", "PATCH", "DELETE"])
         self.assertEqual(api.calls[1][2]["json"], {"state": "closed"})
 
-    def test_a_dry_run_pushes_nothing_and_calls_no_api(self):
-        result = self.publish(self.change(), None, dry_run=True)
+    def test_a_dry_run_shows_the_change_and_pushes_nothing(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            result = publish.pull_request(self.change(), None, "session-foundation/app", "dev",
+                                          "bot", "Title", "Body", AUTHOR, True)
         self.assertIn("would push", result)
+        self.assertIn("strings.xml | 2 +-", out.getvalue())
         self.assertEqual(self.branches("app"), ["dev"])
 
 

@@ -9,6 +9,13 @@ import os
 import subprocess
 
 
+def reason(stderr):
+    """git's own error line, rather than whatever a wrapper printed before it."""
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    errors = [line for line in lines if line.startswith(("fatal:", "error:"))]
+    return (errors or lines or ["no output"])[0][:300]
+
+
 class Repo:
     def __init__(self, path, token=None):
         self.path = path
@@ -23,7 +30,7 @@ class Repo:
         done = subprocess.run(["git", "-C", self.path, *args], env=self.env,
                               capture_output=True, text=True, check=False)
         if check and done.returncode:
-            raise RuntimeError(f"git {args[0]} failed: {done.stderr.strip()[:300]}")
+            raise RuntimeError(f"git {args[0]} failed: {reason(done.stderr)}")
         return done
 
     @classmethod
@@ -41,7 +48,8 @@ class Repo:
         return bool(self.git("status", "--porcelain").stdout.strip())
 
     def diff_stat(self):
-        return self.git("diff", "--cached", "--stat", "HEAD").stdout
+        """What the last commit changed."""
+        return self.git("show", "--stat", "--format=", "HEAD").stdout
 
     def commit(self, message, author):
         """Commit everything in the checkout as `author` ("Name <email>")."""
