@@ -19,6 +19,7 @@ import html
 import os
 import re
 import unittest
+from unittest import mock
 
 from session_ops.shared.text import undash_english
 from session_ops.zendesk import api, claude_cli, note_reply
@@ -1003,6 +1004,32 @@ class Composition(unittest.TestCase):
     def test_the_brief_is_bounded(self):
         action, brief = note_reply.parse_command("claude: draft - " + "x" * 5000)
         self.assertLessEqual(len(brief), note_reply.BRIEF_CHARS)
+
+
+class ModelFlag(unittest.TestCase):
+    def model_for(self, flag):
+        seen = []
+        env = {"ZENDESK_SUBDOMAIN": "sub", "ZENDESK_EMAIL": "e", "ZENDESK_API_TOKEN": "t"}
+        command = {"id": 9, "author": AGENT, "action": "draft", "brief": "x"}
+        with mock.patch.dict(os.environ, env), \
+                Patched(api, zendesk_session=lambda *a: object(),
+                        fetch_ticket=lambda *a: {"id": 7, "status": "open"},
+                        fetch_comments=lambda *a, **k: []), \
+                Patched(note_reply, api_user_id=lambda *a: API_USER,
+                        latest_command=lambda *a: command,
+                        run_draft=lambda session, subdomain, model, *a: seen.append(model)):
+            note_reply.main(["--ticket", "7", *flag])
+        return seen[0]
+
+    def test_an_alias_means_the_id_the_digest_would_use(self):
+        """Passed through, `opus` would be whatever the CLI calls opus that week."""
+        self.assertEqual(self.model_for(["--model", "opus"]), claude_cli.API_MODEL_ALIASES["opus"])
+
+    def test_a_pinned_id_passes_through(self):
+        self.assertEqual(self.model_for(["--model", "claude-opus-4-8"]), "claude-opus-4-8")
+
+    def test_the_default_is_unchanged(self):
+        self.assertEqual(self.model_for([]), note_reply.DEFAULT_MODEL)
 
 
 if __name__ == "__main__":

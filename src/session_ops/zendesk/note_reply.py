@@ -1132,13 +1132,16 @@ def latest_command(comments, api_user, session, subdomain):
     return None
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Act on claude: notes on a Zendesk ticket.")
     parser.add_argument("--ticket", type=int, required=True)
-    parser.add_argument("--model", default=os.environ.get("ZENDESK_NOTE_MODEL", DEFAULT_MODEL))
+    parser.add_argument("--model", default=os.environ.get("ZENDESK_NOTE_MODEL", DEFAULT_MODEL),
+                        help="a model id, or opus, sonnet or haiku for the id the digest "
+                             "would use")
     parser.add_argument("--dry-run", action="store_true",
                         help="do everything except write to Zendesk")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    model = claude_cli.resolve_api_model(args.model)
 
     subdomain = get_env("ZENDESK_SUBDOMAIN")
     session = api.zendesk_session(get_env("ZENDESK_EMAIL"),
@@ -1164,15 +1167,15 @@ def main():
         return
 
     if command["action"] == "draft":
-        run_draft(session, subdomain, args.model, ticket, comments, command,
+        run_draft(session, subdomain, model, ticket, comments, command,
                   api_user, args.dry_run)
     elif command["action"] == "solve":
         run_solve(session, subdomain, ticket, command, args.dry_run)
     elif command["action"] == "explain":
-        run_explain(session, subdomain, args.model, ticket, comments, command,
+        run_explain(session, subdomain, model, ticket, comments, command,
                     args.dry_run)
     elif command["action"] == "english":
-        run_english(session, subdomain, args.model, ticket, comments, command, args.dry_run)
+        run_english(session, subdomain, model, ticket, comments, command, args.dry_run)
     else:
         run_reply(session, subdomain, ticket, comments, command, api_user, args.dry_run)
 
