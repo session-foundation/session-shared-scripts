@@ -318,7 +318,7 @@ def post_summary(webhook_url, message):
                                        [{"content": message}]))
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Solve non-actionable positive app-store reviews in Zendesk.")
     parser.add_argument("--apply", action="store_true",
@@ -340,7 +340,7 @@ def main():
     parser.add_argument("--api-token", help="Zendesk API token (else ZENDESK_API_TOKEN).")
     parser.add_argument("--webhook",
                         help="Discord webhook URL (else ZENDESK_DISCORD_WEBHOOK_URL).")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     subdomain = triage.get_env("ZENDESK_SUBDOMAIN", args.subdomain)
     email = triage.get_env("ZENDESK_EMAIL", args.email)

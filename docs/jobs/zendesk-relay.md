@@ -10,7 +10,7 @@
 | | |
 | --- | --- |
 | Runs | `zendesk-relay.service`, always on, behind nginx at `POST /zendesk/notes` |
-| Secrets | `/etc/zendesk/env`: `ZENDESK_WEBHOOK_SECRET` plus the digest's Zendesk and Claude credentials |
+| Secrets | `/etc/session-ops/zendesk.env`: `ZENDESK_WEBHOOK_SECRET` plus the digest's Zendesk and Claude credentials |
 | Dry run | `RELAY_DRY_RUN=1` in the env file; `uv run zendesk-note-reply --ticket N --dry-run` |
 | Re-run | `zendesk-note-reply --ticket N` under the relay's environment; a command already answered carries `[claude:done:<comment id>]` and is not answered twice |
 | Logs | `journalctl -u zendesk-relay -n 50 --no-pager` |

@@ -31,6 +31,7 @@ crowdin-approve-strings = "session_ops.crowdin.approve_strings:main"
 crowdin-reconcile-duplicates = "session_ops.crowdin.reconcile:main"
 sogs-ban = "session_ops.sogs.ban:cli"
 sogs-perms = "session_ops.sogs.perms:cli"
+session-ops = "session_ops.ops.runner:main"
 session-ops-alert = "session_ops.monitor.alert:main"
 session-ops-silence = "session_ops.monitor.silence:main"
 

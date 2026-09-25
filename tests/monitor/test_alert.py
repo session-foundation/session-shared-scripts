@@ -137,5 +137,34 @@ class TestJournalTail(unittest.TestCase):
                 self.assertEqual(self.run_tail(side_effect=error), "")
 
 
+class TestAlreadyAlerted(unittest.TestCase):
+    def setUp(self):
+        import os
+        import tempfile
+        self.root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.root, "demo"))
+        with open(os.path.join(self.root, "demo", "alerted"), "w", encoding="utf-8") as fh:
+            fh.write("inv-1")
+
+    def invocation(self, value):
+        return mock.patch.object(alert.subprocess, "run", return_value=subprocess.CompletedProcess(
+            [], 0, stdout=f"{value}\n", stderr=""))
+
+    def test_the_invocation_the_run_reported_is_skipped(self):
+        with self.invocation("inv-1"):
+            self.assertTrue(alert.already_alerted("session-ops@demo.service", self.root))
+
+    def test_a_later_failure_of_the_same_job_is_not(self):
+        with self.invocation("inv-2"):
+            self.assertFalse(alert.already_alerted("session-ops@demo.service", self.root))
+
+    def test_a_unit_that_is_not_a_job_always_alerts(self):
+        self.assertFalse(alert.already_alerted("zendesk-relay.service", self.root))
+
+    def test_a_job_that_never_alerted_is_reported(self):
+        with self.invocation("inv-1"):
+            self.assertFalse(alert.already_alerted("session-ops@other.service", self.root))
+
+
 if __name__ == "__main__":
     unittest.main()

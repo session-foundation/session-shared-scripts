@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """
-Report a failed systemd unit to the triage Discord channel.
+Report a failed systemd unit to Discord: the OnFailure= backstop.
 
-Invoked by `OnFailure=zendesk-alert@%n.service`, which passes the failing unit's name.
-This replaces notify_failure.yml for the jobs that left GitHub Actions — and improves
-on it: that workflow matched on workflow *name*, so a rename silently unsubscribed
-the job, whereas %n comes from the failing unit itself and cannot drift.
+Invoked by `OnFailure=session-ops-alert@%n.service`, which passes the failing unit's
+name, so a rename cannot unsubscribe a unit the way matching on a workflow name did.
 
-Posts over ZENDESK_DISCORD_WEBHOOK_URL rather than the bot token, deliberately. This
-is one line of text needing no components, and a failure notifier should depend on as
-little as possible of whatever just broke. ALERT_DISCORD_WEBHOOK_URL overrides it, so
-a job that posts to a channel of its own reports its failures there too.
+A `session-ops run` reports its own failures, with more to say than this can, and
+records the invocation it reported. This stays quiet for that invocation and speaks
+for the rest: a run killed, timed out, or unable to reach Discord, and any unit that
+is not a job, such as the relays.
+
+Posts over ALERT_DISCORD_WEBHOOK_URL, else ZENDESK_DISCORD_WEBHOOK_URL, rather than
+anything with a bot token: a failure notifier should depend on as little as possible
+of whatever just broke. ALERT_DISCORD_ROLE_ID, if set, is mentioned.
 
 The failed unit's last journal line comes with it, so the channel says what broke
 rather than only that something did. Reading the journal needs the unit to carry
@@ -21,6 +23,7 @@ Usage:
     session-ops-alert <name> [journal-unit]
 """
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -98,17 +101,38 @@ def build_message(unit, host, journal_unit=None, detail=""):
     return "\n".join(parts)
 
 
-def main():
-    args = [arg.strip() for arg in sys.argv[1:]]
+def already_alerted(unit, state_root="/var/lib/session-ops"):
+    """Whether this failure of a session-ops job was reported by the run itself."""
+    job = re.fullmatch(r"session-ops@(.+)\.service", unit)
+    if not job:
+        return False
+    try:
+        with open(os.path.join(state_root, job.group(1), "alerted"), encoding="utf-8") as fh:
+            marker = fh.read().strip()
+        done = subprocess.run(["systemctl", "show", "-p", "InvocationID", "--value", unit],
+                              capture_output=True, text=True, timeout=15, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return bool(marker) and marker == done.stdout.strip()
+
+
+def main(argv=None):
+    args = [arg.strip() for arg in (sys.argv[1:] if argv is None else argv)]
     if not args or len(args) > 2 or not args[0]:
         sys.exit("usage: session-ops-alert <name> [journal-unit]")
+    if already_alerted(args[-1]):
+        print(f"{args[-1]} reported this failure itself.")
+        return
     webhook = (os.environ.get("ALERT_DISCORD_WEBHOOK_URL")
                or triage.get_env("ZENDESK_DISCORD_WEBHOOK_URL"))
     detail = last_job_line(journal_tail(args[-1]))
     message = build_message(args[0], socket.gethostname(), *args[1:], detail=detail)
+    role = os.environ.get("ALERT_DISCORD_ROLE_ID")
+    payload = {"content": f"<@&{role}> {message}" if role else message,
+               "allowed_mentions": {"roles": [role]} if role else {"parse": []}}
     # A fresh session, never a Zendesk one — that carries the API-token auth header,
     # and Discord has no business receiving it.
-    if not triage.post_to_discord(http.Session(), webhook, [{"content": message}]):
+    if not triage.post_to_discord(http.Session(), webhook, [payload]):
         sys.exit("Could not post the failure to Discord.")
 
 

@@ -529,7 +529,7 @@ def fetch_total_unsolved(session, subdomain, query=BACKLOG_QUERY):
 # Maps ticket id -> {requester_updated_at, last_reported}. A ticket is re-reported
 # only if the requester has touched it since we last showed it, so neither the
 # overlapping window nor our own replies repost yesterday's tickets. The state lives
-# outside the repo — /var/lib/zendesk on the host — and every read degrades
+# outside the repo — /var/lib/session-ops/zendesk-digest on the host — and every read degrades
 # gracefully: a missing or corrupt file just means everything looks new. That
 # tolerance was written for a best-effort CI cache and is worth keeping now that the
 # file is a real one, because it is what makes losing it merely noisy.
@@ -1656,7 +1656,7 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
     return messages, coverage
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Triage open Zendesk tickets with Claude and post a Discord summary.")
     parser.add_argument("--subdomain", help="Zendesk subdomain (else ZENDESK_SUBDOMAIN).")
     parser.add_argument("--email", help="Zendesk agent email (else ZENDESK_EMAIL).")
@@ -1707,7 +1707,7 @@ def main():
     parser.add_argument("--dump-batch", metavar="PATH",
                         help="Write the batch (tickets, prompt, schema) to PATH and exit, for "
                              "hand-classification. WARNING: writes ticket content to disk.")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Subdomain is always needed: it builds the ticket links in the Discord payload.
     subdomain = get_env("ZENDESK_SUBDOMAIN", args.subdomain)

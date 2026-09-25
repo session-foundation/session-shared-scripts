@@ -5,17 +5,17 @@ After=network-online.target
 Wants=network-online.target
 # Restart=always means this rarely reaches a failed state — only after crash-looping
 # past the start limit, which is exactly the case nobody would otherwise notice.
-OnFailure=zendesk-alert@%n.service
+OnFailure=session-ops-alert@%n.service
 
 [Service]
 Type=exec
 User=zendesk
 Group=zendesk
-EnvironmentFile=/etc/zendesk/env
+EnvironmentFile=/etc/session-ops/zendesk.env
 # Bound to loopback: nginx terminates TLS and is the only thing that should be able
 # to reach this. Exposing it directly would put an unauthenticated port on the box —
 # the HMAC check is the only gate, and it should not be the only barrier too.
-ExecStart=/opt/zendesk/.venv/bin/uvicorn session_ops.zendesk.relay:app --host 127.0.0.1 --port 8080 \
+ExecStart=/opt/session-ops/.venv/bin/uvicorn session_ops.zendesk.relay:app --host 127.0.0.1 --port 8080 \
     --no-access-log --proxy-headers --forwarded-allow-ips 127.0.0.1
 Restart=always
 RestartSec=2
@@ -46,7 +46,7 @@ SystemCallErrorNumber=EPERM
 # CLI, which keeps its credentials and cache under $HOME; without it the translation
 # fails with a bare non-zero exit from `claude`.
 ReadWritePaths=/home/zendesk
-ReadOnlyPaths=/opt/zendesk
+ReadOnlyPaths=/opt/session-ops
 
 [Install]
 WantedBy=multi-user.target

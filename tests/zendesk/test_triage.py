@@ -13,7 +13,6 @@ import inspect
 import io
 import json
 import os
-import re
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -1799,87 +1798,6 @@ class TestClaudeCli(unittest.TestCase):
         with self.assertRaises(SystemExit) as caught:
             self.run_cli(raises=triage.subprocess.TimeoutExpired("claude", 60))
         self.assertIn("60s", str(caught.exception))
-
-
-# ---- Workflow wiring -------------------------------------------------------
-
-
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-
-def unit_commands(unit="zendesk-digest.service"):
-    """The command lines a systemd unit actually runs, continuations joined.
-
-    Comments are stripped first: they explain the choices, and scanning them would
-    have the flag check below demanding triage.py define words from prose.
-    """
-    with open(os.path.join(ROOT, "deploy", unit), encoding="utf-8") as fh:
-        text = "\n".join(line for line in fh.read().splitlines()
-                          if not line.lstrip().startswith("#"))
-    return re.findall(r"^ExecStart=(.*)$", text.replace("\\\n", " "), re.MULTILINE)
-
-
-class TestDigestOrdering(unittest.TestCase):
-    """The digest is only correct if the positive-review resolver ran first: solved
-    reviews leave the triage's `status<pending` query, so running second would have
-    the digest re-count reviews the other script had just closed.
-
-    This used to be two chained GitHub jobs; it is now two ExecStart lines. The
-    invariant is the same and still lives entirely in configuration, which is why it
-    is asserted here rather than trusted.
-    """
-
-    def test_the_resolver_runs_before_the_digest(self):
-        commands = unit_commands()
-        self.assertEqual(len(commands), 2, "expected exactly resolve then triage")
-        self.assertIn("zendesk-resolve-reviews", commands[0])
-        self.assertIn("zendesk-triage", commands[1])
-
-    def test_a_failed_resolve_does_not_cost_the_digest(self):
-        """Type=oneshot stops at the first failing ExecStart, which would make
-        resolving a precondition for the digest — and it is an optimisation for it."""
-        self.assertIn("||", unit_commands()[0],
-                      "the resolver's failure must not stop the digest")
-
-    def test_a_failed_resolve_is_still_reported(self):
-        """A bare `-` prefix would also keep the failure from blocking the digest, and
-        would hide it completely: the unit would succeed, OnFailure would never fire,
-        and a resolver broken for weeks would look like one with nothing to do."""
-        resolver = unit_commands()[0]
-        self.assertFalse(resolver.startswith("-"),
-                         "a - prefix swallows the failure instead of reporting it")
-        self.assertIn("session-ops-alert", resolver)
-
-    def test_the_digest_is_not_prevented_from_failing_loudly(self):
-        """The reverse for triage itself: a swallowed failure there is a silent day
-        with no digest and no alert."""
-        self.assertFalse(unit_commands()[1].startswith("-"))
-
-
-class TestDigestFlags(unittest.TestCase):
-    """These jobs only ever run on a timer, so a flag the script no longer defines
-    surfaces as a failed run at 10am rather than at review time."""
-
-    def flags(self, command):
-        return set(re.findall(r"(--[a-z-]+)", command))
-
-    def defined(self, source):
-        return set(re.findall(r'add_argument\("(--[a-z-]+)"', source))
-
-    def test_every_flag_the_unit_passes_to_triage_is_real(self):
-        for flag in self.flags(unit_commands()[1]):
-            self.assertIn(flag, self.defined(inspect.getsource(triage.main)),
-                          msg=f"{flag} is not a triage.py flag")
-
-    def test_the_unit_never_passes_dry_run(self):
-        """A dry run posts nothing and records nothing, so the digest would go
-        silently missing while every run looked green."""
-        for command in unit_commands():
-            self.assertNotIn("--dry-run", command)
-
-    def test_the_digest_keeps_its_state_somewhere_persistent(self):
-        """Without --state every run re-reports the whole window."""
-        self.assertIn("--state", unit_commands()[1])
 
 
 if __name__ == "__main__":

@@ -10,9 +10,9 @@ Type=exec
 User=crowdin
 Group=crowdin
 EnvironmentFile=/etc/session-ops/crowdin.env
-Environment=CROWDIN_DUPLICATES_STATE=/var/lib/session-ops/crowdin/duplicates.json
+Environment=CROWDIN_DUPLICATES_STATE=/var/lib/session-ops/crowdin-duplicates/duplicates.json
 # Loopback only: nginx terminates TLS and is the only thing that should reach it.
-ExecStart=/opt/zendesk/.venv/bin/uvicorn session_ops.crowdin.relay:app \
+ExecStart=/opt/session-ops/.venv/bin/uvicorn session_ops.crowdin.relay:app \
     --host 127.0.0.1 --port 8081 --no-access-log --proxy-headers \
     --forwarded-allow-ips 127.0.0.1
 Restart=always
@@ -32,8 +32,8 @@ LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
-# The open slots, shared with crowdin-duplicates.service under a file lock.
-StateDirectory=session-ops/crowdin
+# The open slots, shared with session-ops@crowdin-duplicates under a file lock.
+StateDirectory=session-ops/crowdin-duplicates
 
 [Install]
 WantedBy=multi-user.target

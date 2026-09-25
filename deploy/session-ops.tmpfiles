@@ -1,3 +1,8 @@
-# Installed as /etc/tmpfiles.d/session-ops.conf. Root's, because every job's unit
-# writes its stamp here from a `+` ExecStartPost=, and world-readable for session-ops-silence.
+# Installed as /etc/tmpfiles.d/session-ops.conf by install.sh.
+#
+# Root's, because each job's unit writes its stamp here from a `+` ExecStartPost=,
+# and world-readable for session-ops-silence.
 d /var/lib/session-ops/stamps 0755 root root -
+# The copies of a run's inputs and outputs a job keeps for debugging. The box reboots
+# often and nothing else prunes them; systemd-tmpfiles-clean.timer applies this daily.
+e /var/lib/session-ops/*/runs - - - 14d
