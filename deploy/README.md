@@ -407,7 +407,7 @@ if you change `OnCalendar=`, check it with
 `Timezone=` key and systemd ignores one silently.
 
 **4. Through Zendesk.** With the webhook and the trigger in place (see the main
-[README](../README.md)), write `claude: english` as a private note on a throwaway
+[zendesk-relay](../docs/jobs/zendesk-relay.md#zendesk-setup)), write `claude: english` as a private note on a throwaway
 ticket and watch `journalctl -fu zendesk-relay`. `english` is the read-only verb, so
 nothing can reach a customer if the wiring is wrong.
 

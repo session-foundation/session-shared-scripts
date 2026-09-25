@@ -201,7 +201,7 @@ def api_user_id(session, subdomain):
 
     Its own notes are skipped when looking for a command, which is the in-code half
     of the loop guard. The other half is the Zendesk trigger, which should exclude
-    this same user so a draft never fires the webhook at all — see the README.
+    this same user so a draft never fires the webhook at all — see docs/jobs/zendesk-relay.md.
     """
     url = f"https://{subdomain}.zendesk.com/api/v2/users/me.json"
     resp = session.request("GET", url)

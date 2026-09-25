@@ -39,5 +39,19 @@ class TestApproveGolden(unittest.TestCase):
         assert_golden(self, "approve/list.txt", out)
 
 
+class TestApproveToken(unittest.TestCase):
+    def test_it_never_falls_back_to_the_read_only_token(self):
+        """Approving writes; the read-only CROWDIN_API_TOKEN must not be enough."""
+        env = {"CROWDIN_API_TOKEN": "read-only", "CROWDIN_PROOFREADER_TOKEN": ""}
+        with mock.patch.object(approve.subprocess, "run", side_effect=FileNotFoundError), \
+                mock.patch.dict("os.environ", env), self.assertRaises(SystemExit):
+            approve.get_token()
+
+    def test_the_proofreader_token_from_the_environment(self):
+        with mock.patch.object(approve.subprocess, "run", side_effect=FileNotFoundError), \
+                mock.patch.dict("os.environ", {"CROWDIN_PROOFREADER_TOKEN": "p"}):
+            self.assertEqual(approve.get_token(), "p")
+
+
 if __name__ == "__main__":
     unittest.main()
