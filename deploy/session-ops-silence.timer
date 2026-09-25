@@ -1,0 +1,10 @@
+[Unit]
+Description=Check hourly that every scheduled job is still succeeding
+Documentation=https://github.com/session-foundation/session-shared-scripts
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

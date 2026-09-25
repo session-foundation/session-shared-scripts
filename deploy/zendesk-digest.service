@@ -25,6 +25,9 @@ EnvironmentFile=/etc/zendesk/env
 ExecStart=/bin/sh -c '/opt/zendesk/venv/bin/python resolve_reviews.py --apply || /opt/zendesk/venv/bin/python /opt/zendesk/deploy/alert.py resolve_reviews.py zendesk-digest.service'
 ExecStart=/opt/zendesk/venv/bin/python triage.py --window-hours 72 \
     --state /var/lib/zendesk/seen.json
+# The silence checker's evidence that this ran (deploy/silence.py). `+` runs it
+# outside the sandbox, so the job itself gets no new write path.
+ExecStartPost=+/usr/bin/touch /var/lib/session-ops/stamps/zendesk-digest
 
 # Covers the worst case rather than the normal one. The resolver polls each bulk job
 # for up to JOB_TIMEOUT_SECONDS (300s) and a full 1000-ticket run is ten batches, so

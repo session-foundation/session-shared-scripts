@@ -1,0 +1,3 @@
+# Installed as /etc/tmpfiles.d/session-ops.conf. Root's, because every job's unit
+# writes its stamp here from a `+` ExecStartPost=, and world-readable for silence.py.
+d /var/lib/session-ops/stamps 0755 root root -
