@@ -13,6 +13,8 @@ share for translations. One package, `session_ops`, deployed to one self-hosted 
 | `github-prs-digest` | Weekday Discord digest of open pull requests from outside contributors | [github-prs-digest](docs/jobs/github-prs-digest.md) |
 | `crowdin-duplicates` | Crowdin string slots holding more than one translation, as they open and close | [crowdin-duplicates](docs/jobs/crowdin-duplicates.md) |
 | `crowdin-sync` | Weekly: Crowdin translations into pull requests on iOS, Android and the localization module | [crowdin-sync](docs/jobs/crowdin-sync.md) |
+| `snode-list` | Daily: the fallback service node list into session-ios | [snode-list](docs/jobs/snode-list.md) |
+| `release-stats` | On demand: download counts of the latest releases | [release-stats](docs/jobs/release-stats.md) |
 | `session-ops-silence` | Discord alerts for a job that failed, or stopped running | [session-ops-silence](docs/jobs/session-ops-silence.md) |
 
 Run by hand, not scheduled: [`sogs-ban` and `sogs-perms`](docs/tools/sogs-ban.md) for

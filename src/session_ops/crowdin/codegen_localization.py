@@ -569,7 +569,7 @@ export function isCrowdinLocale(locale: string): locale is CrowdinLocale {{
     print_success(f"Generated {output_path}")
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description='Generate Desktop localization files from parsed translations'
     )
@@ -586,7 +586,7 @@ def main():
         action='store_true',
         help='Generate only English translations (for QA builds)'
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Load parsed data
     print_progress("Loading parsed translations...")

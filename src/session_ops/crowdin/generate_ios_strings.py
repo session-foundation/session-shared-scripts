@@ -193,7 +193,7 @@ def generate_swift_constants(glossary_dict: Dict[str, str], output_paths: list):
             file.write('}\n')
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description='Convert parsed translations to Apple String Catalog.'
     )
@@ -210,7 +210,7 @@ def main():
         nargs='+',
         help='Paths to save the non-translatable strings to'
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     parsed_data = load_parsed_translations(args.parsed_translations_file)
     glossary_dict = parsed_data['glossary']

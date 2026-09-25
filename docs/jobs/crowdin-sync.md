@@ -1,20 +1,38 @@
-# Crowdin Translation Workflow
+# Crowdin Translation Sync
 
-Automated workflow that downloads translations from Crowdin, validates them, and creates PRs for iOS and Android platforms and for the Typescript Localization Module for Desktop and QA.
+Downloads the approved translations from Crowdin, validates them, and publishes each
+platform's strings: a pull request on session-android and session-ios, and a commit
+straight onto session-localization's `main`, the TypeScript module Desktop and QA use.
 
 | | |
 | --- | --- |
-| Runs | `.github/workflows/check_for_crowdin_updates.yml`, Mondays 00:00 UTC, on GitHub Actions until it moves to the host |
-| Secrets | `CROWDIN_API_TOKEN`, read-only; `CROWDIN_PR_TOKEN`, a GitHub token that can push branches and open pull requests on the platform repos |
-| Dry run | run the workflow with `UPDATE_PULL_REQUESTS=false` |
-| Re-run | Actions → Check for Crowdin Updates → Run workflow |
+| Runs | `session-ops@crowdin-sync.timer`, Mondays 10:00 Australia/Melbourne |
+| Secrets | `/etc/session-ops/crowdin.env`: a read-only `CROWDIN_API_TOKEN`; `/etc/session-ops/publish.env` and the GitHub App key, to publish |
+| Dry run | `session-ops run crowdin-sync --dry-run`: everything but the push, with each platform's diff in the journal |
+| Re-run | `systemctl start session-ops@crowdin-sync.service`; one platform with `session-ops run crowdin-sync -- --only ios` |
+| Logs | `journalctl -u session-ops@crowdin-sync -n 100 --no-pager`; the run's downloads, parsed JSON and validation report under `/var/lib/session-ops/crowdin-sync/runs/`, for 14 days |
 
-## Required Secrets
+One process, where the workflow was eight jobs passing artefacts:
 
-| Secret              | Description                                             |
-| ------------------- | ------------------------------------------------------- |
-| `CROWDIN_API_TOKEN` | Crowdin personal access token (see scopes below)         |
-| `CROWDIN_PR_TOKEN`  | GitHub token with PR creation permissions                |
+1. **Download** every locale's XLIFF export, approved translations only, plus the
+   non-translatable glossary terms.
+2. **Parse and validate** into one JSON file. A validation error stops the run;
+   `-- --skip-validation-errors` publishes anyway.
+3. **For each platform**, independently, so one failing does not stop the others:
+   a shallow, sparse checkout of just the paths its generator writes, the generator,
+   then publishing. The alert says which platform failed and at which step.
+
+The pull requests come from `feature/update-crowdin-translations`, rebuilt from `dev`
+each run and force-pushed: the branch is the job's, and nobody else commits to it. An
+unchanged tree is not pushed again, and a run with nothing to change closes the pull
+request and deletes the branch. Android's own CI validates its pull request, so no
+Gradle build runs here.
+
+## Publishing
+
+Publishing authenticates as a GitHub App when one is set up, or with a token string
+until then; see `publish.env` in [deploy/README.md](../../deploy/README.md#secrets).
+Commits are authored as `PUBLISH_GIT_AUTHOR`.
 
 ### Crowdin token scopes
 
@@ -30,17 +48,6 @@ every other call keeps working. Two tokens cover everything here:
 > **Note:** Scopes only cap what a token may do — they don't grant anything the
 > token's Crowdin account can't already do, so the proofreader token's account also
 > needs a project role that can approve.
-
-## Workflow Inputs
-
-| Input                    | Default | Description                              |
-| ------------------------ | ------- | ---------------------------------------- |
-| `UPDATE_PULL_REQUESTS`   | `true`  | Create/update PRs for all platforms      |
-| `SKIP_VALIDATION_ERRORS` | `false` | Continue even if string validation fails |
-
-## Schedule
-
-Runs automatically every Monday at 00:00 UTC.
 
 ## Validation Rules
 

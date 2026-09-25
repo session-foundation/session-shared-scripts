@@ -133,7 +133,7 @@ def generate_kotlin_constants(glossary_dict: Dict[str, str], output_path: str):
         file.write('}\n\n')
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description='Convert parsed translations to Android XML.'
     )
@@ -149,7 +149,7 @@ def main():
         'non_translatable_strings_output_path',
         help='Path to save the non-translatable strings to'
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     parsed_data = load_parsed_translations(args.parsed_translations_file)
     glossary_dict = parsed_data['glossary']
