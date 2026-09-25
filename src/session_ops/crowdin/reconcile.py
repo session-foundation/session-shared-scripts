@@ -7,8 +7,9 @@ Every string of every scanned locale is judged against the state: slots newly ho
 nothing is posted when nothing changed. This is what makes the state correct; the
 relay only makes it prompt, and Crowdin drops any webhook it fails to deliver.
 
-With --croql, a locale costs one query for the strings holding 2+ translations in it
-at all, then one request per candidate. Without it, one request per string. A plural
+With --croql, what the timer runs, a locale costs one query for the strings holding
+2+ translations in it at all, then one request per candidate. Without it, one request
+per string. A plural
 string with one translation per category is a candidate too; CroQL cannot tell plural
 categories apart.
 
