@@ -1,0 +1,181 @@
+[
+  {
+    "locale": "de",
+    "status": "multiple-translations",
+    "stringId": 107,
+    "identifier": null,
+    "webUrl": "https://crowdin.com/editor/session-crossplatform-strings/all/en-de#107",
+    "pluralCategory": null,
+    "count": 2,
+    "sourceText": "A string with no identifier and a long source text that goes on and on",
+    "translations": [
+      {
+        "translationId": 14,
+        "user": "1:alice",
+        "createdAt": "2026-09-01T10:00:00+00:00",
+        "approved": false,
+        "rating": 0,
+        "isPreTranslated": false,
+        "provider": null,
+        "text": "Eins"
+      },
+      {
+        "translationId": 15,
+        "user": "2:Bob B",
+        "createdAt": "2026-09-01T10:00:00+00:00",
+        "approved": false,
+        "rating": 0,
+        "isPreTranslated": false,
+        "provider": null,
+        "text": "Zwei"
+      }
+    ]
+  },
+  {
+    "locale": "de",
+    "status": "multiple-translations",
+    "stringId": 101,
+    "identifier": "accept",
+    "webUrl": "https://crowdin.com/editor/session-crossplatform-strings/all/en-de#101",
+    "pluralCategory": null,
+    "count": 2,
+    "sourceText": "Accept",
+    "translations": [
+      {
+        "translationId": 2,
+        "user": "2:Bob B",
+        "createdAt": "2026-09-01T10:00:00+00:00",
+        "approved": false,
+        "rating": 2,
+        "isPreTranslated": false,
+        "provider": null,
+        "text": "Annehmen"
+      },
+      {
+        "translationId": 1,
+        "user": "1:alice",
+        "createdAt": "2026-09-02T10:00:00+00:00",
+        "approved": true,
+        "rating": 0,
+        "isPreTranslated": false,
+        "provider": null,
+        "text": "Akzeptieren"
+      }
+    ]
+  },
+  {
+    "locale": "de",
+    "status": "multiple-translations",
+    "stringId": 105,
+    "identifier": "deleteMessage",
+    "webUrl": "https://crowdin.com/editor/session-crossplatform-strings/all/en-de#105",
+    "pluralCategory": "one",
+    "count": 2,
+    "sourceText": {
+      "one": "Delete message",
+      "other": "Delete messages"
+    },
+    "translations": [
+      {
+        "translationId": 9,
+        "user": "1:alice",
+        "createdAt": "2026-09-01T10:00:00+00:00",
+        "approved": false,
+        "rating": 0,
+        "isPreTranslated": false,
+        "provider": null,
+        "text": "Nachricht löschen"
+      },
+      {
+        "translationId": 10,
+        "user": "2:Bob B",
+        "createdAt": "2026-09-01T10:00:00+00:00",
+        "approved": false,
+        "rating": 0,
+        "isPreTranslated": false,
+        "provider": null,
+        "text": "Nachricht entfernen"
+      }
+    ]
+  },
+  {
+    "locale": "de",
+    "status": "multiple-translations",
+    "stringId": 105,
+    "identifier": "deleteMessage",
+    "webUrl": "https://crowdin.com/editor/session-crossplatform-strings/all/en-de#105",
+    "pluralCategory": "other",
+    "count": 3,
+    "sourceText": {
+      "one": "Delete message",
+      "other": "Delete messages"
+    },
+    "translations": [
+      {
+        "translationId": 11,
+        "user": "1:alice",
+        "createdAt": "2026-09-01T10:00:00+00:00",
+        "approved": true,
+        "rating": 0,
+        "isPreTranslated": false,
+        "provider": null,
+        "text": "Nachrichten löschen"
+      },
+      {
+        "translationId": 12,
+        "user": "2:Bob B",
+        "createdAt": "2026-09-01T10:00:00+00:00",
+        "approved": false,
+        "rating": 0,
+        "isPreTranslated": false,
+        "provider": null,
+        "text": "Nachrichten entfernen"
+      },
+      {
+        "translationId": 13,
+        "user": "2:Bob B",
+        "createdAt": "2026-09-04T10:00:00+00:00",
+        "approved": false,
+        "rating": 0,
+        "isPreTranslated": false,
+        "provider": null,
+        "text": "Nachrichten wegmachen"
+      }
+    ]
+  },
+  {
+    "locale": "de",
+    "status": "multiple-translations",
+    "stringId": 104,
+    "identifier": "messageNew",
+    "webUrl": "https://crowdin.com/editor/session-crossplatform-strings/all/en-de#104",
+    "pluralCategory": "other",
+    "count": 2,
+    "sourceText": {
+      "one": "New message",
+      "other": "New messages"
+    },
+    "translations": [
+      {
+        "translationId": 7,
+        "user": "1:alice",
+        "createdAt": "2026-09-01T10:00:00+00:00",
+        "approved": false,
+        "rating": 0,
+        "isPreTranslated": false,
+        "provider": null,
+        "text": "Neue Nachrichten"
+      },
+      {
+        "translationId": 8,
+        "user": "<none/MT>",
+        "createdAt": "2026-09-03T10:00:00+00:00",
+        "approved": false,
+        "rating": 0,
+        "isPreTranslated": true,
+        "provider": "mt",
+        "text": "Neue Mitteilungen"
+      }
+    ]
+  }
+]

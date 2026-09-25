@@ -1,0 +1,23 @@
+[
+  {
+    "embeds": [
+      {
+        "title": "🈳 Crowdin: strings with multiple translations",
+        "description": "Scanned **1** locale(s). Found **5** string/plural slot(s) with 2+ translations across **1** locale(s).\nEach slot needs one translation chosen as the keeper; the rest should be deleted so exactly one translation (per plural form) is exported.",
+        "color": 15105570,
+        "fields": [
+          {
+            "name": "Slots per locale",
+            "value": "`de` — **5**",
+            "inline": false
+          }
+        ]
+      },
+      {
+        "title": "de — 5 slot(s)",
+        "description": "• [string 107](https://crowdin.com/editor/session-crossplatform-strings/all/en-de#107) — **2** translations\n• [accept](https://crowdin.com/editor/session-crossplatform-strings/all/en-de#101) — **2** translations\n• [deleteMessage](https://crowdin.com/editor/session-crossplatform-strings/all/en-de#105) `[one]` — **2** translations\n• [deleteMessage](https://crowdin.com/editor/session-crossplatform-strings/all/en-de#105) — **3** translations\n• [messageNew](https://crowdin.com/editor/session-crossplatform-strings/all/en-de#104) — **2** translations",
+        "color": 15105570
+      }
+    ]
+  }
+]
