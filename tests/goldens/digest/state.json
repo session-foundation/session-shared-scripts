@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "seen": {
+    "5398832311": {"updated_at": "2026-09-09T11:31:37Z", "pr": "session-desktop#2012", "last_reported": "2026-09-20T00:00:00Z"},
+    "5367932699": {"updated_at": "2026-09-01T00:00:00Z", "pr": "libsession-util#142", "last_reported": "2026-09-01T00:00:00Z"},
+    "5136537328": {"updated_at": "2026-08-01T00:00:00Z", "pr": "session-desktop#1977", "last_reported": "2026-08-01T00:00:00Z"}
+  }
+}

@@ -1,0 +1,192 @@
+{
+ "argv": [
+  "t",
+  "618696",
+  "{tmp}",
+  "--glossary_id",
+  "407522",
+  "--concept_id",
+  "36",
+  "--skip-untranslated-strings"
+ ],
+ "exchanges": [
+  {
+   "method": "GET",
+   "url": "https://api.crowdin.com/api/v2/projects/618696",
+   "params": null,
+   "data": null,
+   "response": {
+    "status": 200,
+    "json": {
+     "data": {
+      "id": 618696,
+      "identifier": "session-crossplatform-strings",
+      "sourceLanguageId": "en",
+      "sourceLanguage": {
+       "id": "en",
+       "name": "English",
+       "editorCode": "en",
+       "locale": "en-US"
+      },
+      "targetLanguageIds": [
+       "de",
+       "fr",
+       "es-ES"
+      ],
+      "targetLanguages": [
+       {
+        "id": "de",
+        "name": "German",
+        "editorCode": "de",
+        "locale": "de-DE"
+       },
+       {
+        "id": "fr",
+        "name": "French",
+        "editorCode": "fr",
+        "locale": "fr-FR"
+       },
+       {
+        "id": "es-ES",
+        "name": "Spanish",
+        "editorCode": "es",
+        "locale": "es-ES"
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "method": "POST",
+   "url": "https://api.crowdin.com/api/v2/projects/618696/translations/exports",
+   "params": null,
+   "data": "{\"targetLanguageId\": \"en\", \"format\": \"xliff\", \"skipUntranslatedStrings\": false, \"exportApprovedOnly\": false}",
+   "response": {
+    "status": 200,
+    "json": {
+     "data": {
+      "url": "https://production-enterprise-exports.example/en.xliff?sig=x",
+      "expireIn": "2026-09-25T12:00:00+00:00"
+     }
+    }
+   }
+  },
+  {
+   "method": "GET",
+   "url": "https://production-enterprise-exports.example/en.xliff?sig=x",
+   "params": null,
+   "data": null,
+   "response": {
+    "status": 200,
+    "text": "<?xml version=\"1.0\"?>\n<xliff version=\"1.2\"><file target-language=\"en\"/></xliff>\n"
+   }
+  },
+  {
+   "method": "POST",
+   "url": "https://api.crowdin.com/api/v2/projects/618696/translations/exports",
+   "params": null,
+   "data": "{\"targetLanguageId\": \"de\", \"format\": \"xliff\", \"skipUntranslatedStrings\": true, \"exportApprovedOnly\": true}",
+   "response": {
+    "status": 200,
+    "json": {
+     "data": {
+      "url": "https://production-enterprise-exports.example/de.xliff?sig=x",
+      "expireIn": "2026-09-25T12:00:00+00:00"
+     }
+    }
+   }
+  },
+  {
+   "method": "GET",
+   "url": "https://production-enterprise-exports.example/de.xliff?sig=x",
+   "params": null,
+   "data": null,
+   "response": {
+    "status": 200,
+    "text": "<?xml version=\"1.0\"?>\n<xliff version=\"1.2\"><file target-language=\"de\"/></xliff>\n"
+   }
+  },
+  {
+   "method": "POST",
+   "url": "https://api.crowdin.com/api/v2/projects/618696/translations/exports",
+   "params": null,
+   "data": "{\"targetLanguageId\": \"fr\", \"format\": \"xliff\", \"skipUntranslatedStrings\": true, \"exportApprovedOnly\": true}",
+   "response": {
+    "status": 200,
+    "json": {
+     "data": {
+      "url": "https://production-enterprise-exports.example/fr.xliff?sig=x",
+      "expireIn": "2026-09-25T12:00:00+00:00"
+     }
+    }
+   }
+  },
+  {
+   "method": "GET",
+   "url": "https://production-enterprise-exports.example/fr.xliff?sig=x",
+   "params": null,
+   "data": null,
+   "response": {
+    "status": 200,
+    "text": "<?xml version=\"1.0\"?>\n<xliff version=\"1.2\"><file target-language=\"fr\"/></xliff>\n"
+   }
+  },
+  {
+   "method": "POST",
+   "url": "https://api.crowdin.com/api/v2/projects/618696/translations/exports",
+   "params": null,
+   "data": "{\"targetLanguageId\": \"es-ES\", \"format\": \"xliff\", \"skipUntranslatedStrings\": true, \"exportApprovedOnly\": true}",
+   "response": {
+    "status": 200,
+    "json": {
+     "data": {
+      "url": "https://production-enterprise-exports.example/es-ES.xliff?sig=x",
+      "expireIn": "2026-09-25T12:00:00+00:00"
+     }
+    }
+   }
+  },
+  {
+   "method": "GET",
+   "url": "https://production-enterprise-exports.example/es-ES.xliff?sig=x",
+   "params": null,
+   "data": null,
+   "response": {
+    "status": 200,
+    "text": "<?xml version=\"1.0\"?>\n<xliff version=\"1.2\"><file target-language=\"es-ES\"/></xliff>\n"
+   }
+  },
+  {
+   "method": "GET",
+   "url": "https://api.crowdin.com/api/v2/glossaries/407522/terms?conceptId=36&limit=500",
+   "params": null,
+   "data": null,
+   "response": {
+    "status": 200,
+    "json": {
+     "data": [
+      {
+       "data": {
+        "id": 7,
+        "text": "Session",
+        "conceptId": 36
+       }
+      },
+      {
+       "data": {
+        "id": 8,
+        "text": "Lokinet",
+        "conceptId": 36
+       }
+      }
+     ],
+     "pagination": {
+      "offset": 0,
+      "limit": 500
+     }
+    }
+   }
+  }
+ ]
+}

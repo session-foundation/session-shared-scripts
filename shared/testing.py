@@ -1,6 +1,8 @@
 """Fakes for the tests of every script that talks HTTP through `shared`."""
 import json
+import os
 import time
+from datetime import datetime
 
 import requests
 
@@ -86,3 +88,99 @@ class NoSleep:
     def __exit__(self, *exc):
         time.sleep = self._real
         return False
+
+
+GOLDENS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "tests", "goldens")
+
+
+def load_golden_json(relpath):
+    with open(os.path.join(GOLDENS_DIR, relpath), encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def assert_golden(case, relpath, actual):
+    """Compare `actual` with tests/goldens/<relpath>; UPDATE_GOLDENS=1 rewrites it."""
+    path = os.path.join(GOLDENS_DIR, relpath)
+    if os.environ.get("UPDATE_GOLDENS"):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(actual)
+        return
+    with open(path, encoding="utf-8") as handle:
+        expected = handle.read()
+    case.maxDiff = None
+    case.assertEqual(expected, actual, f"{relpath} differs (UPDATE_GOLDENS=1 to accept)")
+
+
+def request_key(method, url, params=None, data=None, json_body=None):
+    """What identifies a request in a recording: method, URL, query and body."""
+    if json_body is not None:
+        data = json.dumps(json_body, sort_keys=True)
+    elif isinstance(data, (str, bytes)):
+        try:
+            data = json.dumps(json.loads(data), sort_keys=True)
+        except ValueError:
+            data = data.decode() if isinstance(data, bytes) else data
+    query = sorted((str(k), str(v)) for k, v in (params or {}).items())
+    return json.dumps([method.upper(), url, query, data])
+
+
+class RecordedResponse(FakeResponse):
+    def __init__(self, recorded):
+        super().__init__(recorded.get("json"), recorded.get("status", 200))
+        if "text" in recorded:
+            self.text = recorded["text"]
+        self.content = self.text.encode()
+
+    def json(self):
+        if self._payload is None:
+            raise requests.exceptions.JSONDecodeError("Expecting value", self.text, 0)
+        return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(str(self.status_code), response=self)
+
+    def iter_content(self, chunk_size=1):
+        for start in range(0, len(self.content), chunk_size):
+            yield self.content[start:start + chunk_size]
+
+
+class RecordedSession:
+    """Answers each request from a recording, matched by request rather than order.
+
+    Order-independent so that a caller fanning requests across threads replays
+    deterministically. A request missing from the recording fails the test by name.
+    """
+
+    def __init__(self, exchanges):
+        self.headers = {}
+        self._responses = {
+            request_key(ex["method"], ex["url"], ex.get("params"), ex.get("data")):
+                ex["response"]
+            for ex in exchanges
+        }
+        self.calls = []
+
+    def request(self, method, url, params=None, data=None, json=None, **kwargs):
+        self.calls.append((method, url, params, data if json is None else json))
+        key = request_key(method, url, params, data, json)
+        if key not in self._responses:
+            raise AssertionError(f"request not in the recording: {key}")
+        return RecordedResponse(self._responses[key])
+
+    def get(self, url, **kwargs):
+        return self.request("GET", url, **kwargs)
+
+    def post(self, url, **kwargs):
+        return self.request("POST", url, **kwargs)
+
+
+def frozen_datetime(now):
+    """A datetime class whose now() is `now`, for patching over a module's import."""
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz else now.replace(tzinfo=None)
+    return Frozen
