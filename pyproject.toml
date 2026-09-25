@@ -8,6 +8,7 @@ dependencies = [
     # CLDR data: a new babel can rename a language in the generated language lists.
     "babel==2.17.0",
     "colorama>=0.4.6",
+    "crowdin-api-client>=1.29.0",
     "fastapi>=0.141.1",
     "pynacl>=1.6.2",
     "requests>=2.32.3",

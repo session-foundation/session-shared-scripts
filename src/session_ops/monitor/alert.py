@@ -25,7 +25,7 @@ import socket
 import subprocess
 import sys
 
-import requests
+from session_ops.shared import http
 from session_ops.zendesk import triage
 
 
@@ -108,7 +108,7 @@ def main():
     message = build_message(args[0], socket.gethostname(), *args[1:], detail=detail)
     # A fresh session, never a Zendesk one — that carries the API-token auth header,
     # and Discord has no business receiving it.
-    if not triage.post_to_discord(requests.Session(), webhook, [{"content": message}]):
+    if not triage.post_to_discord(http.Session(), webhook, [{"content": message}]):
         sys.exit("Could not post the failure to Discord.")
 
 

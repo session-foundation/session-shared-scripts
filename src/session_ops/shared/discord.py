@@ -12,7 +12,6 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
 
-from session_ops.shared.retry import request_with_retry
 
 COMPONENTS_V2_FLAG = 1 << 15
 CONTAINER = 17
@@ -112,7 +111,7 @@ def post_to_discord(session, url, messages):
     """
     for index, payload in enumerate(messages):
         try:
-            resp = request_with_retry(session, "POST", url, json=payload)
+            resp = session.request("POST", url, json=payload)
         except requests.RequestException as exc:
             print(f"Discord unreachable on message {index + 1}/{len(messages)} "
                   f"({exc}).")

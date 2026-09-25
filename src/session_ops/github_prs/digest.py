@@ -44,12 +44,10 @@ import sys
 from datetime import datetime, timedelta, timezone
 from operator import itemgetter
 
-import requests
 
-from session_ops.shared import discord, state as dedup
+from session_ops.shared import discord, http, state as dedup
 from session_ops.shared.discord import MAX_MESSAGE_TEXT_CHARS, clip
 from session_ops.shared.env import get_env
-from session_ops.shared.retry import request_with_retry
 
 API = "https://api.github.com"
 DEFAULT_ORG = "session-foundation"
@@ -80,7 +78,7 @@ def load_maintainers(path):
 
 
 def github_session(token):
-    session = requests.Session()
+    session = http.Session()
     session.headers.update({
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
@@ -90,7 +88,7 @@ def github_session(token):
 
 
 def fetch_json(session, url, **kwargs):
-    resp = request_with_retry(session, "GET", url, **kwargs)
+    resp = session.request("GET", url, **kwargs)
     if resp.status_code >= 400:
         sys.exit(f"GitHub {resp.status_code} on {url}: {resp.text[:300]}")
     return resp.json()
@@ -386,7 +384,7 @@ def main():
         print(json.dumps(messages, indent=2, ensure_ascii=False))
         return
 
-    posted = discord.post_to_discord(requests.Session(),
+    posted = discord.post_to_discord(http.Session(),
                                      discord.components_webhook_url(webhook), messages)
     # Only what Discord accepted. A PR in a message that never landed stays eligible.
     if args.state:

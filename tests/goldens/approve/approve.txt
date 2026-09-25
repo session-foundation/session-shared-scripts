@@ -1,0 +1,13 @@
+  string 'ongoingAppeal' -> id 201
+  string 'ongoingAppealDescription' -> id 202
+
+3 target languages: de, fr, ja
+
+  [ ok ] ongoingAppeal / de: approved tid=12 submitter=1:alice | Widerspruch
+  [skip] ongoingAppeal / fr: no translation from an allowed submitter (present: submitter=2:Bob B)
+  [skip] ongoingAppeal / ja: no translation
+  [ -- ] ongoingAppealDescription / de: already approved tid=31 submitter=1:alice | Einspruch läuft
+  [ERR ] ongoingAppealDescription / fr: 500 {"error": {"code": 500, "message": "Internal error"}}
+  [ ok ] ongoingAppealDescription / ja: approved tid=51 submitter=1:alice | 異議申し立て中
+
+Done. approved: 2, already: 1, skipped: 2, errors: 1

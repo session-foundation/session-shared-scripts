@@ -15,6 +15,10 @@ class FakeResponse:
         self.headers = {"retry-after": retry_after}
         self.text = json.dumps(payload)
 
+    @property
+    def content(self):
+        return self.text.encode()
+
     def json(self):
         return self._payload
 
@@ -40,6 +44,7 @@ class FakeSession:
     def __init__(self, responses):
         self._responses = list(responses)
         self.calls = []
+        self.headers = {}
 
     def request(self, method, url, **kwargs):
         self.calls.append((method, url, kwargs))
@@ -47,6 +52,9 @@ class FakeSession:
         if isinstance(item, Exception):
             raise item
         return item
+
+    def close(self):
+        pass
 
 
 class Patched:
@@ -107,7 +115,6 @@ class RecordedResponse(FakeResponse):
         super().__init__(recorded.get("json"), recorded.get("status", 200))
         if "text" in recorded:
             self.text = recorded["text"]
-        self.content = self.text.encode()
 
     def json(self):
         if self._payload is None:
@@ -151,6 +158,9 @@ class RecordedSession:
 
     def post(self, url, **kwargs):
         return self.request("POST", url, **kwargs)
+
+    def close(self):
+        pass
 
 
 def frozen_datetime(now):

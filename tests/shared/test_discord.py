@@ -4,7 +4,7 @@ import unittest
 from urllib.parse import parse_qsl, urlsplit
 
 from session_ops.shared import discord
-from session_ops.shared.testing import FakeResponse, FakeSession, NoSleep
+from session_ops.shared.testing import FakeResponse, FakeSession
 
 
 class TestComponentsWebhookUrl(unittest.TestCase):
@@ -53,16 +53,14 @@ class TestPostToDiscord(unittest.TestCase):
         self.assertEqual(len(session.calls), 1)
 
     def test_first_message_failing_reports_zero(self):
-        session = FakeSession([FakeResponse({}, status_code=500)] * 6)
-        with NoSleep():
-            self.assertEqual(self.post(session, [{}]), 0)
+        session = FakeSession([FakeResponse({}, status_code=500)])
+        self.assertEqual(self.post(session, [{}]), 0)
 
     def test_an_unreachable_webhook_reports_the_prefix_rather_than_raising(self):
         import requests
         session = FakeSession([FakeResponse({}, status_code=204)]
-                              + [requests.ConnectionError("down")] * 6)
-        with NoSleep():
-            self.assertEqual(self.post(session, [{}, {}]), 1)
+                              + [requests.ConnectionError("down")])
+        self.assertEqual(self.post(session, [{}, {}]), 1)
 
     def test_no_messages_is_zero(self):
         self.assertEqual(self.post(FakeSession([]), []), 0)

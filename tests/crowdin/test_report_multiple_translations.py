@@ -5,16 +5,11 @@ import contextlib
 import io
 import unittest
 
-import requests
+from unittest import mock
 
 from session_ops.crowdin import report_multiple_translations as report
-from session_ops.shared.testing import FakeResponse, FakeSession, NoSleep, Patched
-
-
-class ApiResponse(FakeResponse):
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise requests.HTTPError(f"{self.status_code}", response=self)
+from session_ops.crowdin import sdk
+from session_ops.shared.testing import FakeResponse, FakeSession, Patched
 
 
 class WebhookSession(FakeSession):
@@ -25,25 +20,26 @@ class WebhookSession(FakeSession):
         return False
 
 
-class TestRequestWithRetry(unittest.TestCase):
+class TestCrowdinClient(unittest.TestCase):
     def test_a_client_error_raises_rather_than_returning(self):
         """Callers read the body straight off the response, so a 4xx has to stop them."""
-        with self.assertRaises(requests.HTTPError):
-            report.request_with_retry(FakeSession([ApiResponse({}, status_code=404)]),
-                                      "GET", "https://x")
+        client = sdk.client("t", 1, session=FakeSession([FakeResponse({}, status_code=404)]))
+        with self.assertRaises(sdk.APIException):
+            client.projects.get_project()
 
     def test_crowdins_budget_is_ten_attempts_at_sixty_seconds(self):
-        session = FakeSession([ApiResponse({}, status_code=503)] * 9 + [ApiResponse({"ok": 1})])
-        with NoSleep():
-            self.assertEqual(report.request_with_retry(session, "GET", "https://x").json(), {"ok": 1})
-        self.assertEqual(len(session.calls), 10)
-        self.assertEqual({kw["timeout"] for _, _, kw in session.calls}, {60})
+        """A locale is ~1,400 requests near the rate limit: 429s are expected."""
+        with mock.patch.object(report.sdk.http, "Session") as made:
+            client = report.crowdin_client("t", 1)
+            client.get_api_requestor().session.request("GET", "https://x")
+        self.assertEqual(made.call_args.kwargs["attempts"], 10)
+        self.assertEqual(made.call_args.kwargs["timeout"], 60)
 
 
 class TestPostToDiscord(unittest.TestCase):
     def post(self, responses, messages):
         session = WebhookSession(responses)
-        with Patched(report.requests, Session=lambda: session), \
+        with Patched(report.http, Session=lambda: session), \
                 contextlib.redirect_stdout(io.StringIO()):
             report.post_to_discord("https://hook", messages)
         return session
@@ -61,7 +57,7 @@ class TestPostToDiscord(unittest.TestCase):
 
     def test_the_warning_is_plain_content_the_webhook_cannot_reject_for_size(self):
         session = WebhookSession([FakeResponse({}, status_code=400), FakeResponse({}, status_code=204)])
-        with Patched(report.requests, Session=lambda: session), \
+        with Patched(report.http, Session=lambda: session), \
                 contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
             report.post_to_discord("https://hook", [{"embeds": [{"title": "x" * 9000}]}])
         self.assertEqual(list(session.calls[1][2]["json"]), ["content"])

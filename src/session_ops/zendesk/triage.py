@@ -81,10 +81,9 @@ from functools import partial
 
 import requests
 
-from session_ops.shared import discord, state as dedup
+from session_ops.shared import discord, http, state as dedup
 from session_ops.shared.discord import clip, post_to_discord
 from session_ops.shared.env import get_env
-from session_ops.shared.retry import request_with_retry
 
 # The channel AppFollow imports app-store reviews on. Identified reviews with no
 # false positives in a 3,662-ticket sample; tags did not (only 287 carried one).
@@ -387,7 +386,7 @@ SYSTEM_PROMPT = _SYSTEM_PROMPT_TEMPLATE.replace("__CATEGORIES__", CATEGORY_GUIDA
 
 
 def zendesk_session(email, token):
-    session = requests.Session()
+    session = http.Session()
     # Zendesk API-token auth: username is "{email}/token", password is the token.
     session.auth = (f"{email}/token", token)
     session.headers["Accept"] = "application/json"
@@ -450,7 +449,7 @@ def fetch_tickets(session, subdomain, query, max_tickets):
     # Whichever bites first: our own runaway guard or Zendesk's hard result limit.
     cap = min(max_tickets, SEARCH_RESULT_LIMIT)
     while url and len(tickets) < cap:
-        resp = request_with_retry(session, "GET", url, params=params)
+        resp = session.request("GET", url, params=params)
         params = None  # next_page already carries the query
         if resp.status_code == 403:
             sys.exit("Zendesk returned 403 — the API token/email may lack search access.")
@@ -479,7 +478,7 @@ def fetch_tickets(session, subdomain, query, max_tickets):
 
 def fetch_ticket(session, subdomain, ticket_id):
     url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}.json"
-    resp = request_with_retry(session, "GET", url)
+    resp = session.request("GET", url)
     if resp.status_code == 404:
         sys.exit(f"Ticket #{ticket_id} does not exist.")
     if resp.status_code >= 400:
@@ -498,8 +497,7 @@ def fetch_comments(session, subdomain, ticket_id):
     opening back-and-forth.
     """
     url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}/comments.json"
-    resp = request_with_retry(
-        session, "GET", url, params={"per_page": 100, "sort_order": "desc"})
+    resp = session.request("GET", url, params={"per_page": 100, "sort_order": "desc"})
     if resp.status_code >= 400:
         sys.exit(f"Could not read the comments on #{ticket_id} ({resp.status_code}).")
     return (resp.json() or {}).get("comments") or []
@@ -513,15 +511,13 @@ def fetch_total_unsolved(session, subdomain, query=BACKLOG_QUERY):
     """
     url = f"https://{subdomain}.zendesk.com/api/v2/search/count.json"
     try:
-        resp = request_with_retry(
-            session, "GET", url, attempts=2, params={"query": query}
-        )
+        resp = session.request("GET", url, attempts=2, params={"query": query})
         if resp.status_code >= 400:
             print(f"Note: could not count the unsolved backlog ({resp.status_code}).")
             return None
         return resp.json().get("count")
     except (requests.RequestException, ValueError) as exc:
-        # request_with_retry re-raises the transport error once its (short) budget is
+        # The session re-raises the transport error once its (short) budget is
         # spent, and .json() raises on a non-JSON body — neither is a reason to lose
         # the digest over one context number, so both land on the documented None.
         print(f"Note: could not count the unsolved backlog ({exc}).")
@@ -573,7 +569,7 @@ def hydrate_requester_activity(session, subdomain, tickets):
         chunk = ids[start : start + 100]
         url = f"https://{subdomain}.zendesk.com/api/v2/tickets/show_many.json"
         try:
-            resp = request_with_retry(session, "GET", url, attempts=2, params={
+            resp = session.request("GET", url, attempts=2, params={
                 "ids": ",".join(str(i) for i in chunk), "include": "metric_sets"})
         except requests.RequestException as exc:
             print(f"Note: could not fetch ticket metrics ({exc}); "
@@ -695,7 +691,7 @@ def fetch_user(session, subdomain, user_id):
     failed lookup widens the sample rather than silencing it.
     """
     url = f"https://{subdomain}.zendesk.com/api/v2/users/{user_id}.json"
-    resp = request_with_retry(session, "GET", url, attempts=2)
+    resp = session.request("GET", url, attempts=2)
     if resp.status_code >= 400:
         return {}
     return (resp.json() or {}).get("user") or {}
@@ -865,7 +861,7 @@ def hydrate_descriptions(session, subdomain, tickets):
             continue
         url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket['id']}/comments.json"
         try:
-            resp = request_with_retry(session, "GET", url, attempts=2, params={"per_page": 10})
+            resp = session.request("GET", url, attempts=2, params={"per_page": 10})
         except requests.RequestException as exc:
             # Hydration is an enrichment, never a reason to abort the digest: an
             # unreachable comments endpoint just leaves the description as-is.
@@ -982,7 +978,7 @@ def conversation_turns(session, subdomain, ticket):
         return None
     url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket['id']}/comments.json"
     try:
-        resp = request_with_retry(session, "GET", url, attempts=2,
+        resp = session.request("GET", url, attempts=2,
                                   params={"per_page": 100, "sort_order": "asc"})
     except requests.RequestException as exc:
         print(f"Note: could not fetch comments for #{ticket['id']} ({exc}).")
@@ -1059,7 +1055,7 @@ def write_english_field(session, subdomain, ticket_id, field_id, english):
     url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}.json"
     payload = {"ticket": {"custom_fields": [{"id": field_id, "value": english}]}}
     try:
-        resp = request_with_retry(session, "PUT", url, attempts=2, json=payload)
+        resp = session.request("PUT", url, attempts=2, json=payload)
     except requests.RequestException as exc:
         print(f"Note: could not write the English transcript to #{ticket_id} ({exc}).")
         return False
@@ -1890,7 +1886,7 @@ def main():
         return
 
     # A fresh session, never the Zendesk one: that carries the API-token auth header.
-    posted = post_to_discord(requests.Session(), discord.components_webhook_url(webhook),
+    posted = post_to_discord(http.Session(), discord.components_webhook_url(webhook),
                              messages)
     print(f"Posted {posted} of {len(messages)} Discord message(s).")
 

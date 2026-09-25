@@ -76,8 +76,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
-import requests
 
+from session_ops.shared import http
 from session_ops.zendesk import triage
 
 # Reviews at or above this rating carry nothing to act on. Fixed rather than a flag:
@@ -186,9 +186,7 @@ def solve_batch(session, subdomain, ids, tag, note):
     payload = {"ticket": {"status": "solved", "additional_tags": [tag]}}
     if note:
         payload["ticket"]["comment"] = {"body": note, "public": False}
-    resp = triage.request_with_retry(
-        session, "PUT", url, params={"ids": ",".join(str(i) for i in ids)}, json=payload
-    )
+    resp = session.request("PUT", url, params={"ids": ",".join(str(i) for i in ids)}, json=payload)
     if resp.status_code >= 400:
         sys.exit(f"update_many failed ({resp.status_code}): {resp.text[:300]}")
     job = (resp.json() or {}).get("job_status") or {}
@@ -212,7 +210,7 @@ def wait_for_job(session, subdomain, job_id, timeout=JOB_TIMEOUT_SECONDS):
     url = f"https://{subdomain}.zendesk.com/api/v2/job_statuses/{job_id}.json"
     deadline = time.monotonic() + timeout
     while True:
-        resp = triage.request_with_retry(session, "GET", url)
+        resp = session.request("GET", url)
         if resp.status_code >= 400:
             sys.exit(f"could not read job {job_id} ({resp.status_code}): {resp.text[:200]}")
         job = (resp.json() or {}).get("job_status") or {}
@@ -316,7 +314,7 @@ def post_summary(webhook_url, message):
     A fresh session, never the Zendesk one — that carries the API-token auth header,
     and Discord has no business receiving it.
     """
-    return bool(triage.post_to_discord(requests.Session(), webhook_url,
+    return bool(triage.post_to_discord(http.Session(), webhook_url,
                                        [{"content": message}]))
 
 

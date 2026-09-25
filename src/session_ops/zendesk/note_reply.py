@@ -204,7 +204,7 @@ def api_user_id(session, subdomain):
     this same user so a draft never fires the webhook at all — see the README.
     """
     url = f"https://{subdomain}.zendesk.com/api/v2/users/me.json"
-    resp = triage.request_with_retry(session, "GET", url)
+    resp = session.request("GET", url)
     if resp.status_code >= 400:
         sys.exit(f"Zendesk refused to identify the API user ({resp.status_code}).")
     return ((resp.json() or {}).get("user") or {}).get("id")
@@ -241,7 +241,7 @@ def change_tags(session, subdomain, ticket_id, add=(), drop=()):
                           ("DELETE", [t for t in drop if t])):
         if not names:
             continue
-        resp = triage.request_with_retry(session, method, url, json={"tags": names})
+        resp = session.request(method, url, json={"tags": names})
         if resp.status_code >= 400:
             # Never worth failing a run over: tags are a dashboard light, not the work.
             print(f"Note: could not {method.lower()} tags on #{ticket_id} "
@@ -353,7 +353,7 @@ def write_to_ticket(session, subdomain, ticket_id, body, public,
     if status:
         fields["status"] = status
     url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}.json"
-    resp = triage.request_with_retry(session, "PUT", url, json={"ticket": fields})
+    resp = session.request("PUT", url, json={"ticket": fields})
     if resp.status_code >= 400:
         sys.exit(f"Zendesk rejected the {'reply' if public else 'note'} on "
                  f"#{ticket_id} ({resp.status_code}).")
