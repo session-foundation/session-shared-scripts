@@ -1361,8 +1361,8 @@ def claude_cli_json(model, effort, system_prompt, schema, prompt, timeout, label
     # only fix is a smaller batch.
     if response.get("stop_reason") == "max_tokens":
         sys.exit(f"{CLAUDE_CLI} ran out of output tokens on {label}, so the JSON is "
-                 f"incomplete. Lower --batch-size (currently splitting at "
-                 f"{DEFAULT_BATCH_SIZE}).")
+                 f"incomplete. Ask for less per call; for the digest that is a lower "
+                 f"--batch-size.")
 
     # structured_output is the object --json-schema produced, so it beats re-parsing
     # the `result` string: one less decode, and immune to prose alongside the JSON.
