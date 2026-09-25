@@ -6,15 +6,15 @@ for a plural string, is what gets exported. A slot is (string, locale, plural ca
 
 | | |
 | --- | --- |
-| Runs | `crowdin-relay.service`, always on, behind nginx at `POST /crowdin/suggestions/<secret>`; `crowdin-duplicates.timer`, daily 03:00 UTC |
+| Runs | `crowdin-relay.service`, always on, behind nginx at `POST /crowdin/suggestions/<secret>`; `session-ops@crowdin-duplicates.timer`, daily 03:00 UTC |
 | Secrets | `/etc/session-ops/crowdin.env`: a read-only `CROWDIN_API_TOKEN`, the channel's webhook, `CROWDIN_WEBHOOK_SECRET` |
-| Dry run | `crowdin-reconcile-duplicates --dry-run --locales de --state PATH`; `CROWDIN_RELAY_DRY_RUN=1` for the relay |
-| Re-run | `systemctl start crowdin-duplicates.service` |
-| Logs | `journalctl -u crowdin-relay -u crowdin-duplicates -n 50 --no-pager` |
+| Dry run | `session-ops run crowdin-duplicates --dry-run -- --locales de`; `CROWDIN_RELAY_DRY_RUN=1` for the relay |
+| Re-run | `systemctl start session-ops@crowdin-duplicates.service` |
+| Logs | `journalctl -u crowdin-relay -u session-ops@crowdin-duplicates -n 50 --no-pager` |
 
 ## How it stays current
 
-The open slots live in `/var/lib/session-ops/crowdin/duplicates.json`. Each run posts
+The open slots live in `/var/lib/session-ops/crowdin-duplicates/duplicates.json`. Each run posts
 only what changed: slots newly holding 2+ translations, and slots that no longer do.
 Nothing changed, nothing is posted.
 

@@ -8,8 +8,8 @@ down through a whole schedule. This catches those, by age rather than by event.
 
 Each job's unit touches /var/lib/session-ops/stamps/<name> when it succeeds
 (ExecStartPost=, which a oneshot runs only after every ExecStart= exited 0). This
-runs hourly on a timer of its own and posts one message listing every job in
-jobs.toml whose stamp is older than its `max_age_hours`, then repeats it once a day
+runs hourly on a timer of its own and posts one message listing every scheduled job
+in jobs.toml whose stamp is older than its `max_age_hours`, then repeats it once a day
 while the job stays silent. A job with no stamp at all is measured from the first
 check that found it missing, so installing this does not alert on jobs that simply
 have not run since.
@@ -29,25 +29,22 @@ import os
 import socket
 import sys
 import time
-import tomllib
 from datetime import datetime, timezone
 
 
+from session_ops.ops import registry
 from session_ops.shared import discord, http
 from session_ops.shared.env import get_env
 
-REGISTRY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jobs.toml")
+REGISTRY = registry.REGISTRY
 STAMPS_DIR = "/var/lib/session-ops/stamps"
 REMIND_SECONDS = 24 * 3600
 
 
 def load_jobs(path):
-    with open(path, "rb") as handle:
-        jobs = tomllib.load(handle).get("job", [])
-    for job in jobs:
-        if not job.get("name") or not isinstance(job.get("max_age_hours"), (int, float)):
-            sys.exit(f"{path}: every [[job]] needs a name and a numeric max_age_hours: {job}")
-    return jobs
+    """The scheduled jobs in the registry: nothing is late that has no schedule."""
+    return [{"name": job.name, "max_age_hours": job.max_age_hours}
+            for job in registry.load(path) if job.schedule]
 
 
 def stamp_time(stamps_dir, name):
@@ -124,12 +121,12 @@ def build_message(due, host, now):
                 else f"no success recorded since {utc(since)}")
         lines.append(f"• **{name}**: silent for **{duration(now - since)}** "
                      f"(allowed {job['max_age_hours']}h), {seen}.")
-        lines.append(f"  `systemctl list-timers {name}.timer` · "
-                     f"`journalctl -u {name}.service -n 50 --no-pager`")
+        lines.append(f"  `systemctl list-timers session-ops@{name}.timer` · "
+                     f"`journalctl -u session-ops@{name}.service -n 50 --no-pager`")
     return "\n".join(lines)
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Alert on jobs that stopped succeeding.")
     parser.add_argument("--registry", default=REGISTRY)
     parser.add_argument("--stamps", default=STAMPS_DIR)
@@ -138,7 +135,7 @@ def main():
     parser.add_argument("--webhook", help="Discord webhook URL (else ALERT_DISCORD_WEBHOOK_URL).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print the alert instead of posting it; write no state.")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     webhook = get_env("ALERT_DISCORD_WEBHOOK_URL", args.webhook, required=not args.dry_run)
     jobs = load_jobs(args.registry)

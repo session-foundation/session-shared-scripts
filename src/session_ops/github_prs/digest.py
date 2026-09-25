@@ -35,7 +35,7 @@ Usage:
     github-prs-digest --dry-run
 
     # what the weekday timer does: a window covering the weekend, deduped
-    github-prs-digest --window-hours 72 --state /var/lib/github-prs/seen.json
+    github-prs-digest --window-hours 72 --state /var/lib/session-ops/github-prs-digest/seen.json
 """
 import argparse
 import json
@@ -335,7 +335,7 @@ def build_messages(new, updated, backlog, window_hours, now, truncated=False):
     return discord.messages_from_entries(header, blocks, MAX_COMPONENTS_PER_MESSAGE)
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Post a daily digest of contributor pull requests to Discord.")
     parser.add_argument("--org", help=f"GitHub org to scan (else GITHUB_PRS_ORG, default {DEFAULT_ORG}).")
@@ -354,7 +354,7 @@ def main():
                              f"(default {DEFAULT_RETENTION_DAYS}).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print the Discord payload instead of posting it.")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.window_hours < 1:
         sys.exit("--window-hours must be at least 1.")

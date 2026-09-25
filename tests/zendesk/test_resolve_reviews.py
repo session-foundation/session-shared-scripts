@@ -10,9 +10,6 @@ This script writes to Zendesk, so the tests lean on the guards rather than the h
 path: that a dry run cannot PUT, that only positive app-store reviews are selected,
 and that an asynchronous job's failures are surfaced instead of swallowed.
 """
-import inspect
-import os
-import re
 import unittest
 from datetime import datetime, timezone
 from urllib.parse import quote
@@ -20,7 +17,6 @@ from urllib.parse import quote
 from session_ops.zendesk import resolve_reviews
 from session_ops.zendesk import triage
 from session_ops.shared.testing import FakeResponse, FakeSession, NoSleep
-from tests.zendesk.test_triage import ROOT, unit_commands
 
 
 def review(ticket_id, stars=5, channel="any_channel", subject=None):
@@ -373,34 +369,6 @@ class TestSharedDetectionIsNotReimplemented(unittest.TestCase):
         job solves exactly that set, so the two numbers cannot disagree."""
         self.assertEqual(resolve_reviews.MIN_STARS,
                          triage.DEFAULT_REVIEW_STAR_FLOOR + 1)
-
-
-class TestSchedulerWiring(unittest.TestCase):
-    """This job is only ever exercised on a timer, so a flag the script no longer
-    defines surfaces as a failed run days later. The digest has the same check for
-    its own invocation; this is it for the half that writes to Zendesk.
-    """
-
-    def command(self):
-        return unit_commands()[0]
-
-    def test_every_flag_the_unit_passes_is_one_the_script_defines(self):
-        defined = set(re.findall(r'add_argument\("(--[a-z-]+)"',
-                                 inspect.getsource(resolve_reviews.main)))
-        found = set(re.findall(r"(--[a-z-]+)", self.command()))
-        self.assertIn("--apply", found,
-                      "the unit no longer passes --apply, so it would only ever "
-                      "report what it would have solved")
-        for flag in found:
-            self.assertIn(flag, defined,
-                          msg=f"{flag} is not a resolve_reviews.py flag")
-
-    def test_a_failure_here_is_reported(self):
-        """It posts its own tally, so a run that died before posting has to be
-        surfaced some other way — OnFailure= on the unit that runs it."""
-        with open(os.path.join(ROOT, "deploy", "zendesk-digest.service"),
-                  encoding="utf-8") as fh:
-            self.assertIn("OnFailure=zendesk-alert@", fh.read())
 
 
 if __name__ == "__main__":

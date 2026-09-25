@@ -7,11 +7,11 @@ has a reason to already know about:
 
 | | |
 | --- | --- |
-| Runs | `github-prs-digest.timer`, Mon–Fri 09:30 Australia/Melbourne |
-| Secrets | `/etc/github-prs/env`: `GITHUB_PRS_TOKEN` with no scopes at all, the channel's webhook, `ALERT_DISCORD_WEBHOOK_URL` |
-| Dry run | `uv run github-prs-digest --dry-run` |
-| Re-run | `systemctl start github-prs-digest.service` |
-| Logs | `journalctl -u github-prs-digest -n 50 --no-pager` |
+| Runs | `session-ops@github-prs-digest.timer`, Mon–Fri 09:30 Australia/Melbourne |
+| Secrets | `/etc/session-ops/github-prs.env`: `GITHUB_PRS_TOKEN` with no scopes at all, and the channel's webhook |
+| Dry run | `session-ops run github-prs-digest --dry-run`; `uv run github-prs-digest --dry-run` from a checkout |
+| Re-run | `systemctl start session-ops@github-prs-digest.service` |
+| Logs | `journalctl -u session-ops@github-prs-digest -n 50 --no-pager` |
 
 ```
 **Contributor pull requests** · last 3 days

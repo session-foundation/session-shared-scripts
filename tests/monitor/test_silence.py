@@ -73,8 +73,8 @@ class TestMessage(unittest.TestCase):
         self.assertIn("`box`", message)
         self.assertIn("**github-prs-digest**: silent for **4d 4h** (allowed 80h)", message)
         self.assertIn("last success 2026-09-", message)
-        self.assertIn("systemctl list-timers github-prs-digest.timer", message)
-        self.assertIn("journalctl -u github-prs-digest.service", message)
+        self.assertIn("systemctl list-timers session-ops@github-prs-digest.timer", message)
+        self.assertIn("journalctl -u session-ops@github-prs-digest.service", message)
 
     def test_a_job_that_never_succeeded_says_since_when_it_was_watched(self):
         message = silence.build_message([(JOB, None, NOW - 90 * HOUR)], "box", NOW)
@@ -82,19 +82,10 @@ class TestMessage(unittest.TestCase):
 
 
 class TestRegistry(unittest.TestCase):
-    def test_the_shipped_registry_matches_the_shipped_units(self):
-        """A job listed without a unit, or a timer missing from the list, is silence
-        nobody would detect."""
-        here = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__)))), "deploy")
-        names = {job["name"] for job in silence.load_jobs(silence.REGISTRY)}
-        timers = {f[:-len(".timer")] for f in os.listdir(here)
-                  if f.endswith(".timer") and f != "session-ops-silence.timer"}
-        self.assertEqual(names, timers)
-        for name in names:
-            with open(os.path.join(here, f"{name}.service"), encoding="utf-8") as unit:
-                self.assertIn(f"ExecStartPost=+/usr/bin/touch {silence.STAMPS_DIR}/{name}\n",
-                              unit.read())
+    def test_every_scheduled_job_is_watched_and_nothing_else(self):
+        from session_ops.ops import registry
+        watched = {job["name"] for job in silence.load_jobs(silence.REGISTRY)}
+        self.assertEqual(watched, {job.name for job in registry.load() if job.schedule})
 
 
 if __name__ == "__main__":

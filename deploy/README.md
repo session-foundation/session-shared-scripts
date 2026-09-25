@@ -1,46 +1,62 @@
 # Self-hosted deployment
 
-The Zendesk triage digest, the `claude:` note webhook and the contributor pull request
-digest, all on one machine.
+Every job in [`jobs.toml`](../src/session_ops/jobs.toml) and both webhook endpoints, on
+one machine, from one clone at `/opt/session-ops` and the one venv in it.
 
 | Unit | What it is |
 | --- | --- |
-| `zendesk-relay.service` | Always on. The HTTPS endpoint Zendesk posts note webhooks to. |
-| `zendesk-digest.timer` → `.service` | Weekday mornings. Resolves positive reviews, then posts the digest. |
-| `github-prs-digest.timer` → `.service` | Weekday mornings. Posts the contributor pull request digest. |
-| `session-ops-silence.timer` → `.service` | Hourly. Alerts when a job in `jobs.toml` has not succeeded within its `max_age_hours`. |
+| `session-ops@<job>.timer` → `.service` | One per job in `jobs.toml`: the template holds the hardening, a generated drop-in the account, env file and schedule. |
+| `zendesk-relay.service` | Always on. The endpoint Zendesk posts `claude:` note webhooks to. |
 | `crowdin-relay.service` | Always on. The endpoint Crowdin posts suggestion webhooks to. |
-| `crowdin-duplicates.timer` → `.service` | Daily. Reconciles the open duplicate-translation slots and posts what changed. |
+| `session-ops-alert@.service` | Pulled in by every unit's `OnFailure=`; see below. |
 
-`zendesk-alert@.service`, `github-prs-alert@.service` and `session-ops-alert@.service`
-are pulled in by `OnFailure=` and report the failed unit to the channel that job posts
-to.
+`session-ops list` shows the jobs, `session-ops run <job> [--dry-run]` runs one the way
+its timer does, and [`install.sh`](install.sh) installs or updates everything.
 
-`OnFailure=` only sees a run that failed. A run that never happened (a timer left
-disabled, a host down through a whole schedule) is what the silence checker is for:
-every scheduled unit touches `/var/lib/session-ops/stamps/<name>` on success, and
-`session-ops-silence` compares each stamp's age with `jobs.toml`. A new scheduled job needs both
-its `ExecStartPost=` line and an entry in
-[`jobs.toml`](../src/session_ops/monitor/jobs.toml); `tests/monitor/test_silence.py` fails without
-either.
+## Failure alerts
 
-One clone at `/opt/zendesk` holds all of it — the directory is named after its first
-tenant, not its contents. One venv, `/opt/zendesk/.venv`, built from `uv.lock`, serves
-every unit: each job is a console script in it.
+Three layers, so that a job cannot fail, or stop, without Discord hearing of it:
+
+1. **The run itself.** `session-ops run` reports its own failure: job, host, the step it
+   was on, one sentence of error with secrets scrubbed, each target's result for a job
+   with several, and the commands to read the journal and re-run it. It then records
+   its invocation id in `/var/lib/session-ops/<job>/alerted`.
+2. **`OnFailure=`**, through `session-ops-alert@`, for what a run cannot report: killed,
+   timed out, a missing env file, Discord unreachable. It stays quiet for an invocation
+   the run already reported, and quotes the unit's last journal line otherwise.
+3. **Silence.** `session-ops@session-ops-silence` posts every scheduled job whose last
+   success, stamped by the template's `ExecStartPost=`, is older than its
+   `max_age_hours`.
+
+A run's alert goes to `ALERT_DISCORD_WEBHOOK_URL` when its env file sets one, else to
+the job's own channel. The backstop and the silence checker use `alerts.env`.
+`ALERT_DISCORD_ROLE_ID` in either is mentioned.
+
+## Disk
+
+| What | Where | Lifetime |
+| --- | --- | --- |
+| A run's scratch: clones, downloads, generated files | its own `/tmp` (`PrivateTmp=`) | gone when the unit stops |
+| State: dedup files, open slots, stamps | `/var/lib/session-ops/<job>/` | kept; written only once a run's output was delivered |
+| Copies of a run kept for debugging | `/var/lib/session-ops/<job>/runs/<stamp>/` | 14 days, by `systemd-tmpfiles` |
+| Caches | `/var/cache/session-ops/<job>/` | deletable at any time |
+
+The box reboots often, and that is harmless: a run killed mid-flight has written
+nothing, and `Persistent=yes` runs a missed schedule once the box is back.
 
 ## Host requirements
 
 - Linux with systemd 252 or newer (the timer needs a timezone in `OnCalendar=`), and Python 3.12+
 - [uv](https://docs.astral.sh/uv/) on root's `PATH`. The venv must use the system
-  Python, not one uv downloads: that would live under `/home/zendesk`, which
-  `ProtectHome=yes` hides from every unit not running as `zendesk`.
-- **The Claude Code CLI installed and logged in as the service user.** Both Claude
-  calls go through it — the digest's classification and the reply flow's
-  translation — so its login is the only Claude credential this box holds. It must be
-  installed *by* that account: the CLI keeps its binary, its login and its cache under
-  `$HOME`, which is `/home/zendesk` and deliberately not the code directory. A root
-  install lands in `/root/.local`, which is `0700` and unreadable to the service; see
-  step 1 under Install.
+  Python, not one uv downloads: that would live under root's home, which
+  `ProtectHome=` hides from every unit.
+- `git`, for the jobs that publish to the platform repos.
+- **The Claude Code CLI installed and logged in as `zendesk`.** Both Claude calls go
+  through it — the digest's classification and the reply flow's translation — so its
+  login is the only Claude credential this box holds. It must be installed *by* that
+  account: the CLI keeps its binary, its login and its cache under `$HOME`, which is
+  `/home/zendesk`. A root install lands in `/root/.local`, which is `0700` and
+  unreadable to the service.
 - **Always on.** A workstation is not a candidate: user timers stop at logout unless
   lingering is enabled, and a sleeping laptop silently skips the digest.
 - A public DNS name resolving here, with **80 and 443 reachable** — 80 for certbot's
@@ -48,58 +64,37 @@ every unit: each job is a console script in it.
 - **nginx already installed**, with certbot managing its certificates. This adds one
   server block to it rather than a second web server; two would fight over :443 and
   take the host's other sites down with them.
-- Persistent `/var/lib/zendesk` and `/var/lib/github-prs` — they hold the two digests'
-  dedup state, the only thing on disk. `StateDirectory=` creates the second one.
 
 Note who else holds root. This box becomes custodian of a Zendesk API token that can
-write a public comment to any ticket, and of a logged-in Claude Code session.
+write a public comment to any ticket, of a logged-in Claude Code session, and of a
+token that can push to the platform repos.
 
 ## Install
 
 Run as root. Every command below assumes it; prefix with `sudo` if you are not.
 
 ```bash
-# 1. A user that owns nothing else. Its home is NOT the code directory: the Claude
-#    Code CLI writes its binary, login and cache into $HOME, and /opt/zendesk is
-#    mounted read-only for the relay. Both units mask /home and bind only this one
-#    back in, so the account needs a home that exists before either unit starts.
-#
-#    nologin costs nothing here: `runuser -u` execs the command directly rather than
-#    through the account's shell, so every step below still works.
-useradd --system --home /home/zendesk --shell /usr/sbin/nologin zendesk
-install -d -o zendesk -g zendesk -m 700 /home/zendesk
+curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+git clone https://github.com/session-foundation/session-shared-scripts /opt/session-ops
+/opt/session-ops/deploy/install.sh
+```
 
-#    Install and log the CLI in AS that user. `runuser -u` resets neither HOME nor
-#    PATH, so both are spelled out: without the explicit HOME the login lands in
-#    root's home, and a bare `claude` resolves against root's PATH, which reports
-#    `Permission denied` for a binary that is installed perfectly well.
+`install.sh` creates the accounts, the venv, every env file (empty, `0600 root`: systemd
+reads them before dropping privileges, so no job's account can read another's
+secrets), the stamps directory and the units, and enables each job whose env file has
+content. Fill the env files (contents under [Secrets](#secrets)) and run it again.
+
+Then, once, the two things it leaves to you:
+
+```bash
+# The Claude Code CLI, installed and logged in AS zendesk. `runuser -u` resets neither
+# HOME nor PATH, so both are spelled out: without the explicit HOME the login lands
+# in root's home, and a bare `claude` resolves against root's PATH, which reports
+# `Permission denied` for a binary that is installed perfectly well.
 runuser -u zendesk -- env HOME=/home/zendesk sh -c 'curl -fsSL https://claude.ai/install.sh | bash'
 runuser -u zendesk -- env HOME=/home/zendesk /home/zendesk/.local/bin/claude
 
-# 2. The code and its venv
-curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
-git clone https://github.com/session-foundation/session-shared-scripts /opt/zendesk
-chown -R zendesk:zendesk /opt/zendesk
-runuser -u zendesk -- env HOME=/home/zendesk UV_PYTHON_DOWNLOADS=never \
-  uv sync --locked --no-dev --python /usr/bin/python3 --directory /opt/zendesk
-
-# 3. State
-install -d -o zendesk -g zendesk -m 750 /var/lib/zendesk
-
-# 4. Secrets. Create the file with its final mode and owner *before* anything goes
-#    in it: editing it into place first would leave the Zendesk token briefly
-#    world-readable at the editor's default 0644. The guard makes this re-runnable
-#    — install from /dev/null would otherwise truncate an existing file.
-install -d -m 750 -o root -g zendesk /etc/zendesk
-[ -e /etc/zendesk/env ] || install -m 640 -o root -g zendesk /dev/null /etc/zendesk/env
-"${EDITOR:-nano}" /etc/zendesk/env                # contents under Secrets, below
-
-# 5. Units
-cp /opt/zendesk/deploy/*.service /opt/zendesk/deploy/*.timer /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable --now zendesk-relay.service zendesk-digest.timer
-
-# 6. TLS, through the nginx and certbot already on this host. Point DNS at the
+# TLS, through the nginx and certbot already on this host. Point DNS at the
 #    box first or certbot has nothing to validate against. The shipped config is
 #    HTTP-only on purpose — certbot adds the TLS directives to that same server
 #    block, so no location needs moving.
@@ -108,7 +103,7 @@ systemctl enable --now zendesk-relay.service zendesk-digest.timer
 #    it answers the challenge, so reloading beforehand would only widen the moment
 #    the proxy is reachable over plain HTTP. --redirect is explicit so that once
 #    TLS is in place HTTP can only redirect, never proxy an unencrypted POST.
-cp /opt/zendesk/deploy/nginx-webhooks.conf /etc/nginx/sites-available/webhooks.session.codes
+cp /opt/session-ops/deploy/nginx-webhooks.conf /etc/nginx/sites-available/webhooks.session.codes
 ln -s /etc/nginx/sites-available/webhooks.session.codes /etc/nginx/sites-enabled/
 nginx -t                                          # validate; do not reload yet
 certbot --nginx --redirect -d webhooks.session.codes
@@ -121,107 +116,53 @@ nginx -t && systemctl reload nginx                # validate what certbot wrote
 > is already serving — a new `location`, say — diff the two and edit the live file:
 >
 > ```bash
-> diff /opt/zendesk/deploy/nginx-webhooks.conf \
+> diff /opt/session-ops/deploy/nginx-webhooks.conf \
 >      /etc/nginx/sites-available/webhooks.session.codes
 > "${EDITOR:-nano}" /etc/nginx/sites-available/webhooks.session.codes
 > nginx -t && systemctl reload nginx
 > ```
 
-### Adding the pull request digest
+### Moving from the per-job units
 
-Its own user and its own environment file, out of the same clone and venv. A
-token that can read the org's repositories has no business in the environment of the
-relay, which is the one process here reachable from the internet.
-
-The account needs no home of its own: nothing in this job shells out to the Claude
-CLI, so the `$HOME` that the Zendesk units bend over backwards to preserve is not
-wanted here at all.
+A host that ran the digests from `/opt/zendesk`, with `zendesk-digest.timer` and
+`github-prs-digest.timer`: `install.sh` copies `/etc/zendesk/env`,
+`/etc/github-prs/env` and the digests' `seen.json` and `house_answers.json` into the new
+layout, only where the new file does not exist yet, then disables and removes the old
+units. After the install above:
 
 ```bash
-useradd --system --no-create-home --home /nonexistent --shell /usr/sbin/nologin ghdigest
-
-install -d -m 750 -o root -g ghdigest /etc/github-prs
-[ -e /etc/github-prs/env ] || install -m 640 -o root -g ghdigest /dev/null /etc/github-prs/env
-"${EDITOR:-nano}" /etc/github-prs/env             # contents under Secrets, below
-
-cp /opt/zendesk/deploy/github-prs-*.service /opt/zendesk/deploy/github-prs-*.timer \
-   /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable --now github-prs-digest.timer
+"${EDITOR:-nano}" /etc/session-ops/zendesk.env
+#   ZENDESK_HOUSE_ANSWERS=/var/lib/session-ops/zendesk-digest/house_answers.json
+diff /opt/zendesk/deploy/nginx-webhooks.conf /opt/session-ops/deploy/nginx-webhooks.conf
+/opt/session-ops/deploy/install.sh
+systemctl list-timers 'session-ops@*'
+# once both digests have run from the new units:
+rm -rf /opt/zendesk /opt/github-prs /etc/zendesk /etc/github-prs /var/lib/zendesk /var/lib/github-prs
 ```
 
-The clone stays owned by `zendesk` and world-readable, which is what lets `ghdigest`
-run out of it. Nothing secret lives there — every secret is under `/etc`.
+### The Crowdin duplicate-translation report
 
-`/var/lib/github-prs` needs no `install` step: `StateDirectory=github-prs` on the unit
-creates it with the right owner on first start. It holds the dedup state that keeps the
-72-hour window from re-reporting the same PR every weekday morning.
-
-### Adding the silence checker
-
-Its own account, which reads the stamps and nothing else: they are root's and
-world-readable, so the account needs no access to any job's state.
+Seed the open slots once before either half runs; the relay does nothing until they
+exist. About an hour, read-only, and it posts nothing:
 
 ```bash
-useradd --system --no-create-home --home /nonexistent --shell /usr/sbin/nologin sessionops
-
-install -d -m 750 -o root -g sessionops /etc/session-ops
-[ -e /etc/session-ops/env ] || install -m 640 -o root -g sessionops /dev/null /etc/session-ops/env
-"${EDITOR:-nano}" /etc/session-ops/env            # contents under Secrets, below
-
-cp /opt/zendesk/deploy/session-ops.tmpfiles /etc/tmpfiles.d/session-ops.conf
-systemd-tmpfiles --create session-ops.conf
-cp /opt/zendesk/deploy/*.service /opt/zendesk/deploy/*.timer /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable --now session-ops-silence.timer
+systemd-run --pipe --wait -p User=crowdin -p EnvironmentFile=/etc/session-ops/crowdin.env \
+  -p StateDirectory=session-ops/crowdin-duplicates \
+  /opt/session-ops/.venv/bin/crowdin-reconcile-duplicates --seed \
+  --state /var/lib/session-ops/crowdin-duplicates/duplicates.json
 ```
 
-The `cp` of every unit is the point: the two digests gain the `ExecStartPost=` that
-writes their stamp. Until each has run once, the checker counts its silence from the
-first check that found the stamp missing, so it does not alert on install.
-
-### Adding the Crowdin duplicate-translation report
-
-Its own account and environment file, shared by the relay and the daily
-reconciliation, which both read and write the open slots in
-`/var/lib/session-ops/crowdin/duplicates.json` under a file lock. Neither needs a home.
-
-```bash
-useradd --system --no-create-home --home /nonexistent --shell /usr/sbin/nologin crowdin
-[ -e /etc/session-ops/crowdin.env ] || install -m 640 -o root -g crowdin /dev/null /etc/session-ops/crowdin.env
-"${EDITOR:-nano}" /etc/session-ops/crowdin.env    # contents under Secrets, below
-
-cp /opt/zendesk/deploy/crowdin-* /etc/systemd/system/
-systemctl daemon-reload
-
-# Seed once: records every open slot and posts nothing. About an hour, read-only.
-systemd-run --pipe --wait --uid=crowdin -p EnvironmentFile=/etc/session-ops/crowdin.env \
-  -p StateDirectory=session-ops/crowdin \
-  /opt/zendesk/.venv/bin/crowdin-reconcile-duplicates --seed \
-  --state /var/lib/session-ops/crowdin/duplicates.json
-
-systemctl enable --now crowdin-relay.service crowdin-duplicates.timer
-```
-
-Then the route, in the live nginx file rather than by re-copying it (see the note
-under Install): add the `location ^~ /crowdin/suggestions/` block from
-`nginx-webhooks.conf`, then `nginx -t && systemctl reload nginx`.
-
-Last, in Crowdin: project → Integrations → Webhooks → Add, URL
+Add the `location ^~ /crowdin/suggestions/` block from `nginx-webhooks.conf` to the live
+nginx file, then `nginx -t && systemctl reload nginx`. Last, in Crowdin: project →
+Integrations → Webhooks → Add, URL
 `https://webhooks.session.codes/crowdin/suggestions/<CROWDIN_WEBHOOK_SECRET>`, request
-type POST, content type `application/json`, events *Suggestion added, updated,
-deleted, approved and disapproved*.
-
-The relay does nothing until the state exists, and a wrong secret gets a 404. Crowdin
-never retries a delivery, so what the relay misses the next reconciliation posts, at
-most a day late. The old sharded report keeps running from GitHub Actions until a full
-reconciliation cycle has run clean here.
+type POST, content type `application/json`, events *Suggestion added, updated, deleted,
+approved and disapproved*.
 
 ## Secrets
 
-`/etc/zendesk/env`, mode `640`, `root:zendesk` — readable by the service, not by
-everyone. `EnvironmentFile=` needs no code change because every script already reads
-its configuration from the environment.
+`/etc/session-ops/zendesk.env`. `EnvironmentFile=` needs no code change because every
+script already reads its configuration from the environment.
 
 ```sh
 # systemd only treats a # as a comment when it is the FIRST character on a line.
@@ -267,8 +208,8 @@ ZENDESK_WEBHOOK_SECRET=
 # `claude: explain`; unset, drafting works as it does without it and explain says
 # there is nothing to look up. NOT in the repo — it carries ticket ids and customer
 # text and the repo is public — so copy it here by hand:
-#     install -o zendesk -g zendesk -m 640 house_answers.json /var/lib/zendesk/
-#ZENDESK_HOUSE_ANSWERS=/var/lib/zendesk/house_answers.json
+#     install -o zendesk -g zendesk -m 640 house_answers.json /var/lib/session-ops/zendesk-digest/
+#ZENDESK_HOUSE_ANSWERS=/var/lib/session-ops/zendesk-digest/house_answers.json
 
 # Optional. The numeric id of a multi-line text ticket field in Zendesk; the digest
 # renders every non-English ticket it is about to post into English there — both
@@ -286,17 +227,17 @@ Check what systemd actually loads from it, rather than what you think you wrote.
 the unit and nothing from `EnvironmentFile=`.
 
 ```bash
-systemd-run --pipe --wait --uid=zendesk -p EnvironmentFile=/etc/zendesk/env env | grep -vi token
+systemd-run --pipe --wait --uid=zendesk -p EnvironmentFile=/etc/session-ops/zendesk.env env | grep -vi token
 ```
 
 Set `RELAY_DRY_RUN=1` for the first deployment. The whole `claude:` note path runs —
 webhook, command parsing, composing, translation — and the Zendesk writes are
 skipped.
 
-### `/etc/github-prs/env`
+### `/etc/session-ops/github-prs.env`
 
-Mode `640`, `root:ghdigest`, and separate from the Zendesk file rather than merged
-into it — see above.
+Separate from the Zendesk file: a token that reads the org has no business in the
+environment of the relay, the one process here reachable from the internet.
 
 ```sh
 # Read-only, and no scope at all: the digest reads public repositories only. Nothing
@@ -307,24 +248,21 @@ GITHUB_PRS_TOKEN=
 # in, so this one value decides where the digest goes.
 GITHUB_PRS_DISCORD_WEBHOOK_URL=
 
-# Required, and normally the same webhook: without it session-ops-alert falls back to
-# ZENDESK_DISCORD_WEBHOOK_URL, which is not in this file, and the failure notifier
-# fails instead of reporting.
-ALERT_DISCORD_WEBHOOK_URL=
+# Optional. Where this job's failures go; without it, the channel above.
+#ALERT_DISCORD_WEBHOOK_URL=
 ```
 
-### `/etc/session-ops/env`
-
-Mode `640`, `root:sessionops`.
+### `/etc/session-ops/alerts.env`
 
 ```sh
-# Where silence alerts go. Any channel whose readers can act on a job that stopped.
+# Where the backstop and the silence checker post. Any channel whose readers can act
+# on a job that failed or stopped.
 ALERT_DISCORD_WEBHOOK_URL=
+# Optional. A role to mention in every alert.
+#ALERT_DISCORD_ROLE_ID=
 ```
 
 ### `/etc/session-ops/crowdin.env`
-
-Mode `640`, `root:crowdin`.
 
 ```sh
 # Read-only: the relay is reachable from the internet, and nothing here writes to
@@ -366,7 +304,7 @@ tr '\0' '\n' < /proc/"$(systemctl show -p MainPID --value zendesk-relay)"/enviro
 ```
 
 The second line reads the running relay's own environment, so it also tells you
-whether an edit to `/etc/zendesk/env` has reached it yet — it does not until the unit
+whether an edit to `/etc/session-ops/zendesk.env` has reached it yet — it does not until the unit
 is restarted.
 
 Both the explicit `HOME` and the absolute path are load-bearing: `runuser -u` resets
@@ -377,7 +315,7 @@ With `CLAUDE_CODE_OAUTH_TOKEN` set, that check tests the wrong credential — it
 the interactive login, which the token outranks. Test what the unit will actually use:
 
 ```bash
-systemd-run --pty --uid=zendesk -p EnvironmentFile=/etc/zendesk/env \
+systemd-run --pty --uid=zendesk -p EnvironmentFile=/etc/session-ops/zendesk.env \
   --setenv=HOME=/home/zendesk /home/zendesk/.local/bin/claude \
   --print --model claude-sonnet-5 --output-format json 'reply with OK'
 ```
@@ -398,17 +336,18 @@ systemd-run --pty --uid=zendesk --setenv=HOME=/home/zendesk \
   /home/zendesk/.local/bin/claude --print --model claude-sonnet-5 'reply with OK'
 ```
 
-**2. The digest, by hand.** `systemctl start zendesk-digest.service` and watch
-`journalctl -fu zendesk-digest`. It prints ticket counts and outcomes, never content.
+**2. The digest, by hand.** `systemctl start session-ops@zendesk-digest.service` and
+watch `journalctl -fu session-ops@zendesk-digest`. It prints ticket counts and outcomes,
+never content.
 
-**3. The timer fires when you expect.** `systemctl list-timers zendesk-digest` — and
-if you change `OnCalendar=`, check it with
-`systemd-analyze calendar "Mon..Fri 10:00 Australia/Melbourne"`. There is no
-`Timezone=` key and systemd ignores one silently.
+**3. The timers fire when you expect.** `systemctl list-timers 'session-ops@*'` — and
+if you change a `schedule` in `jobs.toml`, check it with
+`systemd-analyze calendar "Mon..Fri 10:00 Australia/Melbourne"` and re-run
+`install.sh`. There is no `Timezone=` key and systemd ignores one silently.
 
-**4. Through Zendesk.** With the webhook and the trigger in place (see the main
-[zendesk-relay](../docs/jobs/zendesk-relay.md#zendesk-setup)), write `claude: english` as a private note on a throwaway
-ticket and watch `journalctl -fu zendesk-relay`. `english` is the read-only verb, so
+**4. Through Zendesk.** With the webhook and the trigger in place (see
+[zendesk-relay](../docs/jobs/zendesk-relay.md#zendesk-setup)), write `claude: english` as a private note on a
+throwaway ticket and watch `journalctl -fu zendesk-relay`. `english` is the read-only verb, so
 nothing can reach a customer if the wiring is wrong.
 
 The ticket needs at least one **public** comment, ideally not in English. `english`
@@ -419,8 +358,13 @@ which proves the wiring but exercises none of the model path.
 The one thing only this step can prove is that the relay's HMAC matches Zendesk's. If
 it does not, every note logs a 401 and nothing happens.
 
-**5. The failure path.** `systemctl start zendesk-alert@test.service` should put
-a line in the triage channel.
+**5. The failure path.** `systemctl start session-ops-alert@test.service` should put a
+line in the alerts channel, and a dry run shows what a job's own alert would say:
+
+```bash
+systemd-run --pipe --wait -p User=ghdigest -p EnvironmentFile=/etc/session-ops/github-prs.env \
+  /opt/session-ops/.venv/bin/session-ops run github-prs-digest --dry-run -- --org does-not-exist
+```
 
 The alert quotes the failed unit's last journal line, which is what tells the channel
 whether the job broke or the Claude Code login simply expired — the two look identical
@@ -429,8 +373,8 @@ otherwise, and only one of them is fixed by re-running anything. That needs
 and that the account can actually read a journal:
 
 ```bash
-systemctl show zendesk-alert@test.service -p SupplementaryGroups
-runuser -u zendesk -- journalctl -u zendesk-digest.service -n 1 --no-pager
+systemctl show session-ops-alert@test.service -p SupplementaryGroups
+runuser -u sessionops -- journalctl -u session-ops@zendesk-digest.service -n 1 --no-pager
 ```
 
 An empty `SupplementaryGroups=` means the installed unit is the old copy — see
@@ -446,32 +390,32 @@ comes from the environment file rather than an argument every process on the box
 read out of `ps`:
 
 ```bash
-systemd-run --pty --uid=ghdigest -p EnvironmentFile=/etc/github-prs/env \
-  /opt/zendesk/.venv/bin/github-prs-digest --dry-run
+systemd-run --pty -p User=ghdigest -p EnvironmentFile=/etc/session-ops/github-prs.env \
+  /opt/session-ops/.venv/bin/session-ops run github-prs-digest --dry-run
 ```
 
-Then for real: `systemctl start github-prs-digest.service`,
-`systemctl list-timers github-prs-digest` (expect the next weekday, not tomorrow), and
-`systemctl start github-prs-alert@test.service` for its failure path.
+Then for real: `systemctl start session-ops@github-prs-digest.service`, and
+`systemctl list-timers session-ops@github-prs-digest` (expect the next weekday, not
+tomorrow).
 
 Start it twice. The second run is the one that proves the dedup state: it should report
 everything, then nothing, and say so.
 
 ```bash
-journalctl -u github-prs-digest -n 5 --no-pager   # "N new, 0 changed, N unchanged"
-ls -l /var/lib/github-prs/seen.json
+journalctl -u session-ops@github-prs-digest -n 5 --no-pager   # "N new, 0 changed, N unchanged"
+ls -l /var/lib/session-ops/github-prs-digest/seen.json
 ```
 
 A second run that reports everything again means the state was not written — check that
 `StateDirectory=` reached systemd with
-`systemctl show github-prs-digest -p StateDirectory`.
+`systemctl show session-ops@github-prs-digest -p StateDirectory`.
 
 **7. The silence checker.** A dry run prints every job's last success and the alert
 it would post, and writes no state:
 
 ```bash
-systemd-run --pipe --wait --uid=sessionops -p EnvironmentFile=/etc/session-ops/env \
-  /opt/zendesk/.venv/bin/session-ops-silence --dry-run
+systemd-run --pipe --wait -p User=sessionops -p EnvironmentFile=/etc/session-ops/alerts.env \
+  /opt/session-ops/.venv/bin/session-ops-silence --dry-run
 ls -l /var/lib/session-ops/stamps/     # one file per job that has succeeded since
 ```
 
@@ -492,30 +436,23 @@ A suggestion typed into the Crowdin editor should then log a line in
 `journalctl -fu crowdin-relay`. A dry run of reconciliation for one locale:
 
 ```bash
-systemd-run --pipe --wait --uid=crowdin -p EnvironmentFile=/etc/session-ops/crowdin.env \
-  -p StateDirectory=session-ops/crowdin /opt/zendesk/.venv/bin/crowdin-reconcile-duplicates \
-  --dry-run --locales de --state /var/lib/session-ops/crowdin/duplicates.json
+systemd-run --pipe --wait -p User=crowdin -p EnvironmentFile=/etc/session-ops/crowdin.env \
+  -p StateDirectory=session-ops/crowdin-duplicates \
+  /opt/session-ops/.venv/bin/session-ops run crowdin-duplicates --dry-run -- --locales de
 ```
 
 ## Updating
 
 ```bash
-runuser -u zendesk -- git -C /opt/zendesk pull
-runuser -u zendesk -- env HOME=/home/zendesk UV_PYTHON_DOWNLOADS=never \
-  uv sync --locked --no-dev --python /usr/bin/python3 --directory /opt/zendesk
-systemctl restart zendesk-relay
+git -C /opt/session-ops pull
+/opt/session-ops/deploy/install.sh
 ```
 
-The units live in `/etc/systemd/system`, so a pull that changes anything under
-`deploy/` needs them copied again — systemd reads the installed copy, not the
-checkout, and a stale unit fails in whatever way the old one did:
-
-```bash
-git -C /opt/zendesk diff --stat HEAD@{1} HEAD -- deploy/    # did any unit change?
-cp /opt/zendesk/deploy/*.service /opt/zendesk/deploy/*.timer /etc/systemd/system/
-systemctl daemon-reload
-systemctl restart zendesk-relay
-```
+`install.sh` rebuilds the venv from `uv.lock`, reinstalls the units, regenerates the
+drop-ins from `jobs.toml` and restarts the relays; systemd reads the installed units,
+not the checkout, so skipping it leaves a stale unit failing the way the old one did.
+The one thing it cannot update is nginx, which certbot owns: a change to
+`nginx-webhooks.conf` is made by hand in the live file.
 
 Manual on purpose. Automating this would mean giving CI an SSH key to the box, which
 is the coupling self-hosting was meant to remove.
@@ -535,12 +472,12 @@ the whole of what a webhook may not send.
 Then, on the host:
 
 ```bash
-"${EDITOR:-nano}" /etc/zendesk/env   # ZENDESK_DISCORD_WEBHOOK_URL,
-                                     # ZENDESK_WEBHOOK_SECRET, and RELAY_DRY_RUN=1
-                                     # for the first run
-mv /var/lib/zendesk/seen.json /var/lib/zendesk/seen.json.old
+"${EDITOR:-nano}" /etc/session-ops/zendesk.env   # ZENDESK_DISCORD_WEBHOOK_URL,
+                                                # ZENDESK_WEBHOOK_SECRET, and
+                                                # RELAY_DRY_RUN=1 for the first run
+mv /var/lib/session-ops/zendesk-digest/seen.json{,.old}
 systemctl restart zendesk-relay
-systemctl start zendesk-digest.service
+systemctl start session-ops@zendesk-digest.service
 ```
 
 Move `seen.json` aside or the first digest in the new channel says almost nothing —
@@ -568,5 +505,5 @@ What that costs, in order of how much it matters:
 - **The pull request digest is late, not lost**, on the same `Persistent=yes` as the
   Zendesk one, and its 72-hour window already covers a weekend's gap.
 
-Failures that are not a whole-host outage report themselves — `OnFailure=` on both
-units posts the failed unit and a `journalctl` line to the triage channel.
+Failures that are not a whole-host outage report themselves; see
+[Failure alerts](#failure-alerts).

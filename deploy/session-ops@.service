@@ -1,0 +1,33 @@
+# One job from src/session_ops/jobs.toml. Its drop-in, written by `session-ops units`,
+# sets the account, the env files and anything this hardening does not suit.
+[Unit]
+Description=session-ops job %i
+Documentation=https://github.com/session-foundation/session-shared-scripts
+After=network-online.target
+Wants=network-online.target
+OnFailure=session-ops-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/session-ops/.venv/bin/session-ops run %i
+# The silence checker's evidence that this ran; a oneshot runs it only after
+# ExecStart= succeeded. `+` runs it outside the sandbox, so the job needs no write
+# path into the root-owned stamps directory.
+ExecStartPost=+/usr/bin/touch /var/lib/session-ops/stamps/%i
+
+# The job's scratch space is its own /tmp, gone when the unit stops or the box
+# reboots. What must outlive a run goes in the state directory.
+PrivateTmp=yes
+StateDirectory=session-ops/%i
+CacheDirectory=session-ops/%i
+
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes

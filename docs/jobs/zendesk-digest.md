@@ -4,11 +4,11 @@ Claude reviews the Zendesk tickets awaiting a reply — `new` and `open`, no app
 
 | | |
 | --- | --- |
-| Runs | `zendesk-digest.timer`, Mon–Fri 10:00 Australia/Melbourne: `zendesk-resolve-reviews --apply`, then `zendesk-triage` |
-| Secrets | `/etc/zendesk/env`: the Zendesk API token, the triage channel's webhook, and the Claude Code CLI login of the `zendesk` account |
-| Dry run | `uv run zendesk-triage --window-hours 72 --dry-run`; `zendesk-resolve-reviews` without `--apply` |
-| Re-run | `systemctl start zendesk-digest.service` |
-| Logs | `journalctl -u zendesk-digest -n 50 --no-pager` |
+| Runs | `session-ops@zendesk-digest.timer`, Mon–Fri 10:00 Australia/Melbourne: `zendesk-resolve-reviews --apply`, then `zendesk-triage` |
+| Secrets | `/etc/session-ops/zendesk.env`: the Zendesk API token, the triage channel's webhook, and the Claude Code CLI login of the `zendesk` account |
+| Dry run | `session-ops run zendesk-digest --dry-run`; `uv run zendesk-triage --window-hours 72 --dry-run` from a checkout |
+| Re-run | `systemctl start session-ops@zendesk-digest.service` |
+| Logs | `journalctl -u session-ops@zendesk-digest -n 50 --no-pager` |
 
 ## Categories
 
@@ -118,8 +118,8 @@ The trade is process startup, a few seconds per call, against holding an API cre
 
 | Setting                | Where            | Default                                                 | Description |
 | ---------------------- | ---------------- | ------------------------------------------------------- | ----------- |
-| `--window-hours`       | flag             | *(unset)*                                               | Analyze tickets the requester touched in the last N hours. There is no parser default: absent, the run uses `DEFAULT_QUERY` and no window at all. The `72` the digest runs with is passed by [`zendesk-digest.service`](../../deploy/zendesk-digest.service) |
-| `--state`              | flag             | *(unset)*                                               | Dedup state file. The unit points this at `/var/lib/zendesk/seen.json` |
+| `--window-hours`       | flag             | *(unset)*                                               | Analyze tickets the requester touched in the last N hours. There is no parser default: absent, the run uses `DEFAULT_QUERY` and no window at all. The `72` the digest runs with is passed by [`digest_job.py`](../../src/session_ops/zendesk/digest_job.py) |
+| `--state`              | flag             | *(unset)*                                               | Dedup state file. [`jobs.toml`](../../src/session_ops/jobs.toml) points this at `/var/lib/session-ops/zendesk-digest/seen.json` |
 | `--state-retention-days` | flag           | `30`                                                    | Forget state entries older than N days |
 | `ZENDESK_QUERY`        | env / `--query`  | *(unset)*                                               | Explicit Zendesk search query. Overrides `--window-hours` entirely |
 | `ZENDESK_TRIAGE_MODEL` | env / `--model`  | `claude-opus-5`                                         | Overrides the model. Takes a full id, or a shorthand (`opus`, `sonnet`, `haiku`) mapped to an id via `API_MODEL_ALIASES`. **Leave it unset for normal operation** — the default lives in the script so there's one place to change it |
@@ -168,13 +168,13 @@ Runs **Monday to Friday at 10:00 Melbourne** over a 72h window (~70 tickets) —
 
 The window is on `updated>`, not `created>`, so a ticket the requester adds detail to days after opening it is fetched again — a created-window would never see it. 72h rather than the 24h between runs so a failed run doesn't drop a day and Monday still reaches back past the weekend. Neither the overlap nor the wider net duplicates posts, because of the dedup state above.
 
-[Zendesk Resolve Positive Reviews](#zendesk-resolve-positive-reviews) runs first, as the unit's first `ExecStart`. Order matters: the triage query is `status<pending`, so a review the resolver solves leaves the window — running second would re-count reviews just closed. Its failure does not stop the digest, because the resolver is an optimisation for it rather than a precondition; the failure is still reported, so a resolver broken for weeks cannot pass for one with nothing to do.
+[Zendesk Resolve Positive Reviews](#zendesk-resolve-positive-reviews) runs first, in [`digest_job.py`](../../src/session_ops/zendesk/digest_job.py). Order matters: the triage query is `status<pending`, so a review the resolver solves leaves the window — running second would re-count reviews just closed. Its failure does not stop the digest, because the resolver is an optimisation for it rather than a precondition; the failure is still reported, so a resolver broken for weeks cannot pass for one with nothing to do.
 
-Run it by hand with `sudo systemctl start zendesk-digest.service`, which does exactly what the timer does. For anything narrower, invoke the scripts directly — `--window-hours`, `--max-tickets`, `--query`, and `--no-discord` to exercise the job without posting (that run records nothing, so the next one still reports the tickets it saw). Failures are reported by `OnFailure=zendesk-alert@%n.service` on the unit itself, which cannot be silently unsubscribed by a rename the way matching on a workflow's name could.
+Run it by hand with `sudo systemctl start session-ops@zendesk-digest.service`, which does exactly what the timer does. For anything narrower, invoke the scripts directly — `--window-hours`, `--max-tickets`, `--query`, and `--no-discord` to exercise the job without posting (that run records nothing, so the next one still reports the tickets it saw). Failures are reported by the run, and by `OnFailure=` for whatever the run could not report; see [session-ops-silence](session-ops-silence.md).
 
 ### How state survives between runs
 
-State is kept in a plain file under `/var/lib/zendesk`. Losing it re-reports the window once — noisy, never wrong — so it needs persisting, not backing up. It is not committed: this repo is public, and ticket ids plus timestamps would leak ticket volume and activity rates.
+State is kept in a plain file under `/var/lib/session-ops/zendesk-digest`. Losing it re-reports the window once — noisy, never wrong — so it needs persisting, not backing up. It is not committed: this repo is public, and ticket ids plus timestamps would leak ticket volume and activity rates.
 
 The file is written atomically (`os.replace`) so a crash mid-write cannot corrupt it, and it is pruned to `--state-retention-days`. A missing, corrupt, or wrong-shaped file degrades to "treat every ticket as new" rather than failing — noisy for one run, never wrong.
 
@@ -264,10 +264,12 @@ The rating split is the point — a bare total wouldn't say which reviews went. 
 
 Silence would be indistinguishable from a job that has quietly stopped working — a broken query, a rotated token, a schedule that no longer fires — and this job exists to keep a number moving that nobody watches directly, so "looked, found nothing" is the half worth hearing. The count of what it examined is what separates the two. Eligible reviews that all *failed* get their own wording (`None of the 3 eligible app-store reviews were solved`), because reporting that as a quiet day would dress a broken run up as a clean one.
 
-**A run that died reports too**, from the unit rather than the script — a Zendesk `4xx`, a bulk job that never completes, a host that rebooted all exit before a message exists:
+**A run that died reports too**, from the job runner rather than the script — a Zendesk `4xx`, a bulk job that never completes, a host that rebooted all exit before a message exists:
 
-> ❌ **zendesk-resolve-reviews** failed on `angus`, as part of zendesk-digest.service.
-> `journalctl -u zendesk-digest.service -n 50 --no-pager`
+> ❌ **zendesk-digest** on `angus`: 1 of 2 targets failed.
+> ⚠️ **resolve reviews**: Zendesk returned 403 on the bulk update.
+> ✅ **digest**
+> `journalctl -u session-ops@zendesk-digest -n 50 --no-pager` · re-run: `systemctl start session-ops@zendesk-digest.service`
 
 It says nothing about counts, because it also fires after the script has already posted a tally alongside per-ticket failures, and nothing about the cause, because the run may have died before it had one — it points at the journal instead of guessing.
 
@@ -281,6 +283,6 @@ The webhook is resolved before the run fetches anything, so a missing secret sto
 
 ### Schedule
 
-No timer of its own: it is the first `ExecStart` of [`zendesk-digest.service`](../../deploy/zendesk-digest.service), so it runs immediately before the digest, Monday to Friday, and applies. See the digest's Schedule section for why it must go first. Rehearse it by hand without `--apply` for a dry run, and bound a first real one with `--max-tickets`.
+No timer of its own: it is the first target of [`digest_job.py`](../../src/session_ops/zendesk/digest_job.py), so it runs immediately before the digest, Monday to Friday, and applies. See the digest's Schedule section for why it must go first. Rehearse it by hand without `--apply` for a dry run, and bound a first real one with `--max-tickets`.
 
-Its `ExecStart` is wrapped in a `||` that reports the failure to the triage channel and then lets the digest proceed — resolving is an optimisation for the digest, not a precondition. A bare `-` prefix would also unblock the digest, but it would mark the unit successful, so `OnFailure=` would never fire and a resolver broken for weeks would look like one with nothing to do.
+It is an optional target: its failure is reported to the triage channel and the digest proceeds — resolving is an optimisation for the digest, not a precondition. The run still succeeds, so the silence checker keeps seeing a digest that posts, while the alert keeps a resolver broken for weeks from looking like one with nothing to do.

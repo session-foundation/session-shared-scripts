@@ -1,0 +1,75 @@
+# Every job on the host. `session-ops units` turns each entry into drop-ins for the
+# session-ops@ templates in deploy/, `session-ops run <name>` runs it as the timer does,
+# and session-ops-silence alerts on any scheduled one quiet for longer than
+# max_age_hours: its schedule's longest gap between successes, plus slack for the
+# timer's jitter and the run itself.
+#
+#   entry          module:function, called with the job's argv
+#   args           {state} is the job's /var/lib/session-ops/<name>
+#   env            variables the run refuses to start without
+#   channel_env    where its failures are reported, unless ALERT_DISCORD_WEBHOOK_URL is set
+#   unit           further [Service] lines, over the template's hardening
+#
+# Timezones go in the schedule itself: systemd has no Timezone= key and ignores one.
+# Check a schedule with `systemd-analyze calendar "<schedule>"`.
+
+[[job]]
+name = "github-prs-digest"
+description = "Daily digest of contributor pull requests"
+entry = "session_ops.github_prs.digest:main"
+args = ["--window-hours", "72", "--state", "{state}/seen.json"]
+user = "ghdigest"
+env_files = ["/etc/session-ops/github-prs.env"]
+env = ["GITHUB_PRS_TOKEN", "GITHUB_PRS_DISCORD_WEBHOOK_URL"]
+channel_env = "GITHUB_PRS_DISCORD_WEBHOOK_URL"
+# Weekdays, half an hour before the Zendesk digest; Friday's run to Monday's is 72 h.
+schedule = "Mon..Fri 09:30 Australia/Melbourne"
+max_age_hours = 80
+timeout = "15min"
+
+[[job]]
+name = "zendesk-digest"
+description = "Zendesk positive-review resolver, then the triage digest"
+entry = "session_ops.zendesk.digest_job:main"
+args = ["--state", "{state}/seen.json"]
+user = "zendesk"
+env_files = ["/etc/session-ops/zendesk.env"]
+env = ["ZENDESK_SUBDOMAIN", "ZENDESK_EMAIL", "ZENDESK_API_TOKEN", "ZENDESK_DISCORD_WEBHOOK_URL"]
+channel_env = "ZENDESK_DISCORD_WEBHOOK_URL"
+schedule = "Mon..Fri 10:00 Australia/Melbourne"
+max_age_hours = 80
+# A full 1000-ticket resolve is ten bulk jobs polled for up to 300 s each.
+timeout = "90min"
+# The Claude Code CLI reads its login from $HOME: mask /home and bind only this one.
+unit = [
+    "ProtectHome=tmpfs",
+    "BindPaths=/home/zendesk",
+    "ReadWritePaths=/home/zendesk",
+    "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
+]
+
+[[job]]
+name = "crowdin-duplicates"
+description = "Reconcile Crowdin duplicate translations and post what changed"
+entry = "session_ops.crowdin.reconcile:main"
+args = ["--state", "{state}/duplicates.json"]
+user = "crowdin"
+env_files = ["/etc/session-ops/crowdin.env"]
+env = ["CROWDIN_API_TOKEN", "CROWDIN_DISCORD_WEBHOOK_URL"]
+channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
+schedule = "*-*-* 03:00 UTC"
+max_age_hours = 28
+# ~110k requests at 30/s without --croql; twice that is Crowdin throttling the run.
+timeout = "3h"
+
+[[job]]
+name = "session-ops-silence"
+description = "Alert when a scheduled job has stopped succeeding"
+entry = "session_ops.monitor.silence:main"
+args = ["--state", "{state}/state.json"]
+user = "sessionops"
+env_files = ["/etc/session-ops/alerts.env"]
+env = ["ALERT_DISCORD_WEBHOOK_URL"]
+schedule = "hourly"
+max_age_hours = 3
+timeout = "5min"
