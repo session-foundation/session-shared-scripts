@@ -2,6 +2,20 @@
 
 This repo houses scripts which are shared between the different platform repos for Session, it also contains a number of Actions used to automatically sync some shared elements across the repos.
 
+## Development
+
+One package, `session_ops` under [src/](src/), with one lockfile. Every job is a console
+script declared in [pyproject.toml](pyproject.toml).
+
+```sh
+uv sync                                               # .venv with every dependency
+uv run python -m unittest discover -s tests -t .      # every suite
+uv run ruff check .
+```
+
+`tests/sogs` skips itself unless `session_util` is importable; see
+[Community Bans](#dependencies) for why it is not a PyPI dependency.
+
 ## Crowdin Translation Workflow
 
 Automated workflow that downloads translations from Crowdin, validates them, and creates PRs for iOS and Android platforms and for the Typescript Localization Module for Desktop and QA.
@@ -67,7 +81,7 @@ Claude reviews the Zendesk tickets awaiting a reply — `new` and `open`, no app
 
 ### Categories
 
-`CATEGORY_SPECS` in [triage.py](zendesk_triage/triage.py) is the single source of truth — the schema enum, the Discord labels and emoji, which categories count as urgent, and the prompt guidance are all derived from it, so adding a category is one edit.
+`CATEGORY_SPECS` in [triage.py](src/session_ops/zendesk/triage.py) is the single source of truth — the schema enum, the Discord labels and emoji, which categories count as urgent, and the prompt guidance are all derived from it, so adding a category is one edit.
 
 | Category | Notes |
 | --- | --- |
@@ -104,7 +118,7 @@ The star-floor machinery (`partition_reviews`, `--review-star-floor`, `--include
 
 Twitter DM tickets arrive with `description` identical to `subject` — both just `"Conversation with <handle>"` — which is 15% of non-review tickets and unclassifiable as fetched. For those only, `hydrate_descriptions` fetches a page of up to 10 comments and joins every body that differs from the subject into the description; later replies often carry the actual detail. Hydration is an enrichment, so an HTTP error or an unreachable endpoint leaves the ticket as-is rather than failing the run (`--no-hydrate` to skip it entirely).
 
-The script (`zendesk_triage/triage.py`) fetches the tickets in a rolling time window, classifies the whole batch in one schema-enforced request through the Claude Code CLI, and posts a Discord digest: a short header, then one line per ticket worth looking into.
+The script (`zendesk-triage`, [triage.py](src/session_ops/zendesk/triage.py)) fetches the tickets in a rolling time window, classifies the whole batch in one schema-enforced request through the Claude Code CLI, and posts a Discord digest: a short header, then one line per ticket worth looking into.
 
 Each line leads with a severity marker, a category emoji and a platform icon, links the ticket id, and carries the model's one-line summary plus its root-cause guess:
 
@@ -152,7 +166,7 @@ Two caveats worth knowing:
 - The comparison is on `requester_updated_at`, from the ticket's metric set, **not** `updated_at`. `updated_at` moves on any change — our own replies, a tag edit, and in this account an hourly automation that bumps tickets at :01 past the hour — so deduping on it re-reports the same ticket every run. Measured on a real window: an automation pass over 18 tickets produced 18 re-reports under `updated_at` and 0 under `requester_updated_at`. The metric sets are sideloaded through `show_many`, one request per 100 tickets, and a failed sideload falls back to `updated_at` — noisy, never silent.
 - Unchanged tickets are filtered out *before* the model call, which is what makes the dedup free. The trade-off is that duplicate-cluster detection only sees the new and changed tickets in a given run, not the whole window.
 
-> **Note:** This repo is public, so ticket content is never written to the run logs or the job summary — ticket detail goes only to the Discord webhook (a private channel), and the links require Zendesk auth to open. The one exception is the local `--dump-batch` debugging flag, which writes ticket content to a file you name; `zendesk_triage/*.json` is gitignored to keep those out of the repo.
+> **Note:** This repo is public, so ticket content is never written to the run logs or the job summary — ticket detail goes only to the Discord webhook (a private channel), and the links require Zendesk auth to open. The one exception is the local `--dump-batch` debugging flag, which writes ticket content to a file you name; `*.json` at the checkout root is gitignored to keep those out of the repo.
 
 ### Required Secrets
 
@@ -191,7 +205,7 @@ The trade is process startup, a few seconds per call, against holding an API cre
 
 **Opus**, because the hard part of this job isn't per-ticket classification — enum-constrained categories with prompt guidance is squarely mid-tier work. It's the two batch-wide fields: `cluster` has to spot that a German app-store review and an English bug report describe one root cause, and `priority_rank` has to stay consistent across the whole batch. Those need the model to hold ~45 heterogeneous tickets in mind at once. The exact-transcription requirement (a 66-character Session ID copied verbatim) points the same way. And the entire job costs **single-digit dollars a month** on any current model — roughly $10 on Opus 5 against $6 on Sonnet 5 and $2 on Haiku 4.5 — so trading classification quality for a few dollars would be optimising the wrong thing when the cost of a miss is an unseen security report or a crash cluster nobody grouped.
 
-**Pinned to an id rather than the `opus` alias**, because this is an unattended digest. An alias resolves to the newest Opus the credential allows, so severity calibration and cluster labels would shift on someone else's release schedule, with no run in between to notice it. Bumping the pin is a deliberate one-line change in [triage.py](zendesk_triage/triage.py) (`DEFAULT_MODEL`).
+**Pinned to an id rather than the `opus` alias**, because this is an unattended digest. An alias resolves to the newest Opus the credential allows, so severity calibration and cluster labels would shift on someone else's release schedule, with no run in between to notice it. Bumping the pin is a deliberate one-line change in [triage.py](src/session_ops/zendesk/triage.py) (`DEFAULT_MODEL`).
 
 Two cases for overriding it:
 
@@ -238,12 +252,11 @@ The file is written atomically (`os.replace`) so a crash mid-write cannot corrup
 ### Tests
 
 ```
-pip install -r zendesk_triage/requirements-dev.txt
-python -m unittest discover -s zendesk_triage -v
+uv run python -m unittest discover -s tests/zendesk -t . -v
 ```
 
-`requirements-dev.txt` is the test-only half: `test_relay.py` drives the relay through
-starlette's `TestClient`, which needs an HTTP client the deployment does not.
+The `dev` dependency group carries what only the tests need: `test_relay.py` drives the
+relay through starlette's `TestClient`, which needs an HTTP client the deployment does not.
 
 Offline tests covering the window arithmetic, dedup partitioning, state round-trip and pruning, corrupt-state degradation, Discord card rendering and message chunking, defensive JSON parsing, and the retry/pagination behaviour with a stub session. No secrets or network access needed.
 
@@ -252,29 +265,29 @@ Offline tests covering the window arithmetic, dedup partitioning, state round-tr
 Local runs need the `claude` CLI on `PATH` and logged in (`claude --version`), alongside the Zendesk credentials. `--dry-run` prints the Discord payload instead of posting, so no webhook is needed. Keep it to local runs: it prints ticket content. `--no-discord` prints counts only:
 
 ```
-pip install -r zendesk_triage/requirements.txt
+uv sync
 export ZENDESK_SUBDOMAIN=... ZENDESK_EMAIL=... ZENDESK_API_TOKEN=...
 
 # what the unit runs, minus the Discord post and the state file
-python zendesk_triage/triage.py --window-hours 72 --dry-run
+uv run zendesk-triage --window-hours 72 --dry-run
 
 # keep it cheap while iterating on the rendering
-python zendesk_triage/triage.py --window-hours 12 --max-tickets 5 --dry-run
+uv run zendesk-triage --window-hours 12 --max-tickets 5 --dry-run
 
 # same run without the payload dump: fetches, classifies, posts nothing
-python zendesk_triage/triage.py --window-hours 72 --no-discord
+uv run zendesk-triage --window-hours 72 --no-discord
 
 # or take the model out of the loop: dump the batch, classify it by hand,
 # and feed the findings back in to render
-python zendesk_triage/triage.py --dump-batch /tmp/batch.json --window-hours 48
-python zendesk_triage/triage.py --findings /tmp/findings.json --dry-run
+uv run zendesk-triage --dump-batch /tmp/batch.json --window-hours 48
+uv run zendesk-triage --findings /tmp/findings.json --dry-run
 ```
 
 ## Zendesk Resolve Positive Reviews
 
 The triage's opening act: it solves the 4-5★ AppFollow reviews that were never going to be actioned, so the unsolved backlog reflects work that actually exists. When this was written **5,253** reviews were unsolved — **4,812** of them still `new` — against **428** non-review unsolved tickets. Solving reviews was already being done by hand: **4,959** were already solved or closed. The job has since solved **3,882**, and the reviews it now finds are `open` rather than `new` — see the status bullet below.
 
-> ⚠️ **This writes to Zendesk.** The scheduled run always applies. Run by hand it is a **dry run** unless you pass `--apply`, so nothing can bulk-edit tickets by accident. Read the warning at the top of [resolve_reviews.py](zendesk_triage/resolve_reviews.py) before the first applied run.
+> ⚠️ **This writes to Zendesk.** The scheduled run always applies. Run by hand it is a **dry run** unless you pass `--apply`, so nothing can bulk-edit tickets by accident. Read the warning at the top of [resolve_reviews.py](src/session_ops/zendesk/resolve_reviews.py) before the first applied run.
 
 ### What it will and will not touch
 
@@ -322,7 +335,7 @@ Silence would be indistinguishable from a job that has quietly stopped working �
 
 **A run that died reports too**, from the unit rather than the script — a Zendesk `4xx`, a bulk job that never completes, a host that rebooted all exit before a message exists:
 
-> ❌ **resolve_reviews.py** failed on `angus`, as part of zendesk-digest.service.
+> ❌ **zendesk-resolve-reviews** failed on `angus`, as part of zendesk-digest.service.
 > `journalctl -u zendesk-digest.service -n 50 --no-pager`
 
 It says nothing about counts, because it also fires after the script has already posted a tally alongside per-ticket failures, and nothing about the cause, because the run may have died before it had one — it points at the journal instead of guessing.
@@ -482,7 +495,7 @@ written.
 
 ```
 # what the webhook does, against a real ticket, writing nothing
-python zendesk_triage/note_reply.py --ticket 27603 --dry-run
+uv run zendesk-note-reply --ticket 27603 --dry-run
 ```
 
 A ticket with no command note prints `no command note to act on` and stops, so this
@@ -490,13 +503,13 @@ is safe to point at anything.
 
 ## Community Bans
 
-Abuse reports arrive through Zendesk with a Session ID. [`sogs_moderation/ban.py`](sogs_moderation/ban.py)
+Abuse reports arrive through Zendesk with a Session ID. [`ban.py`](src/session_ops/sogs/ban.py)
 bans those IDs from the whole SOGS we run, not room by room, and prints what the
 server answered at each step, so the reply to the ticket can say what happened:
 
 ```sh
 set -a && . ./.env && set +a                 # SOGS_MOD_SEED
-python sogs_moderation/ban.py 05abc...def
+uv run sogs-ban 05abc...def
 ```
 
 The ban is server-wide, and the deletion follows once it has landed. The order matters:
@@ -574,13 +587,13 @@ attempt answers and the loop never reaches the rest. It is harmless until then.
 
 Our rooms are read-only to everyone but moderators, so a test account has nothing for
 the deletion step to delete and the run proves nothing.
-[`sogs_moderation/perms.py`](sogs_moderation/perms.py) grants it write permission in
+[`perms.py`](src/session_ops/sogs/perms.py) grants it write permission in
 one room, and takes it back afterwards:
 
 ```sh
-python sogs_moderation/perms.py --room session-updates --write on --upload on 05<test account>
+uv run sogs-perms --room session-updates --write on --upload on 05<test account>
 # ... post from that account, then ban it, then:
-python sogs_moderation/perms.py --room session-updates --write default --upload default 05<test account>
+uv run sogs-perms --room session-updates --write default --upload default 05<test account>
 ```
 
 `on` grants, `off` denies (muting one account without banning it), `default` drops the
@@ -623,8 +636,8 @@ yet. Deleting messages is the step that needs the blinded form — see
 
 ```sh
 sudo apt install python3-session-util      # see "Dependencies" below
-pip install -r sogs_moderation/requirements.txt
-python -m unittest discover -s sogs_moderation -v
+uv venv --system-site-packages --python /usr/bin/python3 && uv sync
+uv run python -m unittest discover -s tests/sogs -t . -v
 ```
 
 The blinded signature is checked by verifying it under the blinded pubkey rather than
@@ -645,7 +658,7 @@ sudo apt install python3-session-util
 
 It is a compiled extension built per Python minor version, so a Python upgrade needs a
 matching package, and a virtualenv needs `--system-site-packages` to see it. This is why
-`ban.py` is run from a checkout by hand rather than deployed anywhere.
+`sogs-ban` is run from a checkout by hand rather than deployed anywhere.
 
 pynacl stays for the blinding factor and for `blinded_ids`, which the deletion step walks:
 a Session ID does not carry the sign of the key behind it, so both candidates have to be
@@ -655,7 +668,7 @@ no packaged release carries yet.
 
 ## Contributor Pull Requests
 
-[`github_prs/digest.py`](github_prs/digest.py) posts one message each weekday morning
+[`digest.py`](src/session_ops/github_prs/digest.py) posts one message each weekday morning
 listing the open pull requests in session-foundation's repositories whose author is not
 a maintainer and which have moved in the last three days — the ones nobody on the team
 has a reason to already know about:
@@ -679,7 +692,7 @@ waiting.
 
 The timer runs `Mon..Fri`, so Monday's run has to cover the weekend — hence a 72-hour
 window rather than a daily one. That window overlaps itself by two days on every run,
-and [`--state`](github_prs/digest.py) is what stops the overlap being noise: it records
+and [`--state`](src/session_ops/github_prs/digest.py) is what stops the overlap being noise: it records
 which PRs reached Discord and what each one's `updated_at` was at the time.
 
 `updated_at` moves on *any* change, including one that touches several PRs at once — a
@@ -701,7 +714,7 @@ floor instead of failing.
 
 ### Who is a maintainer
 
-[`github_prs/maintainers.txt`](github_prs/maintainers.txt), one login per line, matched
+[`maintainers.txt`](src/session_ops/github_prs/maintainers.txt), one login per line, matched
 case-insensitively. Bot accounts need no entry — every account GitHub types as a `Bot`
 is dropped, so a renamed Dependabot stays out on its own.
 
@@ -737,11 +750,11 @@ that: private repositories stay out whatever the token can see.
 It runs on the same box as the Zendesk digest, under its own user and its own
 environment file — see [deploy/README.md](deploy/README.md). Its HTTP retries,
 Discord posting and dedup state are the same code the Zendesk digest uses, in
-[shared/](shared/).
+[shared/](src/session_ops/shared/).
 
 ```sh
-cd github_prs && python -m unittest discover
-cd shared && python -m unittest discover
+uv run python -m unittest discover -s tests/github_prs -t .
+uv run python -m unittest discover -s tests/shared -t .
 ```
 
 ## Workflow Failure Notificaiton

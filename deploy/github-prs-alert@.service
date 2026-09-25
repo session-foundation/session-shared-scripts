@@ -10,7 +10,7 @@ EnvironmentFile=/etc/github-prs/env
 
 # Same script as zendesk-alert@, run under this job's environment so the failure
 # lands in the channel the job posts to rather than the triage one.
-ExecStart=/opt/github-prs/venv/bin/python /opt/zendesk/deploy/alert.py %i
+ExecStart=/opt/zendesk/.venv/bin/session-ops-alert %i
 
 # See zendesk-alert@.service: read-only access to the failed unit's journal, which is
 # the line the alert quotes.

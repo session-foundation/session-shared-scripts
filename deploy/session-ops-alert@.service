@@ -7,7 +7,7 @@ Type=oneshot
 User=sessionops
 Group=sessionops
 EnvironmentFile=/etc/session-ops/env
-ExecStart=/opt/github-prs/venv/bin/python /opt/zendesk/deploy/alert.py %i
+ExecStart=/opt/zendesk/.venv/bin/session-ops-alert %i
 # See zendesk-alert@.service: the failed unit's journal is the line the alert quotes.
 SupplementaryGroups=systemd-journal
 

@@ -9,7 +9,6 @@ OnFailure=zendesk-alert@%n.service
 Type=oneshot
 User=zendesk
 Group=zendesk
-WorkingDirectory=/opt/zendesk/zendesk_triage
 EnvironmentFile=/etc/zendesk/env
 
 # Two ExecStart lines, in this order, rather than two units: a solved review leaves
@@ -22,10 +21,10 @@ EnvironmentFile=/etc/zendesk/env
 # looks exactly like one with nothing to do. The `||` reports it and still lets the
 # digest run. If the alert itself also fails, the shell exits non-zero and the unit's
 # own OnFailure catches that.
-ExecStart=/bin/sh -c '/opt/zendesk/venv/bin/python resolve_reviews.py --apply || /opt/zendesk/venv/bin/python /opt/zendesk/deploy/alert.py resolve_reviews.py zendesk-digest.service'
-ExecStart=/opt/zendesk/venv/bin/python triage.py --window-hours 72 \
+ExecStart=/bin/sh -c '/opt/zendesk/.venv/bin/zendesk-resolve-reviews --apply || /opt/zendesk/.venv/bin/session-ops-alert zendesk-resolve-reviews zendesk-digest.service'
+ExecStart=/opt/zendesk/.venv/bin/zendesk-triage --window-hours 72 \
     --state /var/lib/zendesk/seen.json
-# The silence checker's evidence that this ran (deploy/silence.py). `+` runs it
+# The silence checker's evidence that this ran (session-ops-silence). `+` runs it
 # outside the sandbox, so the job itself gets no new write path.
 ExecStartPost=+/usr/bin/touch /var/lib/session-ops/stamps/zendesk-digest
 

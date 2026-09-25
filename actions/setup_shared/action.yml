@@ -11,7 +11,7 @@ runs:
       - name: Install Dependencies
         shell: bash
         run: |
-          pip install -r ${{ github.workspace }}/scripts/crowdin/requirements.txt
+          pip install ${{ github.workspace }}/scripts
 
       - uses: actions/download-artifact@v8
         with:
