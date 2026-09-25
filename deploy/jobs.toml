@@ -1,0 +1,15 @@
+# Every scheduled job on this host. `name` is the unit's name without .service/.timer,
+# and the stamp its ExecStartPost= touches under /var/lib/session-ops/stamps/.
+#
+# max_age_hours is the longest a healthy schedule goes between successes, plus slack
+# for RandomizedDelaySec and the run itself. For a weekday job that is the weekend.
+
+[[job]]
+name = "github-prs-digest"
+# Mon..Fri 09:30: Friday's run to Monday's is 72 h.
+max_age_hours = 80
+
+[[job]]
+name = "zendesk-digest"
+# Mon..Fri 10:00, and a full backlog run can take 90 min.
+max_age_hours = 80

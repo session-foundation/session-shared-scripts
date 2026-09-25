@@ -8,9 +8,18 @@ digest, all on one machine.
 | `zendesk-relay.service` | Always on. The HTTPS endpoint Zendesk posts note webhooks to. |
 | `zendesk-digest.timer` → `.service` | Weekday mornings. Resolves positive reviews, then posts the digest. |
 | `github-prs-digest.timer` → `.service` | Weekday mornings. Posts the contributor pull request digest. |
+| `session-ops-silence.timer` → `.service` | Hourly. Alerts when a job in `jobs.toml` has not succeeded within its `max_age_hours`. |
 
-`zendesk-alert@.service` and `github-prs-alert@.service` are pulled in by `OnFailure=`
-and report the failed unit to the channel that job posts to.
+`zendesk-alert@.service`, `github-prs-alert@.service` and `session-ops-alert@.service`
+are pulled in by `OnFailure=` and report the failed unit to the channel that job posts
+to.
+
+`OnFailure=` only sees a run that failed. A run that never happened (a timer left
+disabled, a host down through a whole schedule) is what the silence checker is for:
+every scheduled unit touches `/var/lib/session-ops/stamps/<name>` on success, and
+`silence.py` compares each stamp's age with `jobs.toml`. A new scheduled job needs both
+its `ExecStartPost=` line and a `jobs.toml` entry; `test_silence.py` fails without
+either.
 
 One clone at `/opt/zendesk` holds all of it — the directory is named after its first
 tenant, not its contents. The venvs are separate, because the two jobs pin `requests`
@@ -144,6 +153,29 @@ run out of it. Nothing secret lives there — every secret is under `/etc`.
 creates it with the right owner on first start. It holds the dedup state that keeps the
 72-hour window from re-reporting the same PR every weekday morning.
 
+### Adding the silence checker
+
+Its own account, which reads the stamps and nothing else: they are root's and
+world-readable, so the account needs no access to any job's state.
+
+```bash
+useradd --system --no-create-home --home /nonexistent --shell /usr/sbin/nologin sessionops
+
+install -d -m 750 -o root -g sessionops /etc/session-ops
+[ -e /etc/session-ops/env ] || install -m 640 -o root -g sessionops /dev/null /etc/session-ops/env
+"${EDITOR:-nano}" /etc/session-ops/env            # contents under Secrets, below
+
+cp /opt/zendesk/deploy/session-ops.tmpfiles /etc/tmpfiles.d/session-ops.conf
+systemd-tmpfiles --create session-ops.conf
+cp /opt/zendesk/deploy/*.service /opt/zendesk/deploy/*.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now session-ops-silence.timer
+```
+
+The `cp` of every unit is the point: the two digests gain the `ExecStartPost=` that
+writes their stamp. Until each has run once, the checker counts its silence from the
+first check that found the stamp missing, so it does not alert on install.
+
 ## Secrets
 
 `/etc/zendesk/env`, mode `640`, `root:zendesk` — readable by the service, not by
@@ -237,6 +269,15 @@ GITHUB_PRS_DISCORD_WEBHOOK_URL=
 # Required, and normally the same webhook: without it alert.py falls back to
 # ZENDESK_DISCORD_WEBHOOK_URL, which is not in this file, and the failure notifier
 # fails instead of reporting.
+ALERT_DISCORD_WEBHOOK_URL=
+```
+
+### `/etc/session-ops/env`
+
+Mode `640`, `root:sessionops`.
+
+```sh
+# Where silence alerts go. Any channel whose readers can act on a job that stopped.
 ALERT_DISCORD_WEBHOOK_URL=
 ```
 
@@ -364,6 +405,17 @@ ls -l /var/lib/github-prs/seen.json
 A second run that reports everything again means the state was not written — check that
 `StateDirectory=` reached systemd with
 `systemctl show github-prs-digest -p StateDirectory`.
+
+**7. The silence checker.** A dry run prints every job's last success and the alert
+it would post, and writes no state:
+
+```bash
+systemd-run --pipe --wait --uid=sessionops -p EnvironmentFile=/etc/session-ops/env \
+  /opt/github-prs/venv/bin/python /opt/zendesk/deploy/silence.py --dry-run
+ls -l /var/lib/session-ops/stamps/     # one file per job that has succeeded since
+```
+
+`systemctl start session-ops-alert@test.service` checks its failure path.
 
 ## Updating
 
