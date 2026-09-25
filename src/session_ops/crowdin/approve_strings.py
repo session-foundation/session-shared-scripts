@@ -7,10 +7,11 @@ Crowdin.com (API v2). Approval requires a Proofreader/Manager token, scoped with
 translations, adding approvals) -- a missing scope shows up as a 403 on just the
 endpoints it covers.
 
-The Crowdin API token is read from the system keyring via libsecret's
-`secret-tool`. Store it once with:
+The only script here that writes to Crowdin, so it reads a proofreader token of its
+own rather than the read-only one every other job uses. From the system keyring via
+libsecret's `secret-tool`; store it once with:
 
-    secret-tool store --label='Crowdin Translation API token' service crowdin key translation-api-token
+    secret-tool store --label='Crowdin proofreader token' service crowdin key proofreader-api-token
 
 Usage:
     # inspect first: list every translation + who submitted it (no changes)
@@ -26,7 +27,7 @@ Exactly one of --by-user or --all-users is required unless --list is given, so
 approval is always an explicit choice -- a forgotten filter is an error, never
 a silent "approve anything".
 
-(The CROWDIN_API_TOKEN environment variable, if set, is used as a fallback.)
+(The CROWDIN_PROOFREADER_TOKEN environment variable, if set, is used as a fallback.)
 """
 import argparse
 import os
@@ -39,11 +40,11 @@ DEFAULT_PROJECT = "618696"
 
 # libsecret attributes identifying the token in the keyring; must match the
 # `secret-tool store ...` attributes used to save it.
-KEYRING_ATTRS = ["service", "crowdin", "key", "translation-api-token"]
+KEYRING_ATTRS = ["service", "crowdin", "key", "proofreader-api-token"]
 
 
 def get_token():
-    """Read the Crowdin API token from the system keyring via libsecret, falling back to env."""
+    """Read the proofreader token from the system keyring via libsecret, falling back to env."""
     try:
         out = subprocess.run(
             ["secret-tool", "lookup", *KEYRING_ATTRS],
@@ -57,16 +58,16 @@ def get_token():
     except subprocess.CalledProcessError:
         pass  # no matching secret in the keyring
 
-    token = os.environ.get("CROWDIN_API_TOKEN")
+    token = os.environ.get("CROWDIN_PROOFREADER_TOKEN")
     if token:
         return token
 
     sys.exit(
-        "No Crowdin API token found.\n"
+        "No Crowdin proofreader token found.\n"
         "Store it in the system keyring with:\n"
-        "  secret-tool store --label='Crowdin Translation API token' "
+        "  secret-tool store --label='Crowdin proofreader token' "
         + " ".join(KEYRING_ATTRS)
-        + "\n(or set CROWDIN_API_TOKEN in the environment as a fallback)."
+        + "\n(or set CROWDIN_PROOFREADER_TOKEN in the environment as a fallback)."
     )
 
 
