@@ -1,0 +1,5 @@
+# Pyflakes and syntax errors only: what catches a broken import or name mid-refactor.
+target-version = "py312"
+
+[lint]
+select = ["F", "E9"]
