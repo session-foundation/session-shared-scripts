@@ -23,7 +23,7 @@ import requests
 from session_ops.zendesk import triage
 from session_ops.shared import discord
 from session_ops.shared.testing import (
-    FakeResponse, FakeSession, NoSleep, NonJsonResponse, Patched)
+    FakeResponse, FakeSession, NonJsonResponse, Patched)
 
 
 STAMP = "%Y-%m-%dT%H:%M:%SZ"
@@ -306,9 +306,7 @@ class TestRequesterActivity(unittest.TestCase):
         for response in (FakeResponse({}, status_code=500), NonJsonResponse(),
                          requests.ConnectionError("unreachable")):
             with self.subTest(response=type(response).__name__):
-                with NoSleep():
-                    triage.hydrate_requester_activity(
-                        FakeSession([response] * 2), "acme", tickets)
+                triage.hydrate_requester_activity(FakeSession([response]), "acme", tickets)
                 self.assertNotIn("requester_updated_at", tickets[0])
                 self.assertEqual(triage.activity_key(tickets[0]), "X")
 
@@ -977,9 +975,8 @@ class TestContentFreeTickets(unittest.TestCase):
     def test_hydration_survives_a_transport_failure(self):
         """An unreachable comments endpoint must not abort the whole digest."""
         row = ticket(1, subject="Conversation with x", description="Conversation with x")
-        session = FakeSession([requests.ConnectionError("unreachable")] * 2)
-        with NoSleep():
-            self.assertEqual(triage.hydrate_descriptions(session, "acme", [row]), 0)
+        session = FakeSession([requests.ConnectionError("unreachable")])
+        self.assertEqual(triage.hydrate_descriptions(session, "acme", [row]), 0)
         self.assertEqual(row["description"], "Conversation with x")
 
     def test_hydration_survives_a_non_json_body(self):
@@ -995,11 +992,10 @@ class TestContentFreeTickets(unittest.TestCase):
             ticket(2, subject="Conversation with b", description="Conversation with b"),
         ]
         session = FakeSession([
-            requests.ConnectionError("unreachable"), requests.ConnectionError("unreachable"),
+            requests.ConnectionError("unreachable"),
             FakeResponse({"comments": [{"body": "Cannot log in since the update"}]}),
         ])
-        with NoSleep():
-            self.assertEqual(triage.hydrate_descriptions(session, "acme", rows), 1)
+        self.assertEqual(triage.hydrate_descriptions(session, "acme", rows), 1)
         self.assertIn("Cannot log in", rows[1]["description"])
 
     def test_hydration_joins_every_informative_comment(self):
@@ -1549,15 +1545,14 @@ class TestFetchTotalUnsolved(unittest.TestCase):
 
     def test_uses_a_short_retry_budget(self):
         """A full 6-attempt backoff would stall the digest ~60s for optional data."""
-        session = FakeSession([FakeResponse({}, status_code=500)] * 6)
+        session = FakeSession([FakeResponse({}, status_code=500)])
         triage.fetch_total_unsolved(session, "acme")
-        self.assertEqual(len(session.calls), 2)
+        self.assertEqual(session.calls[0][2]["attempts"], 2)
 
     def test_a_transport_failure_is_non_fatal_too(self):
-        """request_with_retry re-raises once its budget is spent; None is documented."""
-        session = FakeSession([requests.ConnectionError("no route")] * 2)
-        with NoSleep():
-            self.assertIsNone(triage.fetch_total_unsolved(session, "acme"))
+        """The session re-raises once its budget is spent; None is documented."""
+        session = FakeSession([requests.ConnectionError("no route")])
+        self.assertIsNone(triage.fetch_total_unsolved(session, "acme"))
 
     def test_a_non_json_body_is_non_fatal(self):
         """A 200 with an HTML error page (proxy, maintenance) must not abort the run."""
@@ -1921,9 +1916,8 @@ class TestEnglishTranscript(unittest.TestCase):
             def json():
                 return {"comments": comments}
 
-        with Patched(triage, request_with_retry=lambda *a, **k: Resp()):
-            return triage.conversation_turns(object(), "acme",
-                                             {"id": 1, "requester_id": requester_id})
+        return triage.conversation_turns(FakeSession([Resp()]), "acme",
+                                         {"id": 1, "requester_id": requester_id})
 
     def comment(self, body, author_id=5, public=True, created_at="2026-08-28T00:22:38Z"):
         return {"body": body, "author_id": author_id, "public": public,

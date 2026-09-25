@@ -52,7 +52,9 @@
         "editorCode": "es",
         "locale": "es-ES"
        }
-      ]
+      ],
+      "createdAt": "2021-03-04T05:26:03+00:00",
+      "lastActivity": "2026-09-24T22:10:41+00:00"
      }
     }
    }
@@ -159,8 +161,12 @@
   },
   {
    "method": "GET",
-   "url": "https://api.crowdin.com/api/v2/glossaries/407522/terms?conceptId=36&limit=500",
-   "params": null,
+   "url": "https://api.crowdin.com/api/v2/glossaries/407522/terms",
+   "params": {
+    "conceptId": 36,
+    "limit": 500,
+    "offset": 0
+   },
    "data": null,
    "response": {
     "status": 200,
@@ -170,14 +176,16 @@
        "data": {
         "id": 7,
         "text": "Session",
-        "conceptId": 36
+        "conceptId": 36,
+        "createdAt": "2023-11-02T01:17:09+00:00"
        }
       },
       {
        "data": {
         "id": 8,
         "text": "Lokinet",
-        "conceptId": 36
+        "conceptId": 36,
+        "createdAt": "2023-11-02T01:17:09+00:00"
        }
       }
      ],

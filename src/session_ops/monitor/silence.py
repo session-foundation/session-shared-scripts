@@ -32,9 +32,8 @@ import time
 import tomllib
 from datetime import datetime, timezone
 
-import requests
 
-from session_ops.shared import discord
+from session_ops.shared import discord, http
 from session_ops.shared.env import get_env
 
 REGISTRY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jobs.toml")
@@ -161,7 +160,7 @@ def main():
     if args.dry_run:
         print(message)
         return
-    if not discord.post_to_discord(requests.Session(), webhook, [{"content": message}]):
+    if not discord.post_to_discord(http.Session(), webhook, [{"content": message}]):
         # State still saved: a missing stamp's clock must survive a failed post.
         if args.state:
             save_state(args.state, state)

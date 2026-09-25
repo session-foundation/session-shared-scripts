@@ -497,12 +497,7 @@ class QueueTag(unittest.TestCase):
 
     def test_a_failure_to_clear_is_not_fatal(self):
         """The tag is a dashboard light, not the work."""
-        session = fake_session(*[FakeResponse({}, status_code=500),
-                               FakeResponse({}, status_code=500),
-                               FakeResponse({}, status_code=500),
-                               FakeResponse({}, status_code=500),
-                               FakeResponse({}, status_code=500),
-                               FakeResponse({}, status_code=500)])
+        session = fake_session(FakeResponse({}, status_code=500))
         note_reply.clear_queued(session, "sub", 7)   # must not raise
 
 

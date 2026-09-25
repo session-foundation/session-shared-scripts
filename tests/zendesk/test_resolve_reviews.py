@@ -19,8 +19,8 @@ from urllib.parse import quote
 
 from session_ops.zendesk import resolve_reviews
 from session_ops.zendesk import triage
-from tests.zendesk.test_triage import (
-    ROOT, FakeResponse, FakeSession, NoSleep, unit_commands)
+from session_ops.shared.testing import FakeResponse, FakeSession, NoSleep
+from tests.zendesk.test_triage import ROOT, unit_commands
 
 
 def review(ticket_id, stars=5, channel="any_channel", subject=None):
@@ -229,7 +229,7 @@ class TestWaitForJob(unittest.TestCase):
                 resolve_reviews.wait_for_job(session, "acme", "job1", timeout=0)
 
     def test_an_http_error_exits(self):
-        session = FakeSession([FakeResponse({}, status_code=500)] * 8)
+        session = FakeSession([FakeResponse({}, status_code=500)])
         with NoSleep():
             with self.assertRaises(SystemExit):
                 resolve_reviews.wait_for_job(session, "acme", "job1")
