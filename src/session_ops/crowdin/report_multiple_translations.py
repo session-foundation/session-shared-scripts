@@ -45,7 +45,7 @@ import os
 import subprocess
 import sys
 
-from session_ops.crowdin import sdk
+from session_ops.crowdin import duplicates, sdk
 from session_ops.shared import discord, http
 
 DEFAULT_PROJECT = "618696"
@@ -85,12 +85,6 @@ def crowdin_client(token, project_id):
     return sdk.client(token, project_id, attempts=10, timeout=60)
 
 
-def user_label(u):
-    if not u:
-        return "<none/MT>"
-    return f"{u.get('id')}:{u.get('username') or u.get('fullName') or '?'}"
-
-
 def snippet(text, n=70):
     text = (text or "").replace("\n", " ")
     return text[:n] + ("…" if len(text) > n else "")
@@ -125,36 +119,8 @@ def scan_locale(client, lang, string_ids, strings, editor_url, max_workers):
     def process(sid):
         trans = sdk.fetch_all(client.string_translations, "list_string_translations",
                               stringId=sid, languageId=lang)
-        approved_tids = approved_here.get(sid, set())
-        by_cat = collections.defaultdict(list)
-        for t in trans:
-            by_cat[t.get("pluralCategoryName")].append(t)
-        local = []
-        for cat, ts in by_cat.items():
-            if len(ts) < 2:
-                continue  # sole translation in its category -> used as-is, nothing to review
-            ts.sort(key=lambda t: t.get("createdAt") or "")
-            local.append({
-                "locale": lang,
-                "status": "multiple-translations",
-                "stringId": sid,
-                "identifier": strings.get(sid, {}).get("identifier"),
-                "webUrl": editor_url(lang, sid),
-                "pluralCategory": cat,
-                "count": len(ts),
-                "sourceText": strings.get(sid, {}).get("text"),
-                "translations": [{
-                    "translationId": t["id"],
-                    "user": user_label(t.get("user")),
-                    "createdAt": t.get("createdAt"),
-                    "approved": t["id"] in approved_tids,
-                    "rating": t.get("rating"),
-                    "isPreTranslated": t.get("isPreTranslated"),
-                    "provider": t.get("provider"),
-                    "text": t.get("text"),
-                } for t in ts],
-            })
-        return local
+        return duplicates.slots_for_string(trans, approved_here.get(sid, set()), lang, sid,
+                                           strings.get(sid, {}), editor_url(lang, sid))
 
     found = []
     failed = 0
@@ -259,7 +225,7 @@ def build_messages(findings, scanned_locales, note=""):
         embeds.append({
             "title": "…and more",
             "description": (f"Only the first **{MAX_SLOTS_LISTED}** slots are listed here. "
-                            f"Run `report_multiple_translations.py --json` for the full set."),
+                            f"Run `crowdin-report-duplicates --json` for the full set."),
             "color": 0x95A5A6,
         })
 
@@ -308,7 +274,7 @@ def post_to_discord(webhook_url, messages):
         discord.post_to_discord(webhook_session, webhook_url, [{
             "content": "⚠️ Crowdin multiple-translations report failed to post "
                        "its results (a message was rejected by Discord). "
-                       "Re-run `report_multiple_translations.py --json` for the "
+                       "Re-run `crowdin-report-duplicates --json` for the "
                        "full list.",
         }])
         sys.exit(f"Discord accepted {posted} of {len(messages)} messages.")

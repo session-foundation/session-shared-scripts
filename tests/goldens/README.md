@@ -9,6 +9,8 @@ changes a payload fails.
 | `digest/`   | `github-prs-digest --dry-run`, 720 h        | live org, 2026-09-25, trimmed to read fields |
 | `report/`   | `crowdin-report-duplicates --locales de`    | synthetic, shaped like Crowdin's API     |
 | `download/` | `crowdin-download` as the sync runs it      | synthetic                  |
+| `approve/`  | `crowdin-approve-strings`, approving and `--list` | synthetic               |
+| `reconcile/` | `crowdin-reconcile-duplicates --dry-run` after a seed | the report's, edited  |
 
 Requests are matched by method, URL, query and body rather than by order, because the
 Crowdin scripts fan out across threads. A request the recording lacks fails the test and
@@ -19,4 +21,5 @@ To accept a deliberate change, rerun the suite with `UPDATE_GOLDENS=1` and revie
 ```sh
 UPDATE_GOLDENS=1 uv run python -m unittest tests.github_prs.test_digest_golden
 UPDATE_GOLDENS=1 uv run python -m unittest tests.crowdin.test_crowdin_goldens
+UPDATE_GOLDENS=1 uv run python -m unittest tests.crowdin.test_approve_golden tests.crowdin.test_duplicates
 ```
