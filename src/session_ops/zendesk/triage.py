@@ -83,7 +83,8 @@ from session_ops.shared import discord, http, state as dedup
 from session_ops.shared.discord import clip, post_to_discord
 from session_ops.shared.env import get_env
 from session_ops.shared.text import squash
-from session_ops.zendesk.api import (REVIEW_CHANNEL, SEARCH_RESULT_LIMIT, fetch_tickets,
+from session_ops.zendesk.api import (REVIEW_CHANNEL, SEARCH_RESULT_LIMIT, fetch_comments,
+                                     fetch_tickets,
                                      hydrate_requester_activity, is_store_review,
                                      review_platform, review_stars, ticket_url,
                                      zendesk_session)
@@ -499,22 +500,11 @@ def hydrate_descriptions(session, subdomain, tickets):
     for ticket in tickets:
         if not is_content_free(ticket):
             continue
-        url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket['id']}/comments.json"
-        try:
-            resp = session.request("GET", url, attempts=2, params={"per_page": 10})
-        except requests.RequestException as exc:
-            # Hydration is an enrichment, never a reason to abort the digest: an
-            # unreachable comments endpoint just leaves the description as-is.
-            print(f"Note: could not fetch comments for #{ticket['id']} ({exc}).")
-            continue
-        if resp.status_code >= 400:
-            continue
-        try:
-            comments = resp.json().get("comments", [])
-        except ValueError as exc:
-            # A 200 carrying an HTML error page (proxy, maintenance) is the same kind
-            # of non-event as an HTTP error here — enrich what we can, skip the rest.
-            print(f"Note: unreadable comments payload for #{ticket['id']} ({exc}).")
+        # Hydration is an enrichment, never a reason to abort the digest: a ticket
+        # whose comments cannot be read keeps its description as it is.
+        comments = fetch_comments(session, subdomain, ticket["id"], per_page=10, order=None,
+                                  optional=True)
+        if comments is None:
             continue
         subject = squash(ticket.get("subject"))
         bodies = [squash(c.get("body")) for c in comments]
