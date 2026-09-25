@@ -129,18 +129,40 @@ def fetch_ticket(session, subdomain, ticket_id):
     return (resp.json() or {}).get("ticket") or {}
 
 
-def fetch_comments(session, subdomain, ticket_id):
-    """The ticket's comments, newest first.
+def fetch_comments(session, subdomain, ticket_id, per_page=100, order="desc",
+                   optional=False):
+    """One page of the ticket's comments, newest first unless `order` says otherwise;
+    None leaves the order to Zendesk.
 
-    Newest first because the marker that stops a re-run from writing twice will be on
-    the most recent comment, and one page of a busy ticket would otherwise be all
-    opening back-and-forth.
+    Newest first by default because the marker that stops a re-run from writing twice
+    will be on the most recent comment, and one page of a busy ticket would otherwise
+    be all opening back-and-forth.
+
+    `optional` is for an enrichment: on a short retry budget, and a failure prints a
+    note and returns None rather than stopping the run.
     """
     url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}/comments.json"
-    resp = session.request("GET", url, params={"per_page": 100, "sort_order": "desc"})
+    params = {"per_page": per_page, **({"sort_order": order} if order else {})}
+    if not optional:
+        resp = session.request("GET", url, params=params)
+        if resp.status_code >= 400:
+            sys.exit(f"Could not read the comments on #{ticket_id} ({resp.status_code}).")
+        return (resp.json() or {}).get("comments") or []
+    try:
+        resp = session.request("GET", url, attempts=2, params=params)
+    except requests.RequestException as exc:
+        print(f"Note: could not fetch comments for #{ticket_id} ({exc}).")
+        return None
     if resp.status_code >= 400:
-        sys.exit(f"Could not read the comments on #{ticket_id} ({resp.status_code}).")
-    return (resp.json() or {}).get("comments") or []
+        print(f"Note: comments for #{ticket_id} returned {resp.status_code}.")
+        return None
+    try:
+        return resp.json().get("comments", [])
+    except ValueError as exc:
+        # A 200 carrying an HTML error page (proxy, maintenance) is the same kind of
+        # non-event as an HTTP error here.
+        print(f"Note: unreadable comments payload for #{ticket_id} ({exc}).")
+        return None
 
 
 def hydrate_requester_activity(session, subdomain, tickets):
@@ -345,20 +367,8 @@ def conversation_turns(session, subdomain, ticket):
     if requester is None:
         print(f"Note: #{ticket['id']} has no requester_id; skipping its transcript.")
         return None
-    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket['id']}/comments.json"
-    try:
-        resp = session.request("GET", url, attempts=2,
-                                  params={"per_page": 100, "sort_order": "asc"})
-    except requests.RequestException as exc:
-        print(f"Note: could not fetch comments for #{ticket['id']} ({exc}).")
-        return None
-    if resp.status_code >= 400:
-        print(f"Note: comments for #{ticket['id']} returned {resp.status_code}.")
-        return None
-    try:
-        comments = resp.json().get("comments", [])
-    except ValueError as exc:
-        print(f"Note: unreadable comments payload for #{ticket['id']} ({exc}).")
+    comments = fetch_comments(session, subdomain, ticket["id"], order="asc", optional=True)
+    if comments is None:
         return None
     public = [c for c in comments if c.get("public")]
     authors = customer_authors(session, subdomain, ticket, public)
