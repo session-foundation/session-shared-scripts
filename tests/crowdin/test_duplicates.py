@@ -221,6 +221,18 @@ class TestReconcile(unittest.TestCase):
         self.run_reconcile(exchanges, "--seed", locales=None)
         self.assertNotIn("101:it:", self.slots())
 
+    def test_an_unseeded_state_stops_a_posting_run_before_crowdin(self):
+        with mock.patch.object(reconcile.discord, "post_to_discord") as post, \
+                mock.patch.dict(os.environ, {"CROWDIN_DISCORD_WEBHOOK_URL": "https://hook"}), \
+                self.assertRaises(SystemExit) as stopped:
+            self.run_reconcile([])
+        self.assertIn("--seed", str(stopped.exception.code))
+        post.assert_not_called()
+        self.assertFalse(os.path.exists(self.state))
+
+    def test_an_unseeded_state_still_allows_a_dry_run(self):
+        self.assertIn("107", self.run_reconcile(recording(), "--dry-run"))
+
     def test_a_failed_post_writes_no_state(self):
         self.run_reconcile(recording(), "--seed")
         with open(self.state, encoding="utf-8") as handle:
