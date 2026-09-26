@@ -155,7 +155,7 @@ The blinded request signatures come from `session_util`, libsession-util's Pytho
 binding. It is published as a deb rather than a wheel, so `pip` cannot reach it:
 
 ```sh
-# https://deb.oxen.io has the repository setup
+# https://deb.session.foundation has the repository setup
 sudo apt install python3-session-util
 ```
 
