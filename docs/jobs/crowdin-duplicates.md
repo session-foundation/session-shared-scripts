@@ -23,7 +23,9 @@ Nothing changed, nothing is posted.
   Crowdin signs nothing, so the secret is the webhook URL's last path segment.
 - **Reconciliation** judges every string of every locale once a day. Crowdin never
   retries a webhook it failed to deliver, so this is what keeps the state correct; the
-  relay only makes it prompt. Anything missed is posted at most a day late.
+  relay only makes it prompt. Anything missed is posted at most a day late. A slot
+  whose string was deleted, or whose locale left the project, resolves here: the
+  relay cannot see either.
 
 Both write the state under a file lock. The relay records when it checked each
 (string, locale), and reconciliation ignores its own older view of that one, so a scan

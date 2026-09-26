@@ -4,8 +4,9 @@ Reconcile the open duplicate-translation slots with Crowdin, and post what chang
 
 Every string of every scanned locale is judged against the state: slots newly holding
 2+ translations are posted as new, slots no longer holding them as resolved, and
-nothing is posted when nothing changed. This is what makes the state correct; the
-relay only makes it prompt, and Crowdin drops any webhook it fails to deliver.
+nothing is posted when nothing changed. A slot whose string or locale left the
+project resolves. This is what makes the state correct; the relay only makes it
+prompt, and Crowdin drops any webhook it fails to deliver.
 
 With --croql, what the timer runs, a locale costs one query for the strings holding
 2+ translations in it at all, then one request per candidate. Without it, one request
@@ -85,6 +86,15 @@ def scan_locale(client, project, lang, strings, use_croql, max_workers):
     return findings, checked
 
 
+def vanished(state, strings, locales, at):
+    """Scopes whose string or locale left the project: judged with no findings, so their
+    slots resolve. `locales` is None when only some locales were scanned."""
+    return {duplicates.scope_key(slot["stringId"], slot["locale"]): at
+            for slot in state["slots"].values()
+            if slot["stringId"] not in strings
+            or (locales is not None and slot["locale"] not in locales)}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Reconcile Crowdin duplicate translations.")
     parser.add_argument("--project-id", default=DEFAULT_PROJECT)
@@ -104,13 +114,14 @@ def main(argv=None):
     webhook = get_env("CROWDIN_DISCORD_WEBHOOK_URL",
                       required=not (args.dry_run or args.seed))
     client = crowdin_client(token, args.project_id)
+    # Taken before the listings, so a relay check of a string or locale they missed wins.
+    started = duplicates.now()
     project = duplicates.Project(client.projects.get_project()["data"])
     locales = args.locales or project.locales
     strings = {s["id"]: {"identifier": s.get("identifier"), "text": s.get("text")}
                for s in sdk.fetch_all(client.source_strings, "list_strings")}
     print(f"{len(strings)} strings, {len(locales)} locale(s)", file=sys.stderr)
 
-    started = duplicates.now()
     findings, checked = [], {}
     for lang in locales:
         try:
@@ -127,6 +138,8 @@ def main(argv=None):
 
     with duplicates.locked(args.state):
         state = duplicates.load(args.state)
+        checked = {**vanished(state, strings, None if args.locales else project.locales,
+                              started), **checked}
         opened, resolved = duplicates.apply(state, findings, checked, duplicates.now(),
                                             remember=False)
         duplicates.forget_checks_before(state, started)
