@@ -49,8 +49,9 @@ than something to back up.
 
 One search fetches every open PR in the org and the window is applied to the result
 here rather than in the query — that is what buys the backlog count for the cost of a
-single query. Past GitHub's 1000-result search ceiling the digest says the counts are a
-floor instead of failing.
+single query. When the search comes back short of its own total — past GitHub's
+1000-result ceiling, flagged `incomplete_results`, or shifted by a PR updated between two
+page fetches — the digest says the counts are a floor instead of failing.
 
 ## Who is a maintainer
 

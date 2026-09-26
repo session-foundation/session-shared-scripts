@@ -323,13 +323,31 @@ class TestFetching(unittest.TestCase):
         self.assertEqual(fetch.call_count, 1)
 
     def test_search_stops_at_the_result_ceiling_rather_than_erroring(self):
-        full = {"total_count": 1500,
-                "items": [pr(n) for n in range(digest.PER_PAGE)]}
-        with mock.patch.object(digest, "fetch_json", return_value=full) as fetch:
+        pages = [{"total_count": 1500,
+                  "items": [pr(page * digest.PER_PAGE + n) for n in range(digest.PER_PAGE)]}
+                 for page in range(15)]
+        with mock.patch.object(digest, "fetch_json", side_effect=pages) as fetch:
             items, truncated = digest.search_open_prs(None, "org")
         self.assertEqual(len(items), digest.SEARCH_RESULT_LIMIT)
         self.assertTrue(truncated)
         self.assertEqual(fetch.call_count, digest.SEARCH_RESULT_LIMIT // digest.PER_PAGE)
+
+    def test_a_pr_repeated_across_pages_is_kept_once_and_the_counts_read_as_a_floor(self):
+        first = {"total_count": 106, "items": [pr(n) for n in range(digest.PER_PAGE)]}
+        shifted = {"total_count": 106,
+                   "items": [pr(n) for n in range(digest.PER_PAGE - 1, 105)]}
+        with mock.patch.object(digest, "fetch_json", side_effect=[first, shifted]):
+            items, truncated = digest.search_open_prs(None, "org")
+        self.assertEqual(len(items), 105)
+        self.assertEqual(len({item["id"] for item in items}), 105)
+        self.assertTrue(truncated)
+
+    def test_a_search_github_reports_incomplete_reads_as_a_floor(self):
+        payload = {"total_count": 2, "incomplete_results": True, "items": [pr(1), pr(2)]}
+        with mock.patch.object(digest, "fetch_json", return_value=payload):
+            items, truncated = digest.search_open_prs(None, "org")
+        self.assertEqual(len(items), 2)
+        self.assertTrue(truncated)
 
 
 if __name__ == "__main__":
