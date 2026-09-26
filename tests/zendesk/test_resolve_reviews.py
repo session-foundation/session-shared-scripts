@@ -10,6 +10,8 @@ This script writes to Zendesk, so the tests lean on the guards rather than the h
 path: that a dry run cannot PUT, that only positive app-store reviews are selected,
 and that an asynchronous job's failures are surfaced instead of swallowed.
 """
+import os
+import re
 import unittest
 from datetime import datetime, timezone
 from urllib.parse import quote
@@ -157,6 +159,12 @@ class TestSolveBatch(unittest.TestCase):
         comment = session.calls[0][2]["json"]["ticket"]["comment"]
         self.assertFalse(comment["public"])
         self.assertEqual(comment["body"], "closed automatically")
+
+    def test_the_note_names_this_module_by_its_path_in_the_repo(self):
+        """An agent reading a solved ticket follows it to find out why."""
+        path = re.search(r"See (\S+)\.$", resolve_reviews.SOLVED_NOTE).group(1)
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self.assertTrue(os.path.samefile(os.path.join(root, path), resolve_reviews.__file__))
 
     def test_no_comment_key_when_there_is_no_note(self):
         session = self.session()

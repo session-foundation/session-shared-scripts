@@ -95,6 +95,8 @@ DEFAULT_MAX_TICKETS = 1000
 # https://developer.zendesk.com/api-reference/ticketing/tickets/tickets/#update-many-tickets
 BATCH_SIZE = 100
 RESOLVED_TAG = "auto-resolved-review"
+SOLVED_NOTE = (f"Solved automatically: {MIN_STARS}★ or better app-store review with no "
+               f"actionable content. See src/session_ops/zendesk/resolve_reviews.py.")
 # Long enough for a 100-ticket batch, short enough that a wedged job fails the run
 # rather than holding a scheduled job open.
 JOB_TIMEOUT_SECONDS = 300
@@ -400,9 +402,7 @@ def main(argv=None):
         print(f"Discord message that a real run would post:\n{preview}")
         return
 
-    note = None if args.no_note else (
-        f"Solved automatically: {MIN_STARS}★ or better app-store review with no "
-        f"actionable content. See zendesk_triage/resolve_reviews.py.")
+    note = None if args.no_note else SOLVED_NOTE
 
     solved_ids, failures = [], []
     ids = [t["id"] for t in resolvable]
