@@ -28,7 +28,7 @@ def load_state(path, version, noun):
     try:
         with open(path, encoding="utf-8") as handle:
             data = json.load(handle)
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:  # ValueError covers bad JSON and bad UTF-8
         print(f"Note: unreadable state file {path} ({exc}); treating every {noun} as new.")
         return empty_state(version)
     if not isinstance(data, dict) or not isinstance(data.get("seen"), dict):
@@ -55,6 +55,8 @@ def save_state(path, state, records, retention_days, version):
     cutoff = now - timedelta(days=retention_days)
     kept = {}
     for key, record in seen.items():
+        if not isinstance(record, dict):
+            continue
         try:
             last = datetime.strptime(record.get("last_reported", ""), STAMP) \
                 .replace(tzinfo=timezone.utc)

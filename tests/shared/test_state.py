@@ -53,6 +53,12 @@ class TestStateFile(unittest.TestCase):
                     handle.write(content)
                 self.assertEqual(self.load(path), dedup.empty_state(VERSION))
 
+    def test_a_state_file_that_is_not_utf8_is_a_cache_miss(self):
+        path = os.path.join(self.directory.name, "binary.json")
+        with open(path, "wb") as handle:
+            handle.write(b'{"version": 7, "seen": {"\xff": {}}}')
+        self.assertEqual(self.load(path), dedup.empty_state(VERSION))
+
     def test_the_right_version_is_loaded(self):
         path = os.path.join(self.directory.name, "flat.json")
         with open(path, "w", encoding="utf-8") as handle:
@@ -73,6 +79,12 @@ class TestStateFile(unittest.TestCase):
         state = {"version": VERSION, "seen": {"1": {"last_reported": "never"}}}
         kept, _ = self.save({}, state=state)
         self.assertEqual(kept, 0)
+
+    def test_a_record_that_is_not_an_object_is_dropped_rather_than_failing_the_save(self):
+        """The save runs after the post, so failing it would repost next run."""
+        state = {"version": VERSION, "seen": {"1": "stray", "2": None, "3": [1]}}
+        self.assertEqual(self.save({"4": {}}, state=state), (1, 3))
+        self.assertEqual(list(self.load()["seen"]), ["4"])
 
     def test_the_directory_is_created_and_the_write_is_atomic(self):
         self.save({"1": {}})
