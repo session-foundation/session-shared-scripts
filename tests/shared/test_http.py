@@ -147,9 +147,38 @@ class TestSession(unittest.TestCase):
         self.assertEqual(clock.slept, [0.0])
 
     def test_retry_after_is_capped_at_a_minute(self):
-        server = self.serve(status(429, retry_after="9999"), ok())
+        """100 s fits in the five retries a default session has left, at 60 s each."""
+        server = self.serve(status(429, retry_after="100"), ok())
         with NoSleep() as clock:
-            http.Session().get(server.url)
+            self.assertEqual(http.Session().get(server.url).status_code, 200)
+        self.assertEqual(clock.slept, [60])
+
+    def test_a_wait_past_what_the_budget_can_sleep_comes_back_at_once(self):
+        """Six attempts at a minute each would be 300 s against the same spent quota,
+        a unit's whole timeout, and systemd would kill the job before it alerted."""
+        server = self.serve(status(429, retry_after="9999"))
+        with NoSleep() as clock:
+            self.assertEqual(http.Session().get(server.url).status_code, 429)
+        self.assertEqual(len(server.seen), 1)
+        self.assertEqual(clock.slept, [])
+
+    def test_a_quota_reset_past_what_the_budget_can_sleep_comes_back_at_once(self):
+        reset = str(int(time.time()) + 3000)
+        server = self.serve(status(403, x_ratelimit_remaining="0", x_ratelimit_reset=reset))
+        with NoSleep() as clock:
+            self.assertEqual(http.Session().get(server.url).status_code, 403)
+        self.assertEqual(len(server.seen), 1)
+        self.assertEqual(clock.slept, [])
+
+    def test_the_budget_counts_only_the_attempts_left(self):
+        """90 s fits in two retries but not in the one a two-attempt call has."""
+        server = self.serve(status(429, retry_after="90"))
+        with NoSleep() as clock:
+            self.assertEqual(http.Session(attempts=2).get(server.url).status_code, 429)
+        self.assertEqual(clock.slept, [])
+        server = self.serve(status(429, retry_after="90"), ok())
+        with NoSleep() as clock:
+            self.assertEqual(http.Session(attempts=3).get(server.url).status_code, 200)
         self.assertEqual(clock.slept, [60])
 
     def test_an_http_date_retry_after_is_honoured(self):
