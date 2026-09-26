@@ -33,7 +33,8 @@ from session_ops.zendesk import claude_cli
 ALERTED_MARKER = "alerted"
 ERROR_CHARS = 300
 SECRET_NAME = re.compile(r"TOKEN|SECRET|KEY|WEBHOOK|PASSWORD|SEED", re.IGNORECASE)
-WEBHOOK_URL = re.compile(r"https://(?:\w+\.)?discord(?:app)?\.com/api/webhooks/\S+")
+# The bare path too: urllib3 quotes a failed request's URL without its host.
+WEBHOOK_URL = re.compile(r"(?:https?://[^\s/]+)?/api/(?:v\d+/)?webhooks/\S+")
 
 _step = None
 
@@ -64,8 +65,8 @@ class Outcome:
 
 
 def scrub(text, environ=None):
-    """`text` with every secret-looking environment value, and any Discord webhook
-    URL, replaced by its name."""
+    """`text` with every secret-looking environment value, and any webhook URL or
+    path, replaced by its name."""
     environ = os.environ if environ is None else environ
     for name, value in environ.items():
         if SECRET_NAME.search(name) and value and len(value) >= 6:

@@ -80,6 +80,14 @@ class TestRun(unittest.TestCase):
     def test_a_webhook_url_never_appears_in_an_alert(self):
         self.assertNotIn("abcdef", runner.scrub(f"posting to {HOOK} failed", environ={}))
 
+    def test_a_bare_webhook_path_is_scrubbed_too(self):
+        for path in ("/api/webhooks/123/abcdef", "/api/v10/webhooks/123/abcdef"):
+            with self.subTest(path=path):
+                scrubbed = runner.scrub(f"Max retries exceeded with url: {path}?x=1 (Caused",
+                                        environ={})
+                self.assertNotIn("abcdef", scrubbed)
+                self.assertIn("(Caused", scrubbed)
+
     def test_missing_environment_is_reported_without_running_the_job(self):
         the_job = job("succeeds", env=("DEMO_MISSING",))
         self.assertEqual(self.run_job(the_job), 1)

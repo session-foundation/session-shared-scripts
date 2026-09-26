@@ -113,8 +113,9 @@ def post_to_discord(session, url, messages):
         try:
             resp = session.request("POST", url, json=payload)
         except requests.RequestException as exc:
+            # Only the type: urllib3's text carries the URL, whose path is the token.
             print(f"Discord unreachable on message {index + 1}/{len(messages)} "
-                  f"({exc}).")
+                  f"({type(exc).__name__}).")
             return index
         if resp.status_code >= 400:
             print(f"Discord rejected message {index + 1}/{len(messages)} "
