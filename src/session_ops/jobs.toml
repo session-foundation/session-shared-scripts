@@ -90,7 +90,7 @@ channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
 schedule = "Mon 13:00 Australia/Melbourne"
 max_age_hours = 176
 timeout = "1h"
-# Readable by this unit alone, at $CREDENTIALS_DIRECTORY; empty when no App is set up.
+# Readable by this unit alone, at $CREDENTIALS_DIRECTORY; publishing needs it.
 unit = ["LoadCredential=github-app.pem:/etc/session-ops/github-app.pem"]
 
 [[job]]

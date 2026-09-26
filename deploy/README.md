@@ -170,8 +170,8 @@ CROWDIN_WEBHOOK_SECRET=
 
 ### `/etc/session-ops/publish.env`
 
-For `crowdin-sync`, `snode-list` and `release-stats`, which publish only as the GitHub
-App and need its key at `/etc/session-ops/github-app.pem`.
+For `crowdin-sync` and `snode-list`, which publish only as the GitHub App and need its
+key at `/etc/session-ops/github-app.pem`.
 
 ```sh
 # The commits' author, "Name <email>".
