@@ -28,3 +28,16 @@ def optional_failure(argv):
 
 def exits_with_a_pretty_printed_body(argv):
     raise SystemExit("GitHub 401 on /orgs: {\n  \"message\": \"Bad credentials\"\n}")
+
+
+LOGIN_EXPIRED = "claude exited 1 on classification: OAuth token has expired · Please run /login"
+
+
+def digest_login_expired(argv):
+    return Outcome(targets={"resolve reviews": None, "digest": LOGIN_EXPIRED},
+                   optional=frozenset({"resolve reviews"}))
+
+
+def exits_login_expired(argv):
+    step("classifying")
+    raise SystemExit(LOGIN_EXPIRED)

@@ -99,6 +99,18 @@ class TestRun(unittest.TestCase):
         self.assertIn("⚠️ **resolver**: 500", self.posted[0][1][0]["content"])
         self.assertIsNone(self.marker())
 
+    def test_a_dead_claude_login_says_so_and_says_how_to_log_in_instead_of_re_running(self):
+        for entry in ("digest_login_expired", "exits_login_expired"):
+            with self.subTest(entry=entry):
+                self.posted.clear()
+                self.assertEqual(self.run_job(job(entry)), 1)
+                content = self.posted[0][1][0]["content"]
+                self.assertIn("OAuth token has expired", content)
+                self.assertIn("no longer logged in", content)
+                self.assertIn("runuser -u zendesk", content)
+                self.assertIn("journalctl -u session-ops@demo -n 50", content)
+                self.assertNotIn("re-run", content)
+
     def test_a_dry_run_prints_the_alert_instead(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):

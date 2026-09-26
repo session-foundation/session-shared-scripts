@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 
 from session_ops.ops import registry
 from session_ops.shared import discord, http
+from session_ops.zendesk import claude_cli
 
 ALERTED_MARKER = "alerted"
 ERROR_CHARS = 300
@@ -98,8 +99,11 @@ def alert_message(job, host, current_step, error, outcome):
     for name, result in outcome.targets.items():
         mark = "✅" if not result else ("⚠️" if name in outcome.optional else "❌")
         lines.append(f"{mark} **{name}**" + (f": {result}" if result else ""))
-    lines.append(f"`journalctl -u session-ops@{job.name} -n 50 --no-pager` · "
-                 f"re-run: `systemctl start session-ops@{job.name}.service`")
+    journal = f"`journalctl -u session-ops@{job.name} -n 50 --no-pager`"
+    if any(claude_cli.is_auth_failure(text) for text in (error, *outcome.targets.values())):
+        lines += [*claude_cli.relogin_advice(), journal]
+    else:
+        lines.append(f"{journal} · re-run: `systemctl start session-ops@{job.name}.service`")
     return "\n".join(lines)
 
 
