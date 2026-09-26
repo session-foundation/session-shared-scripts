@@ -8,6 +8,9 @@ import glob
 import importlib
 import os
 import re
+import stat
+import subprocess
+import tempfile
 import tomllib
 import unittest
 
@@ -63,6 +66,25 @@ class TestDeploy(unittest.TestCase):
         files = units.dropins(registry.load())
         text = "".join(f"==> {path} <==\n{files[path]}\n" for path in sorted(files))
         assert_golden(self, "units/dropins.txt", text)
+
+
+class TestInstallScript(unittest.TestCase):
+    @unittest.skipIf(ROOT == "/opt/session-ops", "this checkout is the one it installs from")
+    def test_a_clone_anywhere_but_opt_session_ops_is_refused_before_anything_runs(self):
+        """Every unit runs /opt/session-ops/.venv, so units installed from another
+        clone would all fail to start."""
+        stubs = tempfile.mkdtemp()
+        # Should the guard go, the root check stops the script rather than this test.
+        stub = os.path.join(stubs, "id")
+        with open(stub, "w", encoding="utf-8") as handle:
+            handle.write("#!/bin/sh\necho 1000\n")
+        os.chmod(stub, stat.S_IRWXU)
+        done = subprocess.run(["sh", os.path.join(ROOT, "deploy", "install.sh")],
+                              capture_output=True, text=True, check=False,
+                              env={**os.environ, "PATH": f"{stubs}:{os.environ['PATH']}"})
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(done.stdout, "")
+        self.assertIn(f"run the clone at /opt/session-ops, not {ROOT}", done.stderr)
 
 
 if __name__ == "__main__":
