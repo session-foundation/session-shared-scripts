@@ -18,8 +18,7 @@ share for translations. One package, `session_ops`, deployed to one self-hosted 
 | `session-ops-silence` | Discord alerts for a job that failed, or stopped running | [session-ops-silence](docs/jobs/session-ops-silence.md) |
 
 Run by hand, not scheduled: [`sogs-ban` and `sogs-perms`](docs/tools/sogs-ban.md) for
-community bans, and `crowdin-approve-strings`, described with
-[the duplicate report](docs/jobs/crowdin-duplicates.md#approving-by-hand).
+community bans.
 
 ## Development
 

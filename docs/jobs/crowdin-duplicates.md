@@ -58,18 +58,3 @@ than what changed, a rotating eighth of the locales a day, from
 `.github/workflows/crowdin_multiple_translations_report.yml`. It stays until a full
 reconciliation cycle has run clean on the host. `--json` writes the complete findings,
 which is still the way to get every open slot in one file.
-
-## Approving by hand
-
-`crowdin-approve-strings` approves the newest translation of named strings in every
-locale, filtered by submitter. It is the one script here that writes to Crowdin, so it
-reads a token of its own, from the keyring or `CROWDIN_PROOFREADER_TOKEN`:
-
-```sh
-secret-tool store --label='Crowdin proofreader token' service crowdin key proofreader-api-token
-uv run crowdin-approve-strings --list ongoingAppeal
-uv run crowdin-approve-strings --dry-run --by-user alice ongoingAppeal
-```
-
-Every other Crowdin job reads `CROWDIN_API_TOKEN` (keyring `translation-api-token`),
-which needs read access only.
