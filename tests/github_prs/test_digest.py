@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -12,6 +13,7 @@ from unittest import mock
 
 from session_ops.github_prs import digest
 from session_ops.shared import discord
+from session_ops.shared.testing import frozen_datetime
 
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
 CUTOFF = NOW - timedelta(hours=25)
@@ -309,6 +311,62 @@ class TestMessages(unittest.TestCase):
             rendered = json.dumps(message, ensure_ascii=False)
             self.assertNotIn("Contributor pull requests", rendered)
             self.assertLess(len(rendered), discord.MAX_MESSAGE_TEXT_CHARS * 2)
+
+
+class TestPosting(unittest.TestCase):
+    """A real run, from the fetched PRs to the state file, with Discord faked."""
+
+    PRS = [pr(n, repo=f"repo-{n:02}", title="y" * 80) for n in range(40)]
+
+    def run_digest(self, accepted):
+        """Returns (ids recorded, ids per message sent, exit status)."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = os.path.join(directory.name, "seen.json")
+        sent = []
+
+        def post(session, url, messages):
+            sent.extend(messages)
+            return min(accepted, len(messages))
+
+        status = None
+        with mock.patch.object(digest, "github_session", lambda token: None), \
+                mock.patch.object(digest, "fetch_repos",
+                                  lambda session, org: set(map(digest.repo_name, self.PRS))), \
+                mock.patch.object(digest, "search_open_prs",
+                                  lambda session, org: (self.PRS, False)), \
+                mock.patch.object(digest, "datetime", frozen_datetime(NOW)), \
+                mock.patch.object(discord, "post_to_discord", post), \
+                contextlib.redirect_stdout(io.StringIO()):
+            try:
+                digest.main(["--token", "t", "--webhook", "https://discord.test/api/webhooks/1/x",
+                             "--window-hours", "25", "--state", path])
+            except SystemExit as exc:
+                status = exc.code
+        with contextlib.redirect_stdout(io.StringIO()):
+            recorded = set(digest.load_state(path)["seen"])
+        by_number = {str(p["number"]): digest.pr_id(p) for p in self.PRS}
+        per_message = [{by_number[n] for n in re.findall(r"\[#(\d+)\]", json.dumps(m))}
+                       for m in sent]
+        return recorded, per_message, status
+
+    def test_a_failure_partway_records_only_the_messages_discord_accepted(self):
+        recorded, per_message, status = self.run_digest(accepted=1)
+        self.assertGreater(len(per_message), 1)
+        self.assertTrue(per_message[0])
+        self.assertEqual(recorded, per_message[0])
+        self.assertEqual(status, f"Posted 1 of {len(per_message)} messages.")
+
+    def test_every_message_accepted_records_every_pr_shown(self):
+        recorded, per_message, status = self.run_digest(accepted=99)
+        self.assertEqual(recorded, {digest.pr_id(p) for p in self.PRS})
+        self.assertEqual(recorded, set().union(*per_message))
+        self.assertIsNone(status)
+
+    def test_nothing_accepted_records_nothing(self):
+        recorded, _, status = self.run_digest(accepted=0)
+        self.assertEqual(recorded, set())
+        self.assertIsNotNone(status)
 
 
 class TestFetching(unittest.TestCase):
