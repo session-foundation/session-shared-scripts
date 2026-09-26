@@ -15,6 +15,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -1957,6 +1958,21 @@ class TestEnglishTranscript(unittest.TestCase):
         call = source.index("attach_english(")
         guard = source.rindex("if needs_discord:", 0, call)
         self.assertNotIn("\n    ", source[guard:call].rstrip())
+
+    def test_the_transcript_gets_the_same_resolved_model_as_the_classification(self):
+        """The CLI reads an alias as whatever it calls `opus` that week."""
+        seen = []
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "findings.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump([finding(1)], handle)
+            with Patched(triage, attach_english=lambda *a: seen.append(a[4]),
+                         post_to_discord=lambda session, url, messages: len(messages)), \
+                    mock.patch.dict(os.environ, {"ZENDESK_SUBDOMAIN": "acme",
+                                                 "ZENDESK_DISCORD_WEBHOOK_URL": "https://x/y"}), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                triage.main(["--findings", path, "--model", "opus"])
+        self.assertEqual(seen, [claude_cli.API_MODEL_ALIASES["opus"]])
 
     def said(self, **kwargs):
         """attach_english's console output for one call."""
