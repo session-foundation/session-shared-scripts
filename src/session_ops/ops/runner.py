@@ -87,14 +87,13 @@ def describe(exc):
     return f"{type(exc).__name__}: {exc}"
 
 
-def alert_message(job, host, current_step, error, outcome, role_id=None):
-    mention = f"<@&{role_id}> " if role_id else ""
+def alert_message(job, host, current_step, error, outcome):
     if error:
         during = f" during **{current_step}**" if current_step else ""
-        lines = [f"{mention}❌ **{job.name}** failed on `{host}`{during}.", f"> {error}"]
+        lines = [f"❌ **{job.name}** failed on `{host}`{during}.", f"> {error}"]
     else:
         failed = len(outcome.failures())
-        lines = [f"{mention}❌ **{job.name}** on `{host}`: {failed} of "
+        lines = [f"❌ **{job.name}** on `{host}`: {failed} of "
                  f"{len(outcome.targets)} targets failed."]
     for name, result in outcome.targets.items():
         mark = "✅" if not result else ("⚠️" if name in outcome.optional else "❌")
@@ -104,14 +103,13 @@ def alert_message(job, host, current_step, error, outcome, role_id=None):
     return "\n".join(lines)
 
 
-def post_alert(job, message, role_id):
+def post_alert(job, message):
     webhook = os.environ.get("ALERT_DISCORD_WEBHOOK_URL") or os.environ.get(job.channel_env)
     if not webhook:
         print("No alert webhook in the environment; leaving it to the OnFailure backstop.",
               file=sys.stderr)
         return False
-    payload = {"content": message,
-               "allowed_mentions": {"roles": [role_id]} if role_id else {"parse": []}}
+    payload = {"content": message, "allowed_mentions": {"parse": []}}
     return discord.post_to_discord(http.Session(), webhook, [payload]) == 1
 
 
@@ -178,14 +176,12 @@ def run(job, dry_run=False, extra=()):
     if not error and not outcome.failures():
         return 0
 
-    role_id = os.environ.get("ALERT_DISCORD_ROLE_ID")
-    message = scrub(alert_message(job, socket.gethostname(), _step, error, outcome,
-                                  role_id))
+    message = scrub(alert_message(job, socket.gethostname(), _step, error, outcome))
     code = 1 if error or outcome.fatal() else 0
     if dry_run:
         print(message)
         return code
-    if post_alert(job, message, role_id) and code:
+    if post_alert(job, message) and code:
         mark_alerted(state_dir)
     return code
 
