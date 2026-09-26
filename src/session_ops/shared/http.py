@@ -2,9 +2,10 @@
 times out.
 
 Retries happen in urllib3, below the session, so a caller sees only the final
-answer. A 429 or 5xx that outlasts the budget comes back as a response, whatever its
-status; a transport failure that outlasts it raises. Every method is retried, POST
-included, which is what the callers here have always relied on.
+answer. A 429, a 5xx or a rate-limited 403 that outlasts the budget comes back as a
+response, whatever its status; a transport failure that outlasts it raises. Every
+method is retried, POST included, which is what the callers here have always relied
+on.
 
     session = http.Session(attempts=10, timeout=60, rate=20)
     session.get(url)                       # the session's budget
@@ -19,13 +20,15 @@ from datetime import datetime, timezone
 
 import requests
 from requests.adapters import HTTPAdapter
+from urllib3.exceptions import MaxRetryError, ResponseError
 from urllib3.util.retry import Retry
 
 DEFAULT_ATTEMPTS = 6
 DEFAULT_TIMEOUT = 30
 MAX_BACKOFF = 30
 MAX_RETRY_AFTER = 60
-RETRY_STATUSES = frozenset({429, *range(500, 600)})
+# 403 only when it is a rate limit: see _Retry.increment.
+RETRY_STATUSES = frozenset({403, 429, *range(500, 600)})
 
 _attempts = contextvars.ContextVar("attempts", default=None)
 
@@ -34,9 +37,10 @@ def retry_after_seconds(resp, default):
     """Seconds to wait per the response's rate-limit headers, else `default`.
 
     Retry-After first, in either form RFC 9110 allows: a delay in seconds or an
-    HTTP-date. GitHub answers a primary rate limit with x-ratelimit-reset as an
+    HTTP-date. GitHub answers an exhausted rate limit with x-ratelimit-reset as an
     epoch second and no Retry-After at all, so that is read when the header is
-    absent.
+    absent and x-ratelimit-remaining is 0. GitHub sends the reset on every response,
+    so without that check a 5xx would wait for the whole rate-limit window.
 
     Anything unparseable falls back rather than crashing the run. Negative, NaN
     and infinite values fall back too: time.sleep() rejects the first two
@@ -46,7 +50,7 @@ def retry_after_seconds(resp, default):
     raw = resp.headers.get("retry-after")
     if raw is None:
         reset = resp.headers.get("x-ratelimit-reset")
-        if reset is None:
+        if reset is None or resp.headers.get("x-ratelimit-remaining") != "0":
             return default
         try:
             return max(0.0, float(reset) - time.time())
@@ -63,6 +67,13 @@ def retry_after_seconds(resp, default):
     return seconds
 
 
+def is_rate_limited(resp):
+    """GitHub signals a rate limit with a 403 as often as a 429; only these headers
+    tell it from a 403 for a missing permission."""
+    return (resp.headers.get("retry-after") is not None
+            or resp.headers.get("x-ratelimit-remaining") == "0")
+
+
 def _seconds_until_http_date(value):
     try:
         when = email.utils.parsedate_to_datetime(value)
@@ -76,6 +87,14 @@ def _seconds_until_http_date(value):
 class _Retry(Retry):
     """urllib3's Retry with this repo's waits: 1 s doubling to 30 s, or what the
     server asked for, capped at a minute."""
+
+    def increment(self, method=None, url=None, response=None, error=None, _pool=None,
+                  _stacktrace=None):
+        # is_retry() sees only the status. With raise_on_status off, MaxRetryError
+        # makes urllib3 hand this 403 back unretried.
+        if response is not None and response.status == 403 and not is_rate_limited(response):
+            raise MaxRetryError(_pool, url, ResponseError("403 without rate-limit headers"))
+        return super().increment(method, url, response, error, _pool, _stacktrace)
 
     def get_backoff_time(self):
         return min(2.0 ** (len(self.history) - 1), MAX_BACKOFF) if self.history else 0
@@ -135,7 +154,8 @@ class TokenBucket:
 
 
 class Session(requests.Session):
-    """A session that retries 429 and 5xx, times out, and optionally paces itself.
+    """A session that retries 429, 5xx and a rate-limited 403, times out, and
+    optionally paces itself.
 
     `limiter` may be shared between sessions, so that per-thread sessions against one
     API still draw on one budget. It paces each call, not each retry inside it.
