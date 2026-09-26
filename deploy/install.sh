@@ -121,3 +121,15 @@ for relay in zendesk-relay crowdin-relay; do
         echo "not enabled: $relay.service ($env_file is empty)"
     fi
 done
+
+if [ ! -s "$ETC/alerts.env" ]; then
+    cat >&2 <<EOF
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!! $ETC/alerts.env IS EMPTY.
+!! OnFailure backstop and silence checker disabled until it sets
+!! ALERT_DISCORD_WEBHOOK_URL: a job that is killed, times out, cannot reach
+!! Discord or stops running is reported nowhere. Fill it, then run install.sh again.
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+EOF
+fi
