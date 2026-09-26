@@ -167,10 +167,47 @@ class TestSession(unittest.TestCase):
 
     def test_githubs_reset_epoch_stands_in_for_a_missing_retry_after(self):
         reset = str(int(time.time()) + 30)
-        server = self.serve(status(429, x_ratelimit_reset=reset), ok())
+        server = self.serve(status(429, x_ratelimit_remaining="0", x_ratelimit_reset=reset),
+                            ok())
         with NoSleep() as clock:
             http.Session().get(server.url)
         self.assertTrue(25 <= clock.slept[0] <= 31, clock.slept)
+
+    def test_a_server_error_backs_off_whatever_reset_it_carries(self):
+        """GitHub sends the reset on every response; only an exhausted quota waits for it."""
+        reset = str(int(time.time()) + 3000)
+        server = self.serve(status(502, x_ratelimit_remaining="4999", x_ratelimit_reset=reset),
+                            ok())
+        with NoSleep() as clock:
+            http.Session().get(server.url)
+        self.assertEqual(clock.slept, [1.0])
+
+    def test_a_403_with_the_quota_exhausted_waits_for_the_reset(self):
+        reset = str(int(time.time()) + 30)
+        server = self.serve(status(403, x_ratelimit_remaining="0", x_ratelimit_reset=reset),
+                            ok())
+        with NoSleep() as clock:
+            self.assertEqual(http.Session().get(server.url).status_code, 200)
+        self.assertTrue(25 <= clock.slept[0] <= 31, clock.slept)
+
+    def test_a_403_with_retry_after_is_a_secondary_rate_limit(self):
+        server = self.serve(status(403, retry_after="7"), ok())
+        with NoSleep() as clock:
+            self.assertEqual(http.Session().get(server.url).status_code, 200)
+        self.assertEqual(clock.slept, [7.0])
+
+    def test_a_403_for_a_missing_permission_is_not_retried(self):
+        server = self.serve(status(403, x_ratelimit_remaining="4999"))
+        with NoSleep() as clock:
+            self.assertEqual(http.Session().get(server.url).status_code, 403)
+        self.assertEqual(len(server.seen), 1)
+        self.assertEqual(clock.slept, [])
+
+    def test_a_rate_limit_that_outlasts_the_budget_comes_back_as_its_403(self):
+        server = self.serve(*[status(403, retry_after="1")] * 2)
+        with NoSleep():
+            self.assertEqual(http.Session(attempts=2).get(server.url).status_code, 403)
+        self.assertEqual(len(server.seen), 2)
 
     def test_the_timeout_defaults_to_the_sessions_and_can_be_overridden(self):
         with mock.patch.object(requests.Session, "request") as sent:
@@ -234,14 +271,23 @@ class TestRetryAfterSeconds(unittest.TestCase):
         self.assertEqual(self.seconds({"retry-after": "0"}), 0.0)
 
     def test_a_reset_epoch_in_the_past_means_no_wait(self):
-        self.assertEqual(self.seconds({"x-ratelimit-reset": "1"}), 0.0)
+        self.assertEqual(self.seconds({"x-ratelimit-remaining": "0",
+                                       "x-ratelimit-reset": "1"}), 0.0)
+
+    def test_the_reset_epoch_is_ignored_while_quota_remains(self):
+        reset = str(int(time.time()) + 3000)
+        self.assertEqual(self.seconds({"x-ratelimit-remaining": "12",
+                                       "x-ratelimit-reset": reset}), 4.0)
+        self.assertEqual(self.seconds({"x-ratelimit-reset": reset}), 4.0)
 
     def test_retry_after_beats_the_reset_epoch(self):
         reset = str(int(time.time()) + 3000)
-        self.assertEqual(self.seconds({"retry-after": "5", "x-ratelimit-reset": reset}), 5.0)
+        self.assertEqual(self.seconds({"retry-after": "5", "x-ratelimit-remaining": "0",
+                                       "x-ratelimit-reset": reset}), 5.0)
 
     def test_an_unparseable_reset_epoch_uses_the_default(self):
-        self.assertEqual(self.seconds({"x-ratelimit-reset": "?"}), 4.0)
+        self.assertEqual(self.seconds({"x-ratelimit-remaining": "0",
+                                       "x-ratelimit-reset": "?"}), 4.0)
 
 
 if __name__ == "__main__":
