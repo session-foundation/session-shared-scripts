@@ -111,6 +111,21 @@ def recording(changes=None):
     return exchanges
 
 
+def without_string(exchanges, sid):
+    for ex in exchanges:
+        if ex["url"].endswith("/strings"):
+            ex["response"]["json"]["data"] = [
+                row for row in ex["response"]["json"]["data"] if row["data"]["id"] != sid]
+    return exchanges
+
+
+def only_locale(exchanges, lang):
+    project = exchanges[0]["response"]["json"]["data"]
+    project["targetLanguageIds"] = [lang]
+    project["targetLanguages"] = [t for t in project["targetLanguages"] if t["id"] == lang]
+    return exchanges
+
+
 def translation(tid, text, cat=None):
     return {"id": tid, "text": text, "pluralCategoryName": cat, "user": None,
             "createdAt": "2026-09-10T00:00:00+00:00"}
@@ -121,19 +136,28 @@ class TestReconcile(unittest.TestCase):
         self.dir = tempfile.mkdtemp()
         self.state = os.path.join(self.dir, "duplicates.json")
 
-    def run_reconcile(self, exchanges, *flags):
+    def run_reconcile(self, exchanges, *flags, locales=("de",)):
         session = RecordedSession(exchanges)
         out = io.StringIO()
         with mock.patch.object(reconcile, "crowdin_client",
                                lambda token, pid: sdk.client(token, pid, session=session)), \
                 mock.patch.dict(os.environ, {"CROWDIN_API_TOKEN": "t"}), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            reconcile.main(["--state", self.state, "--locales", "de", *flags])
+            reconcile.main(["--state", self.state, *(["--locales", *locales] if locales else []),
+                            *flags])
         return out.getvalue()
 
     def slots(self):
         with open(self.state, encoding="utf-8") as handle:
             return sorted(json.load(handle)["slots"])
+
+    def add_slot(self, sid, lang, checked_at=None):
+        state = duplicates.load(self.state)
+        state["slots"][duplicates.slot_key(sid, lang, None)] = duplicates.record(
+            finding(sid, lang), 1)
+        if checked_at is not None:
+            state["checked"][duplicates.scope_key(sid, lang)] = checked_at
+        duplicates.save(self.state, state)
 
     def test_seeding_records_every_open_slot_and_posts_nothing(self):
         self.assertEqual(self.run_reconcile(recording(), "--seed"), "")
@@ -174,6 +198,28 @@ class TestReconcile(unittest.TestCase):
                    if url.endswith("/translations")}
         self.assertEqual(checked, {104, 105})
         self.assertEqual(self.slots(), ["104:de:other", "105:de:one", "105:de:other"])
+
+    def test_a_slot_whose_string_was_deleted_resolves_in_every_locale(self):
+        self.run_reconcile(recording(), "--seed")
+        self.add_slot(107, "fr")
+        self.run_reconcile(without_string(recording(), 107), "--seed")
+        self.assertEqual(self.slots(), ["101:de:", "104:de:other", "105:de:one",
+                                        "105:de:other"])
+
+    def test_a_relay_check_newer_than_the_scan_keeps_a_string_the_listing_missed(self):
+        self.run_reconcile(recording(), "--seed")
+        self.add_slot(108, "de", checked_at=duplicates.now() + 3600)
+        self.run_reconcile(recording(), "--seed")
+        self.assertIn("108:de:", self.slots())
+
+    def test_a_slot_whose_locale_left_the_project_resolves(self):
+        exchanges = only_locale(recording(), "de")
+        self.run_reconcile(exchanges, "--seed", locales=None)
+        self.add_slot(101, "it")
+        self.run_reconcile(exchanges, "--seed", locales=("de",))
+        self.assertIn("101:it:", self.slots(), "--locales judges only the named locales")
+        self.run_reconcile(exchanges, "--seed", locales=None)
+        self.assertNotIn("101:it:", self.slots())
 
     def test_a_failed_post_writes_no_state(self):
         self.run_reconcile(recording(), "--seed")
