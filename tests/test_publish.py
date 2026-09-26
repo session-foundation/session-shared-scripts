@@ -280,5 +280,85 @@ class TestCrowdinSync(RepoTest):
         self.assertEqual(opened[0][2]["json"]["title"], sync.TITLE)
 
 
+def crowdin_language(lang_id, locale, name):
+    return {"id": lang_id, "name": name, "editorCode": lang_id, "twoLettersCode": lang_id,
+            "locale": locale, "textDirection": "ltr"}
+
+
+ENGLISH = crowdin_language("en", "en-US", "English")
+GERMAN = crowdin_language("de", "de-DE", "German")
+
+
+def parsed_translations(path):
+    """parse_xliff's output for one target language: a string and a plural."""
+    def locale(language, greeting, one, other):
+        return {"target_language": language["id"], "language_info": language, "translations": {
+            "greeting": {"type": "string", "value": greeting},
+            "messageNew": {"type": "plural", "forms": {"one": one, "other": other}}}}
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump({
+            "source_language": ENGLISH, "target_languages": [GERMAN], "rtl_languages": [],
+            "glossary": {"app_name": "Session"},
+            "locales": {
+                "en-US": locale(ENGLISH, "Hello {name}", "{count} new message",
+                                "{count} new messages"),
+                "de-DE": locale(GERMAN, "Hallo {name}", "{count} neue Nachricht",
+                                "{count} neue Nachrichten")}}, handle)
+
+
+class TestCrowdinGenerate(RepoTest):
+    """The real generators, run by sync into each target's sparse checkout."""
+
+    def setUp(self):
+        super().setUp()
+        self.parsed = os.path.join(self.work, "parsed_translations.json")
+        parsed_translations(self.parsed)
+
+    def generate(self, target, name, branch, files):
+        bare_repo(self.root, name, branch, files)
+        repo = sync.checkout(target, self.work, None)
+        with contextlib.redirect_stdout(io.StringIO()):
+            sync.generate(target, repo, self.parsed)
+        return repo.path
+
+    def read(self, root, path):
+        with open(os.path.join(root, path), encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_android_writes_every_locale_and_drops_one_crowdin_no_longer_has(self):
+        res = sync.ANDROID_RES
+        root = self.generate("android", "session-android", "dev", {
+            f"{res}/values/strings.xml": "old", f"{res}/values-b+sh+HR/strings.xml": "stale",
+            sync.ANDROID_CONSTANTS: "old"})
+        self.assertFalse(os.path.exists(os.path.join(root, res, "values-b+sh+HR/strings.xml")))
+        self.assertIn('<string name="app_name" translatable="false">Session</string>',
+                      self.read(root, f"{res}/values/strings.xml"))
+        german = self.read(root, f"{res}/values-b+de+DE/strings.xml")
+        self.assertIn('<string name="greeting">Hallo {name}</string>', german)
+        self.assertIn('<item quantity="other">%1$d neue Nachrichten</item>', german)
+        self.assertIn('const val APP_NAME = "Session"', self.read(root, sync.ANDROID_CONSTANTS))
+        self.assertIn(f" D {res}/values-b+sh+HR/strings.xml",
+                      git("status", "--porcelain", cwd=root).split("\n"))
+
+    def test_ios_writes_the_catalog_and_the_constants(self):
+        root = self.generate("ios", "session-ios", "dev", {
+            f"{sync.IOS_TRANSLATIONS}/Localizable.xcstrings": "old", sync.IOS_CONSTANTS: "old"})
+        catalog = json.loads(self.read(root, f"{sync.IOS_TRANSLATIONS}/Localizable.xcstrings"))
+        self.assertEqual(catalog["strings"]["greeting"]["localizations"]["de"],
+                         {"stringUnit": {"state": "translated", "value": "Hallo {name}"}})
+        self.assertIn('public static let app_name: String = "Session"',
+                      self.read(root, sync.IOS_CONSTANTS))
+
+    def test_localization_writes_the_modules_and_the_language_list(self):
+        root = self.generate("localization", "session-localization", "main",
+                             {"generated/english.ts": "old"})
+        self.assertEqual(sorted(os.listdir(os.path.join(root, "generated"))),
+                         ["constants.ts", "english.ts", "languages.ts", "locales.ts",
+                          "translations.ts"])
+        self.assertIn("Hello {name}", self.read(root, "generated/english.ts"))
+        self.assertIn("Hallo {name}", self.read(root, "generated/translations.ts"))
+        self.assertIn("Deutsch", self.read(root, "generated/languages.ts"))
+
+
 if __name__ == "__main__":
     unittest.main()
