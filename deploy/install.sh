@@ -14,7 +14,14 @@ ETC=/etc/session-ops
 STATE=/var/lib/session-ops
 OPS="$ROOT/.venv/bin/session-ops"
 
+# Every unit runs /opt/session-ops/.venv, so installed from any other clone they all
+# fail to start; and they run its code, so only root may be able to change it.
+[ "$ROOT" = /opt/session-ops ] || {
+    echo "install.sh: run the clone at /opt/session-ops, not $ROOT" >&2
+    exit 1
+}
 [ "$(id -u)" = 0 ] || { echo "install.sh: run as root" >&2; exit 1; }
+[ "$(stat -c %u "$ROOT")" = 0 ] || { echo "install.sh: $ROOT is not owned by root" >&2; exit 1; }
 command -v uv >/dev/null || {
     echo "install.sh: uv is missing:" >&2
     echo "  curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh" >&2
