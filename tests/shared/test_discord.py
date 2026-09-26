@@ -62,6 +62,18 @@ class TestPostToDiscord(unittest.TestCase):
                               + [requests.ConnectionError("down")])
         self.assertEqual(self.post(session, [{}, {}]), 1)
 
+    def test_an_unreachable_webhook_is_logged_without_its_url(self):
+        """urllib3 quotes the URL's path, and that path is the webhook's token."""
+        import requests
+        error = requests.ConnectionError(
+            "HTTPSConnectionPool(host='discord.com', port=443): Max retries exceeded "
+            "with url: /api/webhooks/123/t0ken-value?with_components=true")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            discord.post_to_discord(FakeSession([error]), "https://hook", [{}])
+        self.assertIn("(ConnectionError)", out.getvalue())
+        self.assertNotIn("t0ken-value", out.getvalue())
+
     def test_no_messages_is_zero(self):
         self.assertEqual(self.post(FakeSession([]), []), 0)
 

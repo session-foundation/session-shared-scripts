@@ -150,6 +150,23 @@ class TestBackstopContext(unittest.TestCase):
         self.assertIn("failed on `box` (timed out).", message)
 
 
+class TestMain(unittest.TestCase):
+    def test_the_quoted_journal_line_is_scrubbed(self):
+        """A job's journal can carry its own webhook's token, which this account's
+        environment knows nothing about."""
+        posted = []
+        line = ("Discord unreachable (Max retries exceeded with url: "
+                "/api/webhooks/123/t0ken-value?with_components=true)\n")
+        with mock.patch.dict(alert.os.environ, {"ALERT_DISCORD_WEBHOOK_URL": "https://hook"}), \
+                mock.patch.object(alert, "unit_property", return_value=""), \
+                mock.patch.object(alert, "journal_tail", return_value=line), \
+                mock.patch.object(alert, "post_to_discord",
+                                  side_effect=lambda s, u, m: posted.extend(m) or len(m)):
+            alert.main(["zendesk-relay.service"])
+        self.assertIn("Discord unreachable", posted[0]["content"])
+        self.assertNotIn("t0ken-value", posted[0]["content"])
+
+
 class TestAlreadyAlerted(unittest.TestCase):
     def setUp(self):
         import os

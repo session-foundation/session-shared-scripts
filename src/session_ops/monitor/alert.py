@@ -28,6 +28,7 @@ import socket
 import subprocess
 import sys
 
+from session_ops.ops.runner import scrub
 from session_ops.shared import http
 from session_ops.shared.discord import post_to_discord
 from session_ops.shared.env import get_env
@@ -126,7 +127,7 @@ def main(argv=None):
     webhook = (os.environ.get("ALERT_DISCORD_WEBHOOK_URL")
                or get_env("ZENDESK_DISCORD_WEBHOOK_URL"))
     invocation = unit_property(args[-1], "InvocationID") or None
-    detail = last_job_line(journal_tail(args[-1], invocation=invocation))
+    detail = scrub(last_job_line(journal_tail(args[-1], invocation=invocation)))
     message = build_message(args[0], socket.gethostname(), *args[1:], detail=detail,
                             result=unit_property(args[-1], "Result"))
     payload = {"content": message, "allowed_mentions": {"parse": []}}
