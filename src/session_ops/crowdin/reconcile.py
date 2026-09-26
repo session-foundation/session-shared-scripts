@@ -29,6 +29,7 @@ Usage:
 import argparse
 import concurrent.futures
 import json
+import os
 import sys
 
 from session_ops.crowdin import duplicates, sdk
@@ -109,6 +110,9 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true",
                         help="Print what would be posted; write nothing.")
     args = parser.parse_args(argv)
+    if not (args.seed or args.dry_run or os.path.exists(args.state)):
+        sys.exit(f"No state at {args.state}: record what is open first with --seed, "
+                 f"or every open slot is posted as new.")
 
     token = get_env("CROWDIN_API_TOKEN")
     webhook = get_env("CROWDIN_DISCORD_WEBHOOK_URL",

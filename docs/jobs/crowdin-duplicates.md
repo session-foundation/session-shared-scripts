@@ -34,7 +34,8 @@ The state is written only once Discord accepted every message, so a failed post 
 repeated in full rather than lost.
 
 Losing the state is not harmless the way a digest's dedup file is: every open slot
-would be reported again. Seed a new one with `--seed`, which records without posting.
+would be reported again. So reconciliation, like the relay, refuses to run without a
+state file; seed one with `--seed`, which records without posting.
 
 ## Cost
 
