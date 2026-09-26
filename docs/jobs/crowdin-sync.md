@@ -38,16 +38,11 @@ Commits are authored as `PUBLISH_GIT_AUTHOR`.
 
 Crowdin scopes personal access tokens per endpoint family, and each scope can be
 read-only. A token missing one returns `403 Forbidden` on just those endpoints while
-every other call keeps working. Two tokens cover everything here:
+every other call keeps working. One read-only token covers everything here:
 
 | Token | Scopes | Used by |
 | --- | --- | --- |
 | `CROWDIN_API_TOKEN`, keyring `translation-api-token` | read-only: Projects, Source files & strings, Translations, Glossaries | this sync, [the duplicate report](crowdin-duplicates.md) and its relay |
-| `CROWDIN_PROOFREADER_TOKEN`, keyring `proofreader-api-token` | Projects and Source files & strings read-only; Translations read and write | `crowdin-approve-strings` only |
-
-> **Note:** Scopes only cap what a token may do — they don't grant anything the
-> token's Crowdin account can't already do, so the proofreader token's account also
-> needs a project role that can approve.
 
 ## Validation Rules
 
