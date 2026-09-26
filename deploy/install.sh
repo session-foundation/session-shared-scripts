@@ -4,8 +4,8 @@
 #
 # It creates the accounts, builds the venv, creates any missing env file empty, moves
 # state and env files from the layout before session-ops@ units, installs the units
-# and each job's drop-ins, and enables every job whose env files have content. It
-# never edits nginx, which certbot owns; see deploy/README.md for the one route to add.
+# and each job's drop-ins, and enables every job whose env files have content and no
+# other. It never edits nginx, which certbot owns; see deploy/README.md for the route.
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -44,6 +44,12 @@ install -d -o zendesk -g zendesk -m 700 /home/zendesk
 UV_PYTHON_DOWNLOADS=never uv sync --locked --no-dev --python /usr/bin/python3 \
     --directory "$ROOT" --quiet
 
+# Stopped before their state is copied, so none of them writes it after the copy.
+for old in zendesk-digest github-prs-digest session-ops-silence crowdin-duplicates; do
+    systemctl disable --now "$old.timer" 2>/dev/null || true
+    systemctl stop "$old.service" 2>/dev/null || true
+done
+
 # Moves a file from the previous layout, only when the new one does not exist yet.
 move() {
     if [ -e "$1" ] && [ ! -e "$2" ]; then
@@ -76,7 +82,6 @@ systemd-tmpfiles --create session-ops.conf
 
 # The units session-ops@ replaces.
 for old in zendesk-digest github-prs-digest session-ops-silence crowdin-duplicates; do
-    systemctl disable --now "$old.timer" 2>/dev/null || true
     rm -f "$UNITS/$old.service" "$UNITS/$old.timer"
 done
 rm -f "$UNITS/zendesk-alert@.service" "$UNITS/github-prs-alert@.service"
@@ -87,7 +92,18 @@ rm -f "$UNITS"/session-ops@*.service.d/job.conf "$UNITS"/session-ops@*.timer.d/s
 "$OPS" units --out "$UNITS" >/dev/null
 systemctl daemon-reload
 
-for job in $("$OPS" list --ready); do
+READY=$("$OPS" list --ready)
+# A job removed from jobs.toml, or whose env file was emptied, stops being scheduled.
+for link in "$UNITS"/timers.target.wants/session-ops@*.timer; do
+    [ -L "$link" ] || continue
+    job=${link##*/session-ops@}
+    job=${job%.timer}
+    if ! printf '%s\n' $READY | grep -qxF "$job"; then
+        systemctl disable --now "session-ops@$job.timer" >/dev/null
+        echo "disabled session-ops@$job.timer (no longer a ready job)"
+    fi
+done
+for job in $READY; do
     systemctl enable --now "session-ops@$job.timer" >/dev/null
     echo "enabled session-ops@$job.timer"
 done
