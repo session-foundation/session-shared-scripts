@@ -41,10 +41,9 @@ If a workflow fails and is in the list of workflows monitored by the failure not
 
 ### Required Secrets
 
-| Secret                | Description                        |
-| --------------------- | ---------------------------------- |
-| `DISCORD_WEBHOOK_URL` | Url for the Discord webhook        |
-| `DISCORD_ROLE_ID`     | Discord role id to tag in messages |
+| Secret                | Description                 |
+| --------------------- | --------------------------- |
+| `DISCORD_WEBHOOK_URL` | Url for the Discord webhook |
 
 ### Trigger Test Notification
 

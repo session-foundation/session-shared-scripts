@@ -12,7 +12,7 @@ is not a job, such as the relays.
 
 Posts over ALERT_DISCORD_WEBHOOK_URL, else ZENDESK_DISCORD_WEBHOOK_URL, rather than
 anything with a bot token: a failure notifier should depend on as little as possible
-of whatever just broke. ALERT_DISCORD_ROLE_ID, if set, is mentioned.
+of whatever just broke.
 
 The failed unit's last journal line comes with it, so the channel says what broke
 rather than only that something did. Reading the journal needs the unit to carry
@@ -149,9 +149,7 @@ def main(argv=None):
     detail = last_job_line(journal_tail(args[-1], invocation=invocation))
     message = build_message(args[0], socket.gethostname(), *args[1:], detail=detail,
                             result=unit_property(args[-1], "Result"))
-    role = os.environ.get("ALERT_DISCORD_ROLE_ID")
-    payload = {"content": f"<@&{role}> {message}" if role else message,
-               "allowed_mentions": {"roles": [role]} if role else {"parse": []}}
+    payload = {"content": message, "allowed_mentions": {"parse": []}}
     # A fresh session, never a Zendesk one — that carries the API-token auth header,
     # and Discord has no business receiving it.
     if not post_to_discord(http.Session(), webhook, [payload]):

@@ -5,7 +5,7 @@ Every unit on the host reports two ways of going wrong to Discord. Success is qu
 | | |
 | --- | --- |
 | Runs | the run itself, and `OnFailure=` on every unit; `session-ops@session-ops-silence.timer`, hourly |
-| Secrets | `/etc/session-ops/alerts.env`: `ALERT_DISCORD_WEBHOOK_URL`, optionally `ALERT_DISCORD_ROLE_ID`; each job's own env file for its own failures |
+| Secrets | `/etc/session-ops/alerts.env`: `ALERT_DISCORD_WEBHOOK_URL`; each job's own env file for its own failures |
 | Dry run | `session-ops-silence --dry-run` prints every job's last success and the alert it would post |
 | Re-run | `systemctl start session-ops@session-ops-silence.service` |
 | Logs | `journalctl -u session-ops@session-ops-silence -n 50 --no-pager` |

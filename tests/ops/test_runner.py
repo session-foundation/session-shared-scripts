@@ -118,12 +118,11 @@ class TestRun(unittest.TestCase):
             self.run_job(job("exits", channel_env="DEMO_HOOK"))
         self.assertEqual(self.posted[0][0], "https://hook/demo")
 
-    def test_a_role_is_mentioned_and_only_that_role(self):
-        with mock.patch.dict(os.environ, {"ALERT_DISCORD_ROLE_ID": "42"}):
-            self.run_job(job("exits"))
+    def test_an_alert_mentions_nobody(self):
+        self.run_job(job("exits"))
         payload = self.posted[0][1][0]
-        self.assertTrue(payload["content"].startswith("<@&42> "))
-        self.assertEqual(payload["allowed_mentions"], {"roles": ["42"]})
+        self.assertTrue(payload["content"].startswith("❌ "))
+        self.assertEqual(payload["allowed_mentions"], {"parse": []})
 
 
 class TestCommandLine(unittest.TestCase):

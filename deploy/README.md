@@ -30,7 +30,6 @@ Three layers, so that a job cannot fail, or stop, without Discord hearing of it:
 
 A run's alert goes to `ALERT_DISCORD_WEBHOOK_URL` when its env file sets one, else to
 the job's own channel. The backstop and the silence checker use `alerts.env`.
-`ALERT_DISCORD_ROLE_ID` in either is mentioned.
 
 ## Disk
 
@@ -258,8 +257,6 @@ GITHUB_PRS_DISCORD_WEBHOOK_URL=
 # Where the backstop and the silence checker post. Any channel whose readers can act
 # on a job that failed or stopped.
 ALERT_DISCORD_WEBHOOK_URL=
-# Optional. A role to mention in every alert.
-#ALERT_DISCORD_ROLE_ID=
 ```
 
 ### `/etc/session-ops/crowdin.env`

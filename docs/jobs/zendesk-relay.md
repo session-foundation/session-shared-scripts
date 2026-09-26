@@ -4,8 +4,7 @@
 > card that opened a compose dialog in Discord. That is gone: the digest is read-only
 > now and the ticket is the only place a reply is written. Removing it took with it
 > `reply.py`, the `/discord/interactions` route, the Ed25519 signature check, and the
-> `DISCORD_PUBLIC_KEY` / `ALLOWED_USER_IDS` / `ALLOWED_ROLE_IDS` / `DISCORD_GUILD_ID`
-> settings — one reply path instead of two, with one set of semantics.
+> Discord settings they read — one reply path instead of two, with one set of semantics.
 
 | | |
 | --- | --- |
