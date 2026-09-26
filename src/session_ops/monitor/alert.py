@@ -31,21 +31,9 @@ import sys
 from session_ops.shared import http
 from session_ops.shared.discord import post_to_discord
 from session_ops.shared.env import get_env
-from session_ops.zendesk import claude_cli
+from session_ops.zendesk.claude_cli import is_auth_failure, relogin_advice
 
 
-# A dead login reads as a broken job unless the alert names it: the job is fine and
-# re-running it fixes nothing. The CLI's wording varies between refusals, so this
-# matches the words that survive the rewordings. Only a line the CLI path wrote is
-# checked: Zendesk's own 401 body says "Couldn't authenticate you".
-AUTH_SIGNATURES = ("oauth", "/login", "authenticate", "invalid api key",
-                   "unauthorized", "credit balance", "signed in")
-CLI_FAILURE_PREFIX = f"{claude_cli.CLAUDE_CLI} exited"
-# Where the Claude Code CLI lives for the account the units run as; see
-# deploy/README.md. Spelled out because an alert that says "log in again" without
-# saying how sends whoever is on call to the README first.
-RELOGIN = ("runuser -u zendesk -- env HOME=/home/zendesk "
-           "/home/zendesk/.local/bin/claude   # then /login")
 EXCERPT_CHARS = 400
 
 
@@ -89,12 +77,6 @@ def last_job_line(journal):
     return ""
 
 
-def is_auth_failure(line):
-    line = (line or "").lower()
-    return (line.startswith(CLI_FAILURE_PREFIX)
-            and any(signature in line for signature in AUTH_SIGNATURES))
-
-
 RESULTS = {"timeout": "timed out", "signal": "was killed", "core-dump": "crashed",
            "oom-kill": "ran out of memory", "exit-code": "exited with an error",
            "watchdog": "stopped answering its watchdog"}
@@ -116,9 +98,7 @@ def build_message(unit, host, journal_unit=None, detail="", result=""):
     if detail:
         parts.append(f"> {detail}")
     if is_auth_failure(detail):
-        parts.append("**The Claude Code CLI is no longer logged in.** Re-running the "
-                     "unit will not fix it — log in again as the service account:")
-        parts.append(f"```\n{RELOGIN}\n```")
+        parts += relogin_advice()
     parts.append(f"`journalctl -u {journal_unit or unit} -n 50 --no-pager`")
     return "\n".join(parts)
 
