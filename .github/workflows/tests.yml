@@ -1,0 +1,70 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - run: pip install uv==0.12.19
+
+      - run: uv run --locked --only-dev ruff check --output-format=github .
+
+  unittest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - run: pip install uv==0.12.19
+
+      - run: uv sync --locked
+
+      # tests/sogs skips itself here: session_util is not installable from PyPI.
+      - run: uv run --locked python -m unittest discover -s tests -t . -v
+
+  sogs_moderation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # session_util is published as a deb built against the system interpreter, so
+      # this suite runs on that interpreter with a venv that can see it.
+      - name: Install python3-session-util
+        run: |
+          sudo curl -so /usr/share/keyrings/session-foundation.gpg https://deb.session.foundation/pub.gpg
+          printf 'Types: deb\nURIs: https://deb.session.foundation\nSuites: %s\nComponents: main\nSigned-By: /usr/share/keyrings/session-foundation.gpg\n' \
+            "$(lsb_release -sc)" | sudo tee /etc/apt/sources.list.d/session.sources
+          sudo apt-get update
+          sudo apt-get install -y python3-session-util
+
+      # pipx, since the system pip refuses to install outside a venv (PEP 668).
+      - run: pipx install uv==0.12.19
+
+      - name: Install dependencies
+        run: |
+          uv venv --system-site-packages --python /usr/bin/python3
+          uv sync --locked
+
+      # Fails here rather than letting tests/sogs skip itself.
+      - run: uv run --locked python -c "import session_util"
+
+      - run: uv run --locked python -m unittest discover -s tests/sogs -t . -v

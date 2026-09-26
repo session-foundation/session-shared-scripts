@@ -1,0 +1,54 @@
+[project]
+name = "session-ops"
+version = "0.1.0"
+description = "Session Foundation's scheduled jobs and webhooks: Zendesk, GitHub, Crowdin, SOGS."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # CLDR data: a new babel can rename a language in the generated language lists.
+    "babel==2.17.0",
+    "colorama>=0.4.6",
+    "crowdin-api-client>=1.29.0",
+    "fastapi>=0.141.1",
+    "pyjwt[crypto]>=2.10",
+    "pynacl>=1.6.2",
+    "requests>=2.32.3",
+    "uvicorn>=0.52.4",
+]
+
+[project.scripts]
+github-prs-digest = "session_ops.github_prs.digest:main"
+zendesk-triage = "session_ops.zendesk.triage:main"
+zendesk-resolve-reviews = "session_ops.zendesk.resolve_reviews:main"
+zendesk-note-reply = "session_ops.zendesk.note_reply:main"
+crowdin-download = "session_ops.crowdin.download_translations_from_crowdin:main"
+crowdin-parse-xliff = "session_ops.crowdin.parse_xliff:main"
+crowdin-generate-ios = "session_ops.crowdin.generate_ios_strings:cli"
+crowdin-generate-android = "session_ops.crowdin.generate_android_strings:cli"
+crowdin-codegen-localization = "session_ops.crowdin.codegen_localization:cli"
+crowdin-generate-language-list = "session_ops.crowdin.generate_language_list:cli"
+crowdin-report-duplicates = "session_ops.crowdin.report_multiple_translations:main"
+crowdin-reconcile-duplicates = "session_ops.crowdin.reconcile:main"
+sogs-ban = "session_ops.sogs.ban:cli"
+sogs-perms = "session_ops.sogs.perms:cli"
+session-ops = "session_ops.ops.runner:main"
+session-ops-alert = "session_ops.monitor.alert:main"
+session-ops-silence = "session_ops.monitor.silence:main"
+
+[dependency-groups]
+dev = [
+    # starlette's TestClient ships no HTTP client, and warns on httpx in favour of this.
+    "httpx2>=2.12.0",
+    "ruff==0.16.9",
+]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+# Pyflakes and syntax errors only: what catches a broken import or name mid-refactor.
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["F", "E9"]

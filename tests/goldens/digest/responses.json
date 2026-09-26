@@ -1,0 +1,2082 @@
+{
+ "now": "2026-09-25T02:43:00+00:00",
+ "argv": [
+  "--dry-run",
+  "--window-hours",
+  "720"
+ ],
+ "exchanges": [
+  {
+   "method": "GET",
+   "url": "https://api.github.com/orgs/session-foundation/repos",
+   "params": {
+    "per_page": 100,
+    "page": 1,
+    "type": "all"
+   },
+   "response": {
+    "status": 200,
+    "json": [
+     {
+      "name": "session-network-api",
+      "private": true,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-shared-scripts",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-android",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-token-contracts",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-ios",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-staking-backend",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "websites",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-desktop",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-website",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-fdroid",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-grdb-swift",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-appium",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "libsession-util",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "ethyl",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-token-website",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-playwright",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "libsession-util-nodejs",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-pysogs",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-push-notification-server",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-file-server",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "libsession-python",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-storage-server",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-ios-yyimage",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-ios-core-kit",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-ios-swift-sodium",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-lazysodium-android",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-lazysodium-java",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "curve25519-js",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-ios-curve-25519-kit",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-ip2country",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-android-curve-25519",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-android-private",
+      "private": true,
+      "fork": false,
+      "archived": true
+     },
+     {
+      "name": "session-desktop-private",
+      "private": true,
+      "fork": false,
+      "archived": true
+     },
+     {
+      "name": "session-ios-private",
+      "private": true,
+      "fork": false,
+      "archived": true
+     },
+     {
+      "name": "session-onion-request-tools",
+      "private": true,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-token-swap-frontend",
+      "private": true,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "oxen-encoding",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "libsodium-internal",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-lucide",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-observer",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-docs",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-bridge-frontend",
+      "private": true,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-bridge-backend",
+      "private": true,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "bls",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "libsession-util-spm",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "libsession-util-android",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-docker-ci",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-appium-private",
+      "private": true,
+      "fork": false,
+      "archived": true
+     },
+     {
+      "name": "oxen-pybls",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-playwright-private",
+      "private": true,
+      "fork": false,
+      "archived": true
+     },
+     {
+      "name": "spns-http2-notifiers",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-router",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "pyoxenmq",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "libquic",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "liblogging",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "liboxenmq",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-pro-backend",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "sharp-libvips",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "sharp",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-localization",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-emoji-mart",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-desktop-dynamic-assets",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-deps",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-react-contexify",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-sqlite",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "pyoxenc",
+      "private": false,
+      "fork": true,
+      "archived": false
+     },
+     {
+      "name": "session-packaging",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-divemo",
+      "private": false,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "sesh-net-docker",
+      "private": true,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-cli",
+      "private": true,
+      "fork": false,
+      "archived": false
+     },
+     {
+      "name": "session-app",
+      "private": true,
+      "fork": false,
+      "archived": false
+     }
+    ]
+   }
+  },
+  {
+   "method": "GET",
+   "url": "https://api.github.com/search/issues",
+   "params": {
+    "q": "org:session-foundation is:pr is:open",
+    "sort": "updated",
+    "order": "desc",
+    "per_page": 100,
+    "page": 1,
+    "advanced_search": "true"
+   },
+   "response": {
+    "status": 200,
+    "json": {
+     "total_count": 106,
+     "incomplete_results": false,
+     "items": [
+      {
+       "id": 5561094119,
+       "number": 59,
+       "title": "feat: daily digest of contributor pull requests",
+       "html_url": "https://github.com/session-foundation/session-shared-scripts/pull/59",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-shared-scripts",
+       "created_at": "2026-09-24T00:08:31Z",
+       "updated_at": "2026-09-25T02:31:09Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Bilb",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5419783352,
+       "number": 154,
+       "title": "Snode pool: 421 recovery on evidence, strike expiry, and reporting failed refreshes",
+       "html_url": "https://github.com/session-foundation/libsession-util/pull/154",
+       "repository_url": "https://api.github.com/repos/session-foundation/libsession-util",
+       "created_at": "2026-09-11T02:52:16Z",
+       "updated_at": "2026-09-24T23:39:01Z",
+       "draft": false,
+       "comments": 2,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5414565072,
+       "number": 150,
+       "title": "Full libsession Client support",
+       "html_url": "https://github.com/session-foundation/libsession-util/pull/150",
+       "repository_url": "https://api.github.com/repos/session-foundation/libsession-util",
+       "created_at": "2026-09-10T16:06:48Z",
+       "updated_at": "2026-09-24T23:37:41Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "jagerman",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5575450307,
+       "number": 175,
+       "title": "Attachment transfers: stream to the cache, make saves first-class, and let requests be withdrawn",
+       "html_url": "https://github.com/session-foundation/libsession-util/pull/175",
+       "repository_url": "https://api.github.com/repos/session-foundation/libsession-util",
+       "created_at": "2026-09-24T22:38:27Z",
+       "updated_at": "2026-09-24T22:38:27Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "jagerman",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5564446268,
+       "number": 69,
+       "title": "Ask for the camera in the QR pane's own words when access is blocked",
+       "html_url": "https://github.com/session-foundation/session-app/pull/69",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-app",
+       "created_at": "2026-09-24T06:58:34Z",
+       "updated_at": "2026-09-24T20:47:41Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5564445794,
+       "number": 68,
+       "title": "Draw semibold at 600 on iOS, where the face is San Francisco",
+       "html_url": "https://github.com/session-foundation/session-app/pull/68",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-app",
+       "created_at": "2026-09-24T06:58:31Z",
+       "updated_at": "2026-09-24T20:47:39Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5564441005,
+       "number": 65,
+       "title": "Keep the name typed in onboarding when it is submitted with the return key",
+       "html_url": "https://github.com/session-foundation/session-app/pull/65",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-app",
+       "created_at": "2026-09-24T06:58:02Z",
+       "updated_at": "2026-09-24T20:47:37Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5564440019,
+       "number": 63,
+       "title": "Toasts, and copying and sharing the account ID",
+       "html_url": "https://github.com/session-foundation/session-app/pull/63",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-app",
+       "created_at": "2026-09-24T06:57:57Z",
+       "updated_at": "2026-09-24T20:47:34Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5564439465,
+       "number": 62,
+       "title": "Settings as a modal with its own navigation, native on phones",
+       "html_url": "https://github.com/session-foundation/session-app/pull/62",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-app",
+       "created_at": "2026-09-24T06:57:53Z",
+       "updated_at": "2026-09-24T20:47:32Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5574361381,
+       "number": 71,
+       "title": "Share a row evenly between native fill buttons",
+       "html_url": "https://github.com/session-foundation/session-app/pull/71",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-app",
+       "created_at": "2026-09-24T20:47:04Z",
+       "updated_at": "2026-09-24T20:47:04Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5574360620,
+       "number": 70,
+       "title": "Let the desktop renderer write the clipboard",
+       "html_url": "https://github.com/session-foundation/session-app/pull/70",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-app",
+       "created_at": "2026-09-24T20:47:01Z",
+       "updated_at": "2026-09-24T20:47:01Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5564440561,
+       "number": 64,
+       "title": "The app's build identity, in the settings footer",
+       "html_url": "https://github.com/session-foundation/session-app/pull/64",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-app",
+       "created_at": "2026-09-24T06:58:00Z",
+       "updated_at": "2026-09-24T20:46:44Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5563782528,
+       "number": 61,
+       "title": "Refuse a sibling import its package does not declare",
+       "html_url": "https://github.com/session-foundation/session-app/pull/61",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-app",
+       "created_at": "2026-09-24T05:53:53Z",
+       "updated_at": "2026-09-24T20:46:41Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5564445374,
+       "number": 67,
+       "title": "Push and pop the phone onboarding on the platform's own stack",
+       "html_url": "https://github.com/session-foundation/session-app/pull/67",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-app",
+       "created_at": "2026-09-24T06:58:28Z",
+       "updated_at": "2026-09-24T20:46:40Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5310795142,
+       "number": 778,
+       "title": "[Automated] Update fallback static snode list",
+       "html_url": "https://github.com/session-foundation/session-ios/pull/778",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-ios",
+       "created_at": "2026-09-01T10:38:55Z",
+       "updated_at": "2026-09-24T10:39:38Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "stfsession",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5448178580,
+       "number": 2014,
+       "title": "chore: Update localization submodule",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/2014",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2026-09-14T10:30:09Z",
+       "updated_at": "2026-09-24T10:31:17Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "github-actions[bot]",
+        "type": "Bot"
+       }
+      },
+      {
+       "id": 5423204982,
+       "number": 2013,
+       "title": "chore: Update dynamic assets submodule",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/2013",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2026-09-11T10:23:00Z",
+       "updated_at": "2026-09-24T10:23:52Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "github-actions[bot]",
+        "type": "Bot"
+       }
+      },
+      {
+       "id": 5564445027,
+       "number": 66,
+       "title": "Hold the wide design's Continue off the notification options",
+       "html_url": "https://github.com/session-foundation/session-app/pull/66",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-app",
+       "created_at": "2026-09-24T06:58:25Z",
+       "updated_at": "2026-09-24T06:58:25Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5084821645,
+       "number": 123,
+       "title": "Retain keys-message bytes so an expired GroupKeys can be put back",
+       "html_url": "https://github.com/session-foundation/libsession-util/pull/123",
+       "repository_url": "https://api.github.com/repos/session-foundation/libsession-util",
+       "created_at": "2026-08-06T21:19:30Z",
+       "updated_at": "2026-09-24T06:51:07Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5561781588,
+       "number": 59,
+       "title": "Write an attachment out to where the reader asked",
+       "html_url": "https://github.com/session-foundation/session-app/pull/59",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-app",
+       "created_at": "2026-09-24T01:42:08Z",
+       "updated_at": "2026-09-24T05:52:06Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "Bilb",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5563418273,
+       "number": 2016,
+       "title": "Stop an in-flight poll undoing a cursor reset",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/2016",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2026-09-24T05:06:06Z",
+       "updated_at": "2026-09-24T05:06:06Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5563417442,
+       "number": 2220,
+       "title": "Don't let an in-flight poll undo a cursor reset",
+       "html_url": "https://github.com/session-foundation/session-android/pull/2220",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-android",
+       "created_at": "2026-09-24T05:06:00Z",
+       "updated_at": "2026-09-24T05:06:00Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5563416624,
+       "number": 793,
+       "title": "Send the shorten/extend flags `updateExpiry` is given",
+       "html_url": "https://github.com/session-foundation/session-ios/pull/793",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-ios",
+       "created_at": "2026-09-24T05:05:54Z",
+       "updated_at": "2026-09-24T05:05:54Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5563416094,
+       "number": 792,
+       "title": "Stop an in-flight poll undoing a cursor reset",
+       "html_url": "https://github.com/session-foundation/session-ios/pull/792",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-ios",
+       "created_at": "2026-09-24T05:05:50Z",
+       "updated_at": "2026-09-24T05:05:50Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5067819878,
+       "number": 2151,
+       "title": "Detect configs expired from the swarm and re-store them",
+       "html_url": "https://github.com/session-foundation/session-android/pull/2151",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-android",
+       "created_at": "2026-08-05T05:56:43Z",
+       "updated_at": "2026-09-24T04:58:30Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5561778820,
+       "number": 57,
+       "title": "Take libsession's reshaped client API, and resolve previews",
+       "html_url": "https://github.com/session-foundation/session-app/pull/57",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-app",
+       "created_at": "2026-09-24T01:41:49Z",
+       "updated_at": "2026-09-24T03:10:30Z",
+       "draft": true,
+       "comments": 1,
+       "user": {
+        "login": "Bilb",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5561781870,
+       "number": 60,
+       "title": "Walk the attachment screens end to end",
+       "html_url": "https://github.com/session-foundation/session-app/pull/60",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-app",
+       "created_at": "2026-09-24T01:42:11Z",
+       "updated_at": "2026-09-24T03:10:14Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "Bilb",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5561780156,
+       "number": 58,
+       "title": "Assemble the attachment screens",
+       "html_url": "https://github.com/session-foundation/session-app/pull/58",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-app",
+       "created_at": "2026-09-24T01:41:59Z",
+       "updated_at": "2026-09-24T03:10:08Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "Bilb",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5561776493,
+       "number": 56,
+       "title": "Draw attachments: the components",
+       "html_url": "https://github.com/session-foundation/session-app/pull/56",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-app",
+       "created_at": "2026-09-24T01:41:33Z",
+       "updated_at": "2026-09-24T01:41:33Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "Bilb",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5380323436,
+       "number": 144,
+       "title": "Say where a conversation belongs when it is added, changed or removed",
+       "html_url": "https://github.com/session-foundation/libsession-util/pull/144",
+       "repository_url": "https://api.github.com/repos/session-foundation/libsession-util",
+       "created_at": "2026-09-08T00:24:15Z",
+       "updated_at": "2026-09-23T23:23:31Z",
+       "draft": false,
+       "comments": 1,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5368562826,
+       "number": 784,
+       "title": "[Automated] Update translations from Crowdin",
+       "html_url": "https://github.com/session-foundation/session-ios/pull/784",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-ios",
+       "created_at": "2026-09-07T00:14:11Z",
+       "updated_at": "2026-09-23T23:03:24Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "stfsession",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5368562790,
+       "number": 2212,
+       "title": "[Automated] Update translations from Crowdin",
+       "html_url": "https://github.com/session-foundation/session-android/pull/2212",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-android",
+       "created_at": "2026-09-07T00:14:11Z",
+       "updated_at": "2026-09-23T23:03:18Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "stfsession",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5533774871,
+       "number": 2219,
+       "title": "Handle keystore and VACUUM failures on the database-open path instead of crash-looping (#2213)",
+       "html_url": "https://github.com/session-foundation/session-android/pull/2219",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-android",
+       "created_at": "2026-09-22T00:03:00Z",
+       "updated_at": "2026-09-22T03:22:41Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5344364696,
+       "number": 2211,
+       "title": "Fix: GroupUpdated send jobs could not be read back after a restart",
+       "html_url": "https://github.com/session-foundation/session-android/pull/2211",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-android",
+       "created_at": "2026-09-04T04:55:02Z",
+       "updated_at": "2026-09-21T01:32:12Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5344363217,
+       "number": 2210,
+       "title": "Fix: leaving a group we hold no encryption keys for retried forever",
+       "html_url": "https://github.com/session-foundation/session-android/pull/2210",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-android",
+       "created_at": "2026-09-04T04:54:46Z",
+       "updated_at": "2026-09-21T01:31:52Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5520322093,
+       "number": 2218,
+       "title": "Fix: a duplicate group invite demoted a member who had already joined",
+       "html_url": "https://github.com/session-foundation/session-android/pull/2218",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-android",
+       "created_at": "2026-09-20T20:35:09Z",
+       "updated_at": "2026-09-20T20:39:42Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5520320620,
+       "number": 2217,
+       "title": "Fix: onion path rotation could never escape a bad guard node",
+       "html_url": "https://github.com/session-foundation/session-android/pull/2217",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-android",
+       "created_at": "2026-09-20T20:34:51Z",
+       "updated_at": "2026-09-20T20:38:54Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5507203499,
+       "number": 19,
+       "title": "Python bindings",
+       "html_url": "https://github.com/session-foundation/libquic/pull/19",
+       "repository_url": "https://api.github.com/repos/session-foundation/libquic",
+       "created_at": "2026-09-19T02:36:48Z",
+       "updated_at": "2026-09-19T02:36:48Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "jagerman",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5496439357,
+       "number": 791,
+       "title": "Count config messages against the same denominator as standard ones",
+       "html_url": "https://github.com/session-foundation/session-ios/pull/791",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-ios",
+       "created_at": "2026-09-18T06:30:43Z",
+       "updated_at": "2026-09-18T06:30:43Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5458125609,
+       "number": 790,
+       "title": "Keep the Message Info quote and body inside the screen",
+       "html_url": "https://github.com/session-foundation/session-ios/pull/790",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-ios",
+       "created_at": "2026-09-15T05:55:38Z",
+       "updated_at": "2026-09-15T05:55:38Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5458124624,
+       "number": 789,
+       "title": "Expand the body when \"Read more\" is tapped on a link preview message",
+       "html_url": "https://github.com/session-foundation/session-ios/pull/789",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-ios",
+       "created_at": "2026-09-15T05:55:29Z",
+       "updated_at": "2026-09-15T05:55:29Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5457676043,
+       "number": 786,
+       "title": "Stop a failed word-set read from crashing every message send",
+       "html_url": "https://github.com/session-foundation/session-ios/pull/786",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-ios",
+       "created_at": "2026-09-15T04:53:25Z",
+       "updated_at": "2026-09-15T05:53:16Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5457805253,
+       "number": 787,
+       "title": "Turn the Pro badge on when an account gets its first ever proof",
+       "html_url": "https://github.com/session-foundation/session-ios/pull/787",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-ios",
+       "created_at": "2026-09-15T05:10:15Z",
+       "updated_at": "2026-09-15T05:23:41Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5457803090,
+       "number": 2214,
+       "title": "Pro: turn the badge on when an account gets its first ever proof",
+       "html_url": "https://github.com/session-foundation/session-android/pull/2214",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-android",
+       "created_at": "2026-09-15T05:09:58Z",
+       "updated_at": "2026-09-15T05:23:36Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5457898784,
+       "number": 788,
+       "title": "Stop the full-screen media viewer racing on its album cache",
+       "html_url": "https://github.com/session-foundation/session-ios/pull/788",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-ios",
+       "created_at": "2026-09-15T05:23:09Z",
+       "updated_at": "2026-09-15T05:23:09Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5067776912,
+       "number": 1973,
+       "title": "Detect configs expired from the swarm and re-store them",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/1973",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2026-08-05T05:50:27Z",
+       "updated_at": "2026-09-14T06:32:31Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5398832311,
+       "number": 2012,
+       "title": "fix: remember lightbox video volume",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/2012",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2026-09-09T11:31:37Z",
+       "updated_at": "2026-09-09T11:31:37Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Ap4sh",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5067827935,
+       "number": 730,
+       "title": "Config recovery: detect configs expired from the swarm and re-store them",
+       "html_url": "https://github.com/session-foundation/session-ios/pull/730",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-ios",
+       "created_at": "2026-08-05T05:57:47Z",
+       "updated_at": "2026-09-08T06:45:57Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5380776996,
+       "number": 785,
+       "title": "Notifications: restore the sound on the extension's fallback notifications",
+       "html_url": "https://github.com/session-foundation/session-ios/pull/785",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-ios",
+       "created_at": "2026-09-08T01:32:04Z",
+       "updated_at": "2026-09-08T01:45:47Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5318936096,
+       "number": 782,
+       "title": "Allow voice messages to run to five minutes",
+       "html_url": "https://github.com/session-foundation/session-ios/pull/782",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-ios",
+       "created_at": "2026-09-02T02:18:54Z",
+       "updated_at": "2026-09-08T01:39:44Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5364396474,
+       "number": 141,
+       "title": "Let a message request be accepted without answering it",
+       "html_url": "https://github.com/session-foundation/libsession-util/pull/141",
+       "repository_url": "https://api.github.com/repos/session-foundation/libsession-util",
+       "created_at": "2026-09-06T10:26:39Z",
+       "updated_at": "2026-09-07T03:59:01Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "Bilb",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5367932699,
+       "number": 142,
+       "title": "Use fixed-size span for Ed25519 pubkey conversion",
+       "html_url": "https://github.com/session-foundation/libsession-util/pull/142",
+       "repository_url": "https://api.github.com/repos/session-foundation/libsession-util",
+       "created_at": "2026-09-06T22:03:11Z",
+       "updated_at": "2026-09-06T22:03:11Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Ap4sh",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5344287420,
+       "number": 783,
+       "title": "Don't treat an unreadable identity as a new user",
+       "html_url": "https://github.com/session-foundation/session-ios/pull/783",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-ios",
+       "created_at": "2026-09-04T04:42:28Z",
+       "updated_at": "2026-09-04T04:42:28Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5329892319,
+       "number": 140,
+       "title": "onionreq: reject truncated XChaCha20 ciphertexts",
+       "html_url": "https://github.com/session-foundation/libsession-util/pull/140",
+       "repository_url": "https://api.github.com/repos/session-foundation/libsession-util",
+       "created_at": "2026-09-02T22:25:55Z",
+       "updated_at": "2026-09-02T22:25:55Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Ap4sh",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5136537328,
+       "number": 1977,
+       "title": "fix: prevent duplicate attachment sends",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/1977",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2026-08-13T00:29:12Z",
+       "updated_at": "2026-09-02T11:20:45Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Ap4sh",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5317914481,
+       "number": 70,
+       "title": "Release 1.34.0",
+       "html_url": "https://github.com/session-foundation/session-fdroid/pull/70",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-fdroid",
+       "created_at": "2026-09-01T23:30:32Z",
+       "updated_at": "2026-09-01T23:30:32Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5317544330,
+       "number": 2006,
+       "title": "feat: add flag to disable update prompts",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/2006",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2026-09-01T22:39:03Z",
+       "updated_at": "2026-09-01T22:39:03Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Ap4sh",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5317174882,
+       "number": 2209,
+       "title": "build(deps): bump com.google.gms.google-services from 4.4.4 to 4.5.0",
+       "html_url": "https://github.com/session-foundation/session-android/pull/2209",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-android",
+       "created_at": "2026-09-01T21:48:48Z",
+       "updated_at": "2026-09-01T21:48:50Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "dependabot[bot]",
+        "type": "Bot"
+       }
+      },
+      {
+       "id": 5317172467,
+       "number": 2208,
+       "title": "build(deps): bump io.github.webrtc-sdk:android from 144.7559.01 to 144.7559.14",
+       "html_url": "https://github.com/session-foundation/session-android/pull/2208",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-android",
+       "created_at": "2026-09-01T21:48:29Z",
+       "updated_at": "2026-09-01T21:48:30Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "dependabot[bot]",
+        "type": "Bot"
+       }
+      },
+      {
+       "id": 5317165411,
+       "number": 2207,
+       "title": "build(deps): bump coroutinesVersion from 1.10.2 to 1.11.0",
+       "html_url": "https://github.com/session-foundation/session-android/pull/2207",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-android",
+       "created_at": "2026-09-01T21:47:33Z",
+       "updated_at": "2026-09-01T21:47:34Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "dependabot[bot]",
+        "type": "Bot"
+       }
+      },
+      {
+       "id": 5317162219,
+       "number": 2206,
+       "title": "build(deps): bump actions/setup-java from 5 to 6",
+       "html_url": "https://github.com/session-foundation/session-android/pull/2206",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-android",
+       "created_at": "2026-09-01T21:47:09Z",
+       "updated_at": "2026-09-01T21:47:10Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "dependabot[bot]",
+        "type": "Bot"
+       }
+      },
+      {
+       "id": 5283240989,
+       "number": 138,
+       "title": "multi_encrypt: randomize empty nonce inputs",
+       "html_url": "https://github.com/session-foundation/libsession-util/pull/138",
+       "repository_url": "https://api.github.com/repos/session-foundation/libsession-util",
+       "created_at": "2026-08-28T23:44:08Z",
+       "updated_at": "2026-08-28T23:44:08Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Ap4sh",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5250981685,
+       "number": 2189,
+       "title": "Bump billingVersion from 8.3.0 to 9.1.0",
+       "html_url": "https://github.com/session-foundation/session-android/pull/2189",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-android",
+       "created_at": "2026-08-25T21:44:30Z",
+       "updated_at": "2026-08-26T02:08:23Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "dependabot[bot]",
+        "type": "Bot"
+       }
+      },
+      {
+       "id": 5186628401,
+       "number": 2169,
+       "title": "Bump kotlinVersion from 2.3.20 to 2.4.10",
+       "html_url": "https://github.com/session-foundation/session-android/pull/2169",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-android",
+       "created_at": "2026-08-18T21:50:32Z",
+       "updated_at": "2026-08-23T23:10:23Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "dependabot[bot]",
+        "type": "Bot"
+       }
+      },
+      {
+       "id": 3505000112,
+       "number": 7,
+       "title": "[WIP] QUIC server",
+       "html_url": "https://github.com/session-foundation/session-file-server/pull/7",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-file-server",
+       "created_at": "2025-10-11T02:13:19Z",
+       "updated_at": "2026-08-21T21:25:16Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "jagerman",
+        "type": "User"
+       }
+      },
+      {
+       "id": 4190398400,
+       "number": 1940,
+       "title": "fix: linux screensaver, lock screen and DPMS blocked by session-desktop",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/1940",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2026-04-01T23:04:18Z",
+       "updated_at": "2026-08-14T08:40:18Z",
+       "draft": false,
+       "comments": 7,
+       "user": {
+        "login": "BonesGit",
+        "type": "User"
+       }
+      },
+      {
+       "id": 5147905370,
+       "number": 51,
+       "title": "Embedded client TCP tunnel support",
+       "html_url": "https://github.com/session-foundation/session-router/pull/51",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-router",
+       "created_at": "2026-08-14T03:23:11Z",
+       "updated_at": "2026-08-14T03:59:53Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "jagerman",
+        "type": "User"
+       }
+      },
+      {
+       "id": 3386606711,
+       "number": 553,
+       "title": "Update icons to the new Lucide icon set",
+       "html_url": "https://github.com/session-foundation/session-ios/pull/553",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-ios",
+       "created_at": "2025-09-05T07:44:11Z",
+       "updated_at": "2026-08-11T04:47:23Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mikoldin123",
+        "type": "User"
+       }
+      },
+      {
+       "id": 3531685670,
+       "number": 620,
+       "title": "Added multi selection feature in messages",
+       "html_url": "https://github.com/session-foundation/session-ios/pull/620",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-ios",
+       "created_at": "2025-10-20T09:18:39Z",
+       "updated_at": "2026-08-11T04:47:23Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mikoldin123",
+        "type": "User"
+       }
+      },
+      {
+       "id": 3485987771,
+       "number": 603,
+       "title": "Added checking if message has attachment before showing delete dialog",
+       "html_url": "https://github.com/session-foundation/session-ios/pull/603",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-ios",
+       "created_at": "2025-10-06T07:18:11Z",
+       "updated_at": "2026-08-11T04:47:23Z",
+       "draft": false,
+       "comments": 1,
+       "user": {
+        "login": "mikoldin123",
+        "type": "User"
+       }
+      },
+      {
+       "id": 2971269339,
+       "number": 415,
+       "title": "[WIP] Move the database from the AppGroup to main app Documents directory (OLD)",
+       "html_url": "https://github.com/session-foundation/session-ios/pull/415",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-ios",
+       "created_at": "2025-04-04T04:53:50Z",
+       "updated_at": "2026-08-11T04:47:22Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "mpretty-cyro",
+        "type": "User"
+       }
+      },
+      {
+       "id": 4763402501,
+       "number": 1958,
+       "title": "Fix issue #563",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/1958",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2026-06-28T19:42:42Z",
+       "updated_at": "2026-07-23T05:56:04Z",
+       "draft": false,
+       "comments": 1,
+       "user": {
+        "login": "KyWB",
+        "type": "User"
+       }
+      },
+      {
+       "id": 2660176770,
+       "number": 3,
+       "title": "fix: exceptions when compiling with emscripten",
+       "html_url": "https://github.com/session-foundation/libsession-util/pull/3",
+       "repository_url": "https://api.github.com/repos/session-foundation/libsession-util",
+       "created_at": "2024-11-14T21:58:54Z",
+       "updated_at": "2026-07-14T19:47:43Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "Bilb",
+        "type": "User"
+       }
+      },
+      {
+       "id": 3779820664,
+       "number": 73,
+       "title": "Add blinded community session encrypt encode/decode with Session Pro functions",
+       "html_url": "https://github.com/session-foundation/libsession-util/pull/73",
+       "repository_url": "https://api.github.com/repos/session-foundation/libsession-util",
+       "created_at": "2026-01-05T00:37:00Z",
+       "updated_at": "2026-07-14T19:47:43Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Doy-lee",
+        "type": "User"
+       }
+      },
+      {
+       "id": 3271152599,
+       "number": 58,
+       "title": "Timestamp type safety",
+       "html_url": "https://github.com/session-foundation/libsession-util/pull/58",
+       "repository_url": "https://api.github.com/repos/session-foundation/libsession-util",
+       "created_at": "2025-07-28T19:49:50Z",
+       "updated_at": "2026-07-14T19:47:43Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "jagerman",
+        "type": "User"
+       }
+      },
+      {
+       "id": 4812949729,
+       "number": 3,
+       "title": "SECURITY IMPROVEMENT of cryptographic operations and optimizations to…",
+       "html_url": "https://github.com/session-foundation/ethyl/pull/3",
+       "repository_url": "https://api.github.com/repos/session-foundation/ethyl",
+       "created_at": "2026-07-05T13:08:34Z",
+       "updated_at": "2026-07-05T13:08:34Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "DanHouseman",
+        "type": "User"
+       }
+      },
+      {
+       "id": 4695488803,
+       "number": 1955,
+       "title": "fix: reject invalid attachment digest lengths",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/1955",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2026-06-18T19:43:48Z",
+       "updated_at": "2026-06-18T19:52:17Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Ap4sh",
+        "type": "User"
+       }
+      },
+      {
+       "id": 4604075448,
+       "number": 1954,
+       "title": "fix: validate SOGS attachment sizes",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/1954",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2026-06-06T15:31:50Z",
+       "updated_at": "2026-06-18T17:29:40Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Ap4sh",
+        "type": "User"
+       }
+      },
+      {
+       "id": 4578962012,
+       "number": 1951,
+       "title": "fix: retry transient attachment downloads",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/1951",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2026-06-03T10:25:25Z",
+       "updated_at": "2026-06-03T10:30:01Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Ap4sh",
+        "type": "User"
+       }
+      },
+      {
+       "id": 4465670146,
+       "number": 58,
+       "title": "fix(utilities): lossless guard + unsigned BigInt parser",
+       "html_url": "https://github.com/session-foundation/libsession-util-nodejs/pull/58",
+       "repository_url": "https://api.github.com/repos/session-foundation/libsession-util-nodejs",
+       "created_at": "2026-05-18T01:37:21Z",
+       "updated_at": "2026-05-18T01:37:21Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "klodr",
+        "type": "User"
+       }
+      },
+      {
+       "id": 4426244625,
+       "number": 1949,
+       "title": "chore: allow any Node 24.x patch version in engines",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/1949",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2026-05-12T04:37:51Z",
+       "updated_at": "2026-05-13T02:58:01Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "klodr",
+        "type": "User"
+       }
+      },
+      {
+       "id": 4236725684,
+       "number": 55,
+       "title": "build: upgrade to cmake-js 8.0.0 to get rid of audit vulnerabilities",
+       "html_url": "https://github.com/session-foundation/libsession-util-nodejs/pull/55",
+       "repository_url": "https://api.github.com/repos/session-foundation/libsession-util-nodejs",
+       "created_at": "2026-04-10T05:08:49Z",
+       "updated_at": "2026-04-10T05:08:49Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "BonesGit",
+        "type": "User"
+       }
+      },
+      {
+       "id": 3838074037,
+       "number": 1786,
+       "title": "Feat/mobile optimised UI",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/1786",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2026-01-21T12:35:51Z",
+       "updated_at": "2026-04-08T09:05:29Z",
+       "draft": false,
+       "comments": 7,
+       "user": {
+        "login": "Deluxo",
+        "type": "User"
+       }
+      },
+      {
+       "id": 4191855419,
+       "number": 21,
+       "title": "Add instructions for manual invoking contracts without frontend",
+       "html_url": "https://github.com/session-foundation/session-token-contracts/pull/21",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-token-contracts",
+       "created_at": "2026-04-02T05:49:51Z",
+       "updated_at": "2026-04-02T05:49:51Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Doy-lee",
+        "type": "User"
+       }
+      },
+      {
+       "id": 4183799765,
+       "number": 10,
+       "title": "feat: ens",
+       "html_url": "https://github.com/session-foundation/session-staking-backend/pull/10",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-staking-backend",
+       "created_at": "2026-04-01T03:32:27Z",
+       "updated_at": "2026-04-01T03:32:35Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "Aerilym",
+        "type": "User"
+       }
+      },
+      {
+       "id": 4183611232,
+       "number": 82,
+       "title": "Merge foundation site branch into staking portal dev branch",
+       "html_url": "https://github.com/session-foundation/websites/pull/82",
+       "repository_url": "https://api.github.com/repos/session-foundation/websites",
+       "created_at": "2026-04-01T02:29:48Z",
+       "updated_at": "2026-04-01T02:36:28Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Aerilym",
+        "type": "User"
+       }
+      },
+      {
+       "id": 3349161268,
+       "number": 79,
+       "title": "feat: add support for safe app SDK connection",
+       "html_url": "https://github.com/session-foundation/websites/pull/79",
+       "repository_url": "https://api.github.com/repos/session-foundation/websites",
+       "created_at": "2025-08-24T05:06:44Z",
+       "updated_at": "2026-04-01T02:27:09Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Aerilym",
+        "type": "User"
+       }
+      },
+      {
+       "id": 4149549537,
+       "number": 2086,
+       "title": "Create SECURITY.md",
+       "html_url": "https://github.com/session-foundation/session-android/pull/2086",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-android",
+       "created_at": "2026-03-27T05:31:10Z",
+       "updated_at": "2026-03-27T05:31:10Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "mancillacasillaseduardodejesus-arch",
+        "type": "User"
+       }
+      },
+      {
+       "id": 4101199045,
+       "number": 1904,
+       "title": "feat: add SOCKS5 proxy support for desktop traffic",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/1904",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2026-03-19T11:56:42Z",
+       "updated_at": "2026-03-20T21:51:04Z",
+       "draft": false,
+       "comments": 2,
+       "user": {
+        "login": "scrense-hash",
+        "type": "User"
+       }
+      },
+      {
+       "id": 4085167169,
+       "number": 24,
+       "title": "Fix: cms revalidate content",
+       "html_url": "https://github.com/session-foundation/session-website/pull/24",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-website",
+       "created_at": "2026-03-16T22:41:37Z",
+       "updated_at": "2026-03-16T23:45:14Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Aerilym",
+        "type": "User"
+       }
+      },
+      {
+       "id": 3993247466,
+       "number": 1867,
+       "title": "WIP: fix: sogs seqno number check",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/1867",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2026-02-26T04:42:34Z",
+       "updated_at": "2026-02-26T04:50:17Z",
+       "draft": true,
+       "comments": 0,
+       "user": {
+        "login": "Aerilym",
+        "type": "User"
+       }
+      },
+      {
+       "id": 3354279967,
+       "number": 1564,
+       "title": "feat: add auto start on startup option to user settings",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/1564",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2025-08-26T06:20:05Z",
+       "updated_at": "2026-02-19T06:25:49Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Aerilym",
+        "type": "User"
+       }
+      },
+      {
+       "id": 3778380704,
+       "number": 1752,
+       "title": "feat: Add SOCKS5 Proxy Support with Bootstrap Only Mode",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/1752",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2026-01-03T18:54:42Z",
+       "updated_at": "2026-02-19T06:25:49Z",
+       "draft": false,
+       "comments": 1,
+       "user": {
+        "login": "scrense-hash",
+        "type": "User"
+       }
+      },
+      {
+       "id": 3630659535,
+       "number": 1687,
+       "title": "fix: Document LANGUAGE env var",
+       "html_url": "https://github.com/session-foundation/session-desktop/pull/1687",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop",
+       "created_at": "2025-11-16T14:47:51Z",
+       "updated_at": "2026-02-19T06:25:48Z",
+       "draft": false,
+       "comments": 1,
+       "user": {
+        "login": "RubenGarcia",
+        "type": "User"
+       }
+      },
+      {
+       "id": 2945203094,
+       "number": 1053,
+       "title": "Feature/clean emojis",
+       "html_url": "https://github.com/session-foundation/session-android/pull/1053",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-android",
+       "created_at": "2025-03-25T04:23:23Z",
+       "updated_at": "2026-02-09T04:08:04Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "ThomasSession",
+        "type": "User"
+       }
+      },
+      {
+       "id": 3893737924,
+       "number": 6,
+       "title": "chore: manual commit of strings for dev build",
+       "html_url": "https://github.com/session-foundation/session-localization/pull/6",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-localization",
+       "created_at": "2026-02-03T23:32:22Z",
+       "updated_at": "2026-02-03T23:32:22Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Bilb",
+        "type": "User"
+       }
+      },
+      {
+       "id": 3848808351,
+       "number": 7,
+       "title": "Remove public testnet instructions",
+       "html_url": "https://github.com/session-foundation/session-docs/pull/7",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-docs",
+       "created_at": "2026-01-23T19:14:41Z",
+       "updated_at": "2026-01-23T19:23:05Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "jagerman",
+        "type": "User"
+       }
+      },
+      {
+       "id": 3794724414,
+       "number": 27,
+       "title": "Log when IPv6 addressing appears disabled",
+       "html_url": "https://github.com/session-foundation/session-router/pull/27",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-router",
+       "created_at": "2026-01-08T22:47:45Z",
+       "updated_at": "2026-01-08T22:47:45Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "jagerman",
+        "type": "User"
+       }
+      },
+      {
+       "id": 3471889891,
+       "number": 1,
+       "title": "Update bindings to libsession-util @ c73fd92",
+       "html_url": "https://github.com/session-foundation/libsession-python/pull/1",
+       "repository_url": "https://api.github.com/repos/session-foundation/libsession-python",
+       "created_at": "2025-10-01T03:45:02Z",
+       "updated_at": "2025-10-01T03:45:02Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Doy-lee",
+        "type": "User"
+       }
+      },
+      {
+       "id": 3064899191,
+       "number": 12,
+       "title": "Added claim and proof support to the Network Page",
+       "html_url": "https://github.com/session-foundation/session-desktop-private/pull/12",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-desktop-private",
+       "created_at": "2025-05-15T04:51:02Z",
+       "updated_at": "2025-05-29T04:58:25Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "yougotwill",
+        "type": "User"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "method": "GET",
+   "url": "https://api.github.com/search/issues",
+   "params": {
+    "q": "org:session-foundation is:pr is:open",
+    "sort": "updated",
+    "order": "desc",
+    "per_page": 100,
+    "page": 2,
+    "advanced_search": "true"
+   },
+   "response": {
+    "status": 200,
+    "json": {
+     "total_count": 106,
+     "incomplete_results": false,
+     "items": [
+      {
+       "id": 3084231436,
+       "number": 1,
+       "title": "Removing outdated information README.md",
+       "html_url": "https://github.com/session-foundation/session-docs/pull/1",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-docs",
+       "created_at": "2025-05-22T18:30:01Z",
+       "updated_at": "2025-05-22T18:30:01Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "slrslr",
+        "type": "User"
+       }
+      },
+      {
+       "id": 2681444127,
+       "number": 1,
+       "title": "Feature/sent 101",
+       "html_url": "https://github.com/session-foundation/session-android-private/pull/1",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-android-private",
+       "created_at": "2024-11-22T00:56:44Z",
+       "updated_at": "2025-05-11T23:04:24Z",
+       "draft": false,
+       "comments": 1,
+       "user": {
+        "login": "AL-Session",
+        "type": "User"
+       }
+      },
+      {
+       "id": 3047549228,
+       "number": 14,
+       "title": "Session name service no payments",
+       "html_url": "https://github.com/session-foundation/session-token-contracts/pull/14",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-token-contracts",
+       "created_at": "2025-05-08T01:28:16Z",
+       "updated_at": "2025-05-08T01:28:16Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "darcys22",
+        "type": "User"
+       }
+      },
+      {
+       "id": 3001008400,
+       "number": 52,
+       "title": "Automated testing",
+       "html_url": "https://github.com/session-foundation/websites/pull/52",
+       "repository_url": "https://api.github.com/repos/session-foundation/websites",
+       "created_at": "2025-04-16T23:42:11Z",
+       "updated_at": "2025-04-16T23:42:34Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Aerilym",
+        "type": "User"
+       }
+      },
+      {
+       "id": 2918526813,
+       "number": 35,
+       "title": "Create nextjs app template",
+       "html_url": "https://github.com/session-foundation/websites/pull/35",
+       "repository_url": "https://api.github.com/repos/session-foundation/websites",
+       "created_at": "2025-03-13T22:42:05Z",
+       "updated_at": "2025-03-13T22:42:05Z",
+       "draft": false,
+       "comments": 0,
+       "user": {
+        "login": "Aerilym",
+        "type": "User"
+       }
+      },
+      {
+       "id": 2798271102,
+       "number": 2,
+       "title": "fix: remove eslint",
+       "html_url": "https://github.com/session-foundation/session-token-website/pull/2",
+       "repository_url": "https://api.github.com/repos/session-foundation/session-token-website",
+       "created_at": "2025-01-20T06:03:07Z",
+       "updated_at": "2025-02-27T00:22:26Z",
+       "draft": false,
+       "comments": 1,
+       "user": {
+        "login": "Aerilym",
+        "type": "User"
+       }
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

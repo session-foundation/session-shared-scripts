@@ -1,0 +1,116 @@
+# Every job on the host. `session-ops units` turns each entry into drop-ins for the
+# session-ops@ templates in deploy/, `session-ops run <name>` runs it as the timer does,
+# and session-ops-silence alerts on any scheduled one quiet for longer than
+# max_age_hours: its schedule's longest gap between successes, plus slack for the
+# timer's jitter and the run itself.
+#
+#   entry          module:function, called with the job's argv
+#   args           {state} is the job's /var/lib/session-ops/<name>
+#   env            variables the run refuses to start without
+#   channel_env    where its failures are reported, unless ALERT_DISCORD_WEBHOOK_URL is set
+#   unit           further [Service] lines, over the template's hardening
+#
+# Timezones go in the schedule itself: systemd has no Timezone= key and ignores one.
+# Check a schedule with `systemd-analyze calendar "<schedule>"`.
+
+[[job]]
+name = "github-prs-digest"
+description = "Daily digest of contributor pull requests"
+entry = "session_ops.github_prs.digest:main"
+args = ["--window-hours", "72", "--state", "{state}/seen.json"]
+user = "ghdigest"
+env_files = ["/etc/session-ops/github-prs.env"]
+env = ["GITHUB_PRS_TOKEN", "GITHUB_PRS_DISCORD_WEBHOOK_URL"]
+channel_env = "GITHUB_PRS_DISCORD_WEBHOOK_URL"
+# Weekdays, half an hour before the Zendesk digest. The window spans the weekend; a longer
+# gap (April's 73 h DST weekend, a missed run) reaches back through covered_until in --state.
+schedule = "Mon..Fri 09:30 Australia/Melbourne"
+max_age_hours = 80
+timeout = "15min"
+
+[[job]]
+name = "zendesk-digest"
+description = "Zendesk positive-review resolver, then the triage digest"
+entry = "session_ops.zendesk.digest_job:main"
+args = ["--state", "{state}/seen.json"]
+user = "zendesk"
+env_files = ["/etc/session-ops/zendesk.env"]
+env = ["ZENDESK_SUBDOMAIN", "ZENDESK_EMAIL", "ZENDESK_API_TOKEN", "ZENDESK_DISCORD_WEBHOOK_URL"]
+channel_env = "ZENDESK_DISCORD_WEBHOOK_URL"
+schedule = "Mon..Fri 10:00 Australia/Melbourne"
+max_age_hours = 80
+# A full 1000-ticket resolve is ten bulk jobs polled for up to 300 s each.
+timeout = "90min"
+# The Claude Code CLI reads its login from $HOME: mask /home and bind only this one.
+unit = [
+    "ProtectHome=tmpfs",
+    "BindPaths=/home/zendesk",
+    "ReadWritePaths=/home/zendesk",
+    "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
+]
+
+[[job]]
+name = "crowdin-duplicates"
+description = "Reconcile Crowdin duplicate translations and post what changed"
+entry = "session_ops.crowdin.reconcile:main"
+# CroQL narrows each locale to the strings holding 2+ translations at all, ~50 of
+# ~1,400; checked live against a planted duplicate and a full scan of every locale.
+args = ["--state", "{state}/duplicates.json", "--croql"]
+user = "crowdin"
+env_files = ["/etc/session-ops/crowdin.env"]
+env = ["CROWDIN_API_TOKEN", "CROWDIN_DISCORD_WEBHOOK_URL"]
+channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
+schedule = "*-*-* 03:00 UTC"
+max_age_hours = 28
+# About 20 minutes; a full scan without --croql is ~110k requests, an hour at 30/s.
+timeout = "2h"
+
+[[job]]
+name = "session-ops-silence"
+description = "Alert when a scheduled job has stopped succeeding"
+entry = "session_ops.monitor.silence:main"
+args = ["--state", "{state}/state.json"]
+user = "sessionops"
+env_files = ["/etc/session-ops/alerts.env"]
+env = ["ALERT_DISCORD_WEBHOOK_URL"]
+schedule = "hourly"
+max_age_hours = 3
+timeout = "5min"
+
+[[job]]
+name = "crowdin-sync"
+description = "Crowdin translations into the platform repos"
+entry = "session_ops.crowdin.sync:main"
+args = ["--runs", "{state}/runs"]
+user = "publisher"
+env_files = ["/etc/session-ops/crowdin.env", "/etc/session-ops/publish.env"]
+env = ["CROWDIN_API_TOKEN", "PUBLISH_GIT_AUTHOR"]
+channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
+# Clear of check_for_crowdin_updates.yml's run, which pushes the same branches.
+schedule = "Mon 13:00 Australia/Melbourne"
+max_age_hours = 176
+timeout = "1h"
+# Readable by this unit alone, at $CREDENTIALS_DIRECTORY; publishing needs it.
+unit = ["LoadCredential=github-app.pem:/etc/session-ops/github-app.pem"]
+
+[[job]]
+name = "snode-list"
+description = "Fallback service node list into session-ios"
+entry = "session_ops.platforms.snode_list:main"
+user = "publisher"
+env_files = ["/etc/session-ops/publish.env"]
+env = ["PUBLISH_GIT_AUTHOR"]
+# Clear of update_static_snode_list.yml's 10:30 UTC run, which pushes the same branch.
+schedule = "*-*-* 13:00 Australia/Melbourne"
+max_age_hours = 28
+timeout = "10min"
+unit = ["LoadCredential=github-app.pem:/etc/session-ops/github-app.pem"]
+
+[[job]]
+name = "release-stats"
+description = "Download counts of the latest Desktop and Android releases"
+entry = "session_ops.platforms.release_stats:main"
+args = ["--out", "{state}/runs"]
+user = "sessionops"
+env_files = ["/etc/session-ops/alerts.env"]
+timeout = "5min"

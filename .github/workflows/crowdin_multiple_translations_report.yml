@@ -55,7 +55,7 @@ jobs:
           cache: "pip"
 
       - name: Install dependencies
-        run: pip install -r crowdin/requirements.txt
+        run: pip install .
 
       - name: Report strings with multiple translations
         env:
@@ -73,7 +73,7 @@ jobs:
             read -ra locale_args <<< "$LOCALES"
             args+=(--locales "${locale_args[@]}")
           fi
-          python crowdin/report_multiple_translations.py \
+          python -m session_ops.crowdin.report_multiple_translations \
             "${args[@]}" \
             ${{ github.event.inputs.all_locales == 'true' && '--all-locales' || '' }} \
             ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}

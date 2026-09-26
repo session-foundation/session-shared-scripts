@@ -1,0 +1,12 @@
+# The schedule comes from the job's drop-in (OnCalendar=), written from jobs.toml.
+[Unit]
+Description=Schedule for session-ops job %i
+Documentation=https://github.com/session-foundation/session-shared-scripts
+
+[Timer]
+# A host that was down at the scheduled time runs the job once when it is back.
+Persistent=yes
+RandomizedDelaySec=2min
+
+[Install]
+WantedBy=timers.target

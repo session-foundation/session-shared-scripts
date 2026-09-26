@@ -1,7 +1,0 @@
-# What the deployment runs. Test-only dependencies live in requirements-dev.txt.
-requests==2.32.3
-
-# relay.py only: the endpoint Zendesk posts note webhooks to. Its signatures are
-# HMAC-SHA256, which is stdlib hmac, so nothing here verifies them.
-fastapi==0.141.1
-uvicorn==0.52.4

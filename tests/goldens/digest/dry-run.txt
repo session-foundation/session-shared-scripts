@@ -1,0 +1,28 @@
+106 open PRs in session-foundation, 36 from contributors across 28 repos: 6 new, 0 changed since last reported, 0 unchanged (skipped).
+[
+  {
+    "flags": 32768,
+    "components": [
+      {
+        "type": 17,
+        "components": [
+          {
+            "type": 10,
+            "content": "**Contributor pull requests** · last 30 days\n🟢 **6** new · ✏️ **0** updated\n**36** open from contributors across the org."
+          },
+          {
+            "type": 14
+          },
+          {
+            "type": 10,
+            "content": "**libsession-util**\n🟢 [#142](https://github.com/session-foundation/libsession-util/pull/142) @Ap4sh · 2w · Use fixed-size span for Ed25519 pubkey conversion\n🟢 [#140](https://github.com/session-foundation/libsession-util/pull/140) @Ap4sh · 3w · onionreq: reject truncated XChaCha20 ciphertexts\n🟢 [#138](https://github.com/session-foundation/libsession-util/pull/138) @Ap4sh · 3w · multi_encrypt: randomize empty nonce inputs"
+          },
+          {
+            "type": 10,
+            "content": "**session-desktop**\n🟢 [#2012](https://github.com/session-foundation/session-desktop/pull/2012) @Ap4sh · 2w · fix: remember lightbox video volume\n🟢 [#2006](https://github.com/session-foundation/session-desktop/pull/2006) @Ap4sh · 3w · feat: add flag to disable update prompts\n🟢 [#1977](https://github.com/session-foundation/session-desktop/pull/1977) @Ap4sh · 6w · fix: prevent duplicate attachment sends"
+          }
+        ]
+      }
+    ]
+  }
+]

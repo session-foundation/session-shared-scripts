@@ -1,0 +1,39 @@
+[Unit]
+Description=Crowdin suggestion webhook endpoint (duplicate translations)
+Documentation=https://github.com/session-foundation/session-shared-scripts
+After=network-online.target
+Wants=network-online.target
+OnFailure=session-ops-alert@%n.service
+
+[Service]
+Type=exec
+User=crowdin
+Group=crowdin
+EnvironmentFile=/etc/session-ops/crowdin.env
+Environment=CROWDIN_DUPLICATES_STATE=/var/lib/session-ops/crowdin-duplicates/duplicates.json
+# Loopback only: nginx terminates TLS and is the only thing that should reach it.
+ExecStart=/opt/session-ops/.venv/bin/uvicorn session_ops.crowdin.relay:app \
+    --host 127.0.0.1 --port 8081 --no-access-log --proxy-headers \
+    --forwarded-allow-ips 127.0.0.1
+Restart=always
+RestartSec=2
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# The open slots, shared with session-ops@crowdin-duplicates under a file lock.
+StateDirectory=session-ops/crowdin-duplicates
+
+[Install]
+WantedBy=multi-user.target
