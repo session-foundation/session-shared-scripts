@@ -144,6 +144,19 @@ class TestStateFile(unittest.TestCase):
     def test_no_path_means_no_state_and_no_complaint(self):
         self.assertEqual(digest.load_state(None), digest.empty_state())
 
+    def test_a_pr_quiet_for_months_still_reads_as_updated_when_it_moves(self):
+        self.save(pr(1, updated="2026-01-10T09:00:00Z"))
+        with open(self.path, encoding="utf-8") as handle:
+            state = json.load(handle)
+        months_ago = (datetime.now(timezone.utc) - timedelta(days=200)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+        state["seen"][digest.pr_id(pr(1))]["last_reported"] = months_ago
+        with contextlib.redirect_stdout(io.StringIO()):
+            digest.save_state(self.path, state, [pr(2)])
+        new, changed, _ = digest.partition_by_state(
+            [pr(1, updated="2026-09-24T09:00:00Z")], self.load())
+        self.assertEqual((len(new), len(changed)), (0, 1))
+
 
 class TestAge(unittest.TestCase):
     def test_coarsens_as_it_grows(self):

@@ -23,10 +23,10 @@ has a reason to already know about:
 ✏️ [#1904](…) @scrense-hash · 3h · 💬2 · feat: add SOCKS5 proxy support
 ```
 
-🟢 is a PR the digest has never reported; ✏️ is one it has, which has moved since. A PR
-that has not moved is left out entirely, however wide the window. The backlog line
-counts every open contributor PR regardless, so a quiet day still says how much is
-waiting.
+🟢 is a PR the digest has not reported in the past year; ✏️ is one it has, which has
+moved since. A PR that has not moved is left out entirely, however wide the window. The
+backlog line counts every open contributor PR regardless, so a quiet day still says how
+much is waiting.
 
 ## Weekdays, and the state file
 
@@ -77,7 +77,7 @@ that: private repositories stay out whatever the token can see.
 | --- | --- |
 | `--window-hours N` | how far back a PR must have moved to be considered (default 72) |
 | `--state PATH` | dedup state; without it every PR in the window is new |
-| `--state-retention-days N` | drop state entries older than this (default 30) |
+| `--state-retention-days N` | forget a PR not reported for this long, so it next reads as 🟢 (default 365) |
 | `--dry-run` | print the Discord payload, post nothing |
 | `--org`, `--token`, `--webhook` | override the environment |
 | `--maintainers PATH` | a different list |
