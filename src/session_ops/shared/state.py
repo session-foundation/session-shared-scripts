@@ -43,9 +43,13 @@ def load_state(path, version, noun):
     return data
 
 
-def save_state(path, state, records, retention_days, version):
+def save_state(path, state, records, retention_days, version, extra=None):
     """Merge `records` ({key: fields}) into the state as reported now, prune entries
-    older than `retention_days`, write atomically. Returns (kept, pruned)."""
+    older than `retention_days`, write atomically. Returns (kept, pruned).
+
+    `extra` fields are written at the top level beside `seen`, for a caller's own
+    bookkeeping; without them the file holds only version, updated_at and seen.
+    """
     now = datetime.now(timezone.utc)
     stamp = now.strftime(STAMP)
     seen = dict(state.get("seen", {}))
@@ -70,6 +74,7 @@ def save_state(path, state, records, retention_days, version):
         os.makedirs(directory, exist_ok=True)
     temporary = f"{path}.tmp"
     with open(temporary, "w", encoding="utf-8") as handle:
-        json.dump({"version": version, "updated_at": stamp, "seen": kept}, handle, indent=2)
+        json.dump({"version": version, "updated_at": stamp, **(extra or {}), "seen": kept},
+                  handle, indent=2)
     os.replace(temporary, path)  # atomic: a crash mid-write cannot corrupt the state
     return len(kept), len(seen) - len(kept)

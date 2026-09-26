@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
+from zoneinfo import ZoneInfo
 
 from session_ops.github_prs import digest
 from session_ops.shared import discord
@@ -367,6 +368,144 @@ class TestPosting(unittest.TestCase):
         recorded, _, status = self.run_digest(accepted=0)
         self.assertEqual(recorded, set())
         self.assertIsNotNone(status)
+
+
+MELBOURNE = ZoneInfo("Australia/Melbourne")
+
+
+def local(*fields):
+    """A time on the timer's clock, 09:30 Australia/Melbourne unless given."""
+    return datetime(*fields, tzinfo=MELBOURNE).astimezone(timezone.utc)
+
+
+def stamp(when):
+    return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class TestWindowStart(unittest.TestCase):
+    NOW = local(2026, 9, 28, 9, 30)
+
+    def start(self, covered, retention_days=365):
+        state = {"seen": {}, digest.COVERED_FIELD: covered}
+        return digest.window_start(state, self.NOW, 72, retention_days)
+
+    def test_without_a_stamp_the_window_is_the_configured_one(self):
+        self.assertEqual(digest.window_start(digest.empty_state(), self.NOW, 72),
+                         self.NOW - timedelta(hours=72))
+        self.assertEqual(self.start("not a time"), self.NOW - timedelta(hours=72))
+
+    def test_an_older_stamp_widens_the_window_to_it(self):
+        covered = self.NOW - timedelta(hours=73)
+        self.assertEqual(self.start(stamp(covered)), covered)
+
+    def test_a_recent_stamp_never_narrows_the_window(self):
+        self.assertEqual(self.start(stamp(self.NOW - timedelta(hours=1))),
+                         self.NOW - timedelta(hours=72))
+        self.assertEqual(self.start(stamp(self.NOW + timedelta(days=3))),
+                         self.NOW - timedelta(hours=72))
+
+    def test_a_stamp_is_followed_back_no_further_than_the_retention(self):
+        """Past it the state has forgotten what it reported, so nothing could be deduped."""
+        self.assertEqual(self.start(stamp(self.NOW - timedelta(days=900)), retention_days=30),
+                         self.NOW - timedelta(days=30))
+
+
+class TestAcrossRuns(unittest.TestCase):
+    """Consecutive real runs sharing one state file, with Discord faked."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.path = os.path.join(directory.name, "seen.json")
+
+    def run_digest(self, at, prs, accepted=99, search_takes=timedelta(0), dry_run=False):
+        """Returns the PR numbers in each message sent, and the first message's JSON."""
+        clock = [at]
+
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock[0].astimezone(tz) if tz else clock[0].replace(tzinfo=None)
+
+        def search(session, org):
+            clock[0] += search_takes
+            return prs, False
+
+        sent = []
+
+        def post(session, url, messages):
+            sent.extend(messages)
+            return min(accepted, len(messages))
+
+        with mock.patch.object(digest, "github_session", lambda token: None), \
+                mock.patch.object(digest, "fetch_repos",
+                                  lambda session, org: set(map(digest.repo_name, prs))), \
+                mock.patch.object(digest, "search_open_prs", search), \
+                mock.patch.object(digest, "datetime", Clock), \
+                mock.patch.object(discord, "post_to_discord", post), \
+                contextlib.redirect_stdout(io.StringIO()):
+            try:
+                digest.main(["--token", "t", "--webhook", "https://discord.test/api/webhooks/1/x",
+                             "--window-hours", "72", "--state", self.path,
+                             *(["--dry-run"] if dry_run else [])])
+            except SystemExit:
+                pass
+        shown = [set(map(int, re.findall(r"\[#(\d+)\]", json.dumps(m)))) for m in sent]
+        header = json.dumps(sent[0], ensure_ascii=False) if sent else ""
+        return shown, header
+
+    def covered(self):
+        with open(self.path, encoding="utf-8") as handle:
+            return json.load(handle).get(digest.COVERED_FIELD)
+
+    def test_prs_a_failed_friday_post_left_out_are_reported_on_monday(self):
+        thursday = stamp(local(2026, 9, 24, 15, 0))
+        prs = [pr(n, repo=f"repo-{n:02}", title="y" * 80, created=thursday)
+               for n in range(40)]
+        friday, _ = self.run_digest(local(2026, 9, 25, 9, 30), prs, accepted=1)
+        self.assertGreater(len(friday), 1)
+        monday, _ = self.run_digest(local(2026, 9, 28, 9, 30), prs)
+        self.assertEqual(set().union(*monday), set(range(40)) - friday[0])
+
+    def test_a_dst_weekend_longer_than_the_window_loses_nothing(self):
+        """April's Friday 09:30 AEDT to Monday 09:30 AEST is 73 hours."""
+        friday, monday = local(2027, 4, 2, 9, 30), local(2027, 4, 5, 9, 30)
+        self.assertEqual(monday - friday, timedelta(hours=73))
+        self.run_digest(friday, [pr(1, created=stamp(friday - timedelta(hours=5)))])
+        late = pr(2, created=stamp(friday + timedelta(minutes=1)))
+        shown, header = self.run_digest(monday, [late])
+        self.assertEqual(shown[0], {2})
+        self.assertIn("last 73h", header)
+
+    def test_a_run_the_host_missed_is_caught_up_by_the_next(self):
+        thursday, monday = local(2026, 9, 24, 9, 30), local(2026, 9, 28, 9, 30)
+        self.run_digest(thursday, [])
+        moved = pr(1, created=stamp(thursday + timedelta(hours=3)))
+        shown, _ = self.run_digest(monday, [moved])
+        self.assertEqual(shown[0], {1})
+
+    def test_a_pr_that_moves_during_the_search_is_in_the_next_window(self):
+        friday, monday = local(2027, 4, 2, 9, 30), local(2027, 4, 5, 9, 30)
+        self.run_digest(friday, [], search_takes=timedelta(minutes=2))
+        self.assertEqual(self.covered(), stamp(friday))
+        during = pr(1, created=stamp(friday + timedelta(minutes=1)))
+        shown, _ = self.run_digest(monday, [during])
+        self.assertEqual(shown[0], {1})
+
+    def test_the_stamp_advances_only_when_every_message_landed(self):
+        prs = [pr(n, repo=f"repo-{n:02}", title="y" * 80,
+                  created=stamp(local(2026, 9, 21, 15, 0))) for n in range(40)]
+        monday = local(2026, 9, 21, 16, 0)
+        self.run_digest(monday, prs)
+        self.assertEqual(self.covered(), stamp(monday))
+        tuesday = monday + timedelta(days=1)
+        self.run_digest(tuesday, prs, dry_run=True)
+        self.assertEqual(self.covered(), stamp(monday))
+        moved = [dict(p, updated_at=stamp(tuesday)) for p in prs]
+        self.run_digest(tuesday, moved, accepted=1)
+        self.assertEqual(self.covered(), stamp(tuesday - timedelta(hours=72)))
+        self.run_digest(tuesday + timedelta(hours=1), moved, accepted=0)
+        self.assertEqual(self.covered(), stamp(tuesday - timedelta(hours=72)))
 
 
 class TestFetching(unittest.TestCase):

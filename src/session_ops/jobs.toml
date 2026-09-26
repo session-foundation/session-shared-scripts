@@ -22,7 +22,8 @@ user = "ghdigest"
 env_files = ["/etc/session-ops/github-prs.env"]
 env = ["GITHUB_PRS_TOKEN", "GITHUB_PRS_DISCORD_WEBHOOK_URL"]
 channel_env = "GITHUB_PRS_DISCORD_WEBHOOK_URL"
-# Weekdays, half an hour before the Zendesk digest; Friday's run to Monday's is 72 h.
+# Weekdays, half an hour before the Zendesk digest. The window spans the weekend; a longer
+# gap (April's 73 h DST weekend, a missed run) reaches back through covered_until in --state.
 schedule = "Mon..Fri 09:30 Australia/Melbourne"
 max_age_hours = 80
 timeout = "15min"

@@ -42,10 +42,27 @@ in the search result and cost a request per PR that moved; this is the cheaper h
 that trade, taken deliberately.
 
 Only what Discord accepted is recorded, so a run that fails on its second message
-re-reports that message's PRs tomorrow rather than losing them. Every way of failing to
-read the state file — missing, unreadable, written by another version — treats every PR
-in the window as new: noisy once, never wrong, which is what makes it a cache rather
-than something to back up.
+re-reports that message's PRs on the next run rather than losing them. Every way of
+failing to read the state file — missing, unreadable, written by another version —
+treats every PR in the window as new: noisy once, never wrong, which is what makes it a
+cache rather than something to back up.
+
+### Late, not lost
+
+Two runs can be further apart than 72 hours: April's DST weekend is 73, the timer's
+`RandomizedDelaySec` adds up to two minutes, and a host that was down runs once when it
+comes back. So the state also keeps `covered_until`, the time the last run whose every
+message Discord accepted *started* its search, and each run reaches back to whichever is
+earlier, that or 72 hours ago. A run whose post fails partway, or that fails before
+posting, never moves it forward; a dry run writes nothing. The header then names the
+actual span (`last 73h`).
+
+With `--state`, then, a PR that moves is reported by the next run that delivers in full,
+however long that takes, provided it is still open when that run searches. Three limits:
+the reach back stops at `--state-retention-days` (365), past which the state has
+forgotten what it reported anyway; a state file that is lost or unreadable falls back to
+the plain 72-hour window for one run; and a search cut short at GitHub's 1000 results
+can miss the least recently updated PRs.
 
 One search fetches every open PR in the org and the window is applied to the result
 here rather than in the query — that is what buys the backlog count for the cost of a
