@@ -39,7 +39,7 @@ slightly in the future is accepted, within MAX_CLOCK_SKEW_SECONDS: the alternati
 an endpoint that refuses everything whenever this host's clock trails Zendesk's.
 
 Usage:
-    uvicorn relay:app --host 127.0.0.1 --port 8080
+    uvicorn session_ops.zendesk.relay:app --host 127.0.0.1 --port 8080
 """
 import base64
 import datetime
