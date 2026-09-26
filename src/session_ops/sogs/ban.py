@@ -65,7 +65,7 @@ lost in blinding), so the deletion tries each in turn and the first non-404 answ
 
 The blinded request signatures come from session_util, libsession-util's Python binding,
 which ships as a deb rather than a wheel: `apt install python3-session-util` from
-https://deb.oxen.io. It is compiled per Python minor version, so a virtualenv needs
+https://deb.session.foundation. It is compiled per Python minor version, so a virtualenv needs
 --system-site-packages. pynacl stays for the blinding factor and the two candidate
 blinded ids, which the binding does not expose.
 
@@ -118,7 +118,7 @@ except ImportError as e:  # pragma: no cover - environment, not logic
     raise SystemExit(
         "session_util is missing. It is libsession-util's Python binding, and it is not on "
         "PyPI — install it from the Session apt repository:\n"
-        "    https://deb.oxen.io\n"
+        "    https://deb.session.foundation\n"
         "    sudo apt install python3-session-util\n"
         "A virtualenv needs --system-site-packages to see it."
     ) from e
