@@ -50,7 +50,7 @@ class Outcome:
     """What a job with several targets returns: each target's error, or None.
 
     A failed target fails the run unless it is `optional`, in which case the run
-    still alerts but succeeds.
+    still alerts but succeeds, provided that alert reached Discord.
     """
     summary: str = ""
     targets: dict = field(default_factory=dict)
@@ -185,7 +185,11 @@ def run(job, dry_run=False, extra=()):
     if dry_run:
         print(message)
         return code
-    if post_alert(job, message) and code:
+    if not post_alert(job, message):
+        # Even an optional target's failure then fails the unit: OnFailure= is all
+        # that is left to report it.
+        return 1
+    if code:
         mark_alerted(state_dir)
     return code
 

@@ -111,6 +111,12 @@ class TestRun(unittest.TestCase):
                 self.assertIn("journalctl -u session-ops@demo -n 50", content)
                 self.assertNotIn("re-run", content)
 
+    def test_an_optional_failure_whose_alert_cannot_be_posted_fails_the_run(self):
+        """OnFailure= is then the only thing left that can report it."""
+        with mock.patch.object(runner.discord, "post_to_discord", return_value=0):
+            self.assertEqual(self.run_job(job("optional_failure")), 1)
+        self.assertIsNone(self.marker())
+
     def test_a_dry_run_prints_the_alert_instead(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
