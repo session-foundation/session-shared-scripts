@@ -7,7 +7,7 @@ cannot reach the seed nodes. A change opens, or updates, a pull request from
 
 | | |
 | --- | --- |
-| Runs | `session-ops@snode-list.timer`, daily 10:30 UTC, half an hour after the source updates |
+| Runs | `session-ops@snode-list.timer`, daily 13:00 Australia/Melbourne; the source updates at 10:00 UTC |
 | Secrets | `/etc/session-ops/publish.env` and the GitHub App key; the list itself is public |
 | Dry run | `session-ops run snode-list --dry-run` |
 | Re-run | `systemctl start session-ops@snode-list.service` |

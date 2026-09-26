@@ -6,7 +6,7 @@ straight onto session-localization's `main`, the TypeScript module Desktop and Q
 
 | | |
 | --- | --- |
-| Runs | `session-ops@crowdin-sync.timer`, Mondays 10:00 Australia/Melbourne |
+| Runs | `session-ops@crowdin-sync.timer`, Mondays 13:00 Australia/Melbourne |
 | Secrets | `/etc/session-ops/crowdin.env`: a read-only `CROWDIN_API_TOKEN`; `/etc/session-ops/publish.env` and the GitHub App key, to publish |
 | Dry run | `session-ops run crowdin-sync --dry-run`: everything but the push, with each platform's diff in the journal |
 | Re-run | `systemctl start session-ops@crowdin-sync.service`; one platform with `session-ops run crowdin-sync -- --only ios` |
