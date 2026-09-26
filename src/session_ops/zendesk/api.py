@@ -234,10 +234,13 @@ def fetch_user(session, subdomain, user_id):
     failed lookup widens the sample rather than silencing it.
     """
     url = f"https://{subdomain}.zendesk.com/api/v2/users/{user_id}.json"
-    resp = session.request("GET", url, attempts=2)
-    if resp.status_code >= 400:
+    try:
+        resp = session.request("GET", url, attempts=2)
+        if resp.status_code >= 400:
+            return {}
+        return (resp.json() or {}).get("user") or {}
+    except requests.RequestException:
         return {}
-    return (resp.json() or {}).get("user") or {}
 
 
 def customer_authors(session, subdomain, ticket, comments):

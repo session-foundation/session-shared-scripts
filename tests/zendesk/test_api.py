@@ -7,10 +7,24 @@ import unittest
 
 import requests
 
-from session_ops.shared.testing import FakeResponse, FakeSession
+from session_ops.shared.testing import FakeResponse, FakeSession, NonJsonResponse
 from session_ops.zendesk import api, triage
 
 URL = "https://acme.zendesk.com/api/v2/tickets/7/comments.json"
+
+
+class TestFetchUser(unittest.TestCase):
+    def test_an_unreachable_zendesk_is_an_unknown_author_not_an_error(self):
+        """attach_english promises never to raise; an unknown author counts as a customer."""
+        self.assertEqual(api.fetch_user(FakeSession([requests.ConnectionError("down")]),
+                                        "acme", 5), {})
+
+    def test_an_unreadable_body_is_an_unknown_author(self):
+        self.assertEqual(api.fetch_user(FakeSession([NonJsonResponse()]), "acme", 5), {})
+
+    def test_a_user_is_read(self):
+        session = FakeSession([FakeResponse({"user": {"role": "agent"}})])
+        self.assertEqual(api.fetch_user(session, "acme", 5), {"role": "agent"})
 
 
 class TestFetchComments(unittest.TestCase):
