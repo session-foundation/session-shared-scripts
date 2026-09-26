@@ -55,7 +55,8 @@ DEFAULT_ORG = "session-foundation"
 # Three days, because the timer runs on weekdays: Monday's window has to reach back
 # over the weekend. Overlap between consecutive runs is what --state absorbs.
 DEFAULT_WINDOW_HOURS = 72
-DEFAULT_RETENTION_DAYS = 30
+# How long 🟢 means "not reported before": a PR quiet for longer reads as new when it moves.
+DEFAULT_RETENTION_DAYS = 365
 STATE_VERSION = 1
 # The Search API caps a query at 1000 results and returns 422 for any page past it
 # (at per_page=100 that is page 11). Past the cap the digest reports truncation
