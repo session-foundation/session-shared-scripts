@@ -55,6 +55,9 @@ DEFAULT_ORG = "session-foundation"
 # Three days, because the timer runs on weekdays: Monday's window has to reach back
 # over the weekend. Overlap between consecutive runs is what --state absorbs.
 DEFAULT_WINDOW_HOURS = 72
+# The state field holding when the last run whose every message landed began its search:
+# every PR that moved before then has been reported, so the next run reaches back to it.
+COVERED_FIELD = "covered_until"
 # How long 🟢 means "not reported before": a PR quiet for longer reads as new when it moves.
 DEFAULT_RETENTION_DAYS = 365
 STATE_VERSION = 1
@@ -226,15 +229,35 @@ def partition_by_state(prs, state):
     return new, changed, unchanged
 
 
-def save_state(path, state, reported, retention_days=DEFAULT_RETENTION_DAYS):
-    """Record `reported` as seen. Returns (kept, pruned)."""
+def window_start(state, now, window_hours, retention_days=DEFAULT_RETENTION_DAYS):
+    """The earliest move this run reports: `window_hours` back, or further, to where
+    the state says reporting is complete.
+
+    A fixed window alone drops whatever moved in a gap longer than it: a DST weekend,
+    a timer's random delay, a host down across a run, a run whose post failed partway.
+    Never further back than the retention, past which the state has forgotten what it
+    reported anyway.
+    """
+    cutoff = now - timedelta(hours=window_hours)
+    try:
+        covered = datetime.strptime(state.get(COVERED_FIELD), dedup.STAMP) \
+            .replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return cutoff
+    return max(min(cutoff, covered), min(cutoff, now - timedelta(days=retention_days)))
+
+
+def save_state(path, state, reported, retention_days=DEFAULT_RETENTION_DAYS, covered=None):
+    """Record `reported` as seen, and `covered` as the point reporting is complete to.
+    Returns (kept, pruned)."""
     records = {pr_id(pr): {"updated_at": activity_key(pr),
                            # Not read back. The file is the first thing anyone opens
                            # when the digest reports the wrong thing, and an id
                            # alone identifies nothing.
                            "pr": f"{repo_name(pr)}#{pr.get('number')}"}
                for pr in reported}
-    return dedup.save_state(path, state, records, retention_days, STATE_VERSION)
+    fields = {COVERED_FIELD: covered.strftime(dedup.STAMP)} if covered else None
+    return dedup.save_state(path, state, records, retention_days, STATE_VERSION, fields)
 
 
 # ---- Discord rendering -----------------------------------------------------
@@ -354,7 +377,8 @@ def main(argv=None):
                         help="Logins to treat as maintainers, one per line.")
     parser.add_argument("--window-hours", type=int, default=DEFAULT_WINDOW_HOURS,
                         help=f"How far back a PR must have moved to be considered "
-                             f"(default {DEFAULT_WINDOW_HOURS}).")
+                             f"(default {DEFAULT_WINDOW_HOURS}); with --state, back to "
+                             f"the last run that delivered in full, if that is further.")
     parser.add_argument("--state", metavar="PATH",
                         help="Dedup state: without it every PR in the window is new.")
     parser.add_argument("--state-retention-days", type=int,
@@ -376,19 +400,22 @@ def main(argv=None):
 
     session = github_session(token)
     repos = fetch_repos(session, org)
+    # Before the search: a PR that moves while it runs is then inside the next window.
+    searched_at = datetime.now(timezone.utc)
     items, truncated = search_open_prs(session, org)
     prs = contributor_prs(items, repos, maintainers)
 
     now = datetime.now(timezone.utc)
     state = load_state(args.state)
-    new, changed, unchanged = partition_by_state(
-        in_window(prs, now - timedelta(hours=args.window_hours)), state)
+    cutoff = window_start(state, now, args.window_hours, args.state_retention_days)
+    window_hours = max(args.window_hours, round((now - cutoff).total_seconds() / 3600))
+    new, changed, unchanged = partition_by_state(in_window(prs, cutoff), state)
     print(f"{len(items)} open PRs in {org}, {len(prs)} from contributors across "
           f"{len(repos)} repos: {len(new)} new, {len(changed)} changed since last "
           f"reported, {len(unchanged)} unchanged (skipped).")
 
-    messages, coverage = build_messages(new, changed, len(prs), args.window_hours,
-                                        now, truncated)
+    messages, coverage = build_messages(new, changed, len(prs), window_hours, now,
+                                        truncated)
     if args.dry_run:
         print(json.dumps(messages, indent=2, ensure_ascii=False))
         return
@@ -399,8 +426,11 @@ def main(argv=None):
     if args.state:
         landed = set().union(*coverage[:posted]) if posted else set()
         reported = [pr for pr in new + changed if pr_id(pr) in landed]
+        # A partial post keeps this run's cutoff, so the next run reaches back over the
+        # PRs whose message never landed.
+        covered = searched_at if posted == len(messages) else cutoff
         kept, pruned = save_state(args.state, state, reported,
-                                  args.state_retention_days)
+                                  args.state_retention_days, covered)
         print(f"State: {len(reported)} recorded, {kept} tracked "
               f"({pruned} pruned beyond {args.state_retention_days} days).")
     if posted < len(messages):

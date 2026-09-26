@@ -86,6 +86,19 @@ class TestStateFile(unittest.TestCase):
         self.assertEqual(self.save({"4": {}}, state=state), (1, 3))
         self.assertEqual(list(self.load()["seen"]), ["4"])
 
+    def test_without_extra_fields_the_file_holds_only_the_version_the_stamp_and_seen(self):
+        self.save({"1": {}})
+        with open(self.path, encoding="utf-8") as handle:
+            self.assertEqual(sorted(json.load(handle)), ["seen", "updated_at", "version"])
+
+    def test_extra_fields_are_written_beside_seen_and_read_back(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            dedup.save_state(self.path, dedup.empty_state(VERSION), {"1": {}}, 30, VERSION,
+                             extra={"covered_until": "2026-09-24T00:00:00Z"})
+        state = self.load()
+        self.assertEqual(state["covered_until"], "2026-09-24T00:00:00Z")
+        self.assertEqual(list(state["seen"]), ["1"])
+
     def test_the_directory_is_created_and_the_write_is_atomic(self):
         self.save({"1": {}})
         self.assertEqual(sorted(os.listdir(os.path.dirname(self.path))), ["seen.json"])
