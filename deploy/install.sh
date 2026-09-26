@@ -66,8 +66,8 @@ move "$ETC/env" "$ETC/alerts.env" 600 root
 for name in zendesk github-prs crowdin publish alerts; do
     [ -e "$ETC/$name.env" ] || install -m 600 /dev/null "$ETC/$name.env"
 done
-# The publishing units load this as a credential whether or not a GitHub App is set
-# up, and a missing file would stop them starting; empty means publish with a token.
+# The publishing units load this as a credential, and a missing file would stop them
+# starting; left empty, their runs exit naming the key.
 [ -e "$ETC/github-app.pem" ] || install -m 600 /dev/null "$ETC/github-app.pem"
 
 install -d -m 755 "$STATE"

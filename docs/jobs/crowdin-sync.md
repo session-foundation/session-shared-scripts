@@ -30,8 +30,9 @@ Gradle build runs here.
 
 ## Publishing
 
-Publishing authenticates as a GitHub App when one is set up, or with a token string
-until then; see `publish.env` in [deploy/README.md](../../deploy/README.md#secrets).
+Publishing authenticates as the GitHub App: `GITHUB_APP_ID` in `publish.env` and its
+key in `/etc/session-ops/github-app.pem`, and a run missing either exits naming it (a
+dry run needs neither); see [deploy/README.md](../../deploy/README.md#secrets).
 Commits are authored as `PUBLISH_GIT_AUTHOR`.
 
 ### Crowdin token scopes

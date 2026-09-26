@@ -234,18 +234,58 @@ class TestAppToken(unittest.TestCase):
         self.assertTrue(api.calls[1][1].endswith("/app/installations/9/access_tokens"))
         self.assertEqual(api.calls[1][2]["json"], {"repositories": ["session-ios"]})
 
-    def test_an_empty_key_file_means_no_app(self):
-        directory = tempfile.mkdtemp()
-        open(os.path.join(directory, github.APP_KEY_CREDENTIAL), "w").close()
-        env = {"CREDENTIALS_DIRECTORY": directory, "GITHUB_APP_ID": "1",
-               "GITHUB_PUBLISH_TOKEN": "pat"}
-        with mock.patch.dict(os.environ, env):
-            self.assertEqual(github.publish_token("o", ["r"]), "pat")
+    def credentials(self, key):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        with open(os.path.join(directory.name, github.APP_KEY_CREDENTIAL), "w",
+                  encoding="utf-8") as handle:
+            handle.write(key)
+        return directory.name
 
-    def test_no_way_to_publish_is_refused(self):
-        with mock.patch.dict(os.environ, {"GITHUB_PUBLISH_TOKEN": "", "GITHUB_APP_ID": ""}), \
-                self.assertRaises(SystemExit):
-            github.publish_token("o", ["r"])
+    def publish_token(self, env, api=None):
+        signed = []
+        def session(token):
+            signed.append(token)
+            return api
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(github, "session", session):
+            return github.publish_token("session-foundation", ["session-ios"]), signed
+
+    def test_the_app_mints_a_token_for_the_named_repositories(self):
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                serialization.NoEncryption()).decode()
+        api = FakeSession([FakeResponse({"id": 9}), FakeResponse({"token": "ghs_x"})])
+        env = {"CREDENTIALS_DIRECTORY": self.credentials(pem), "GITHUB_APP_ID": "123"}
+        token, signed = self.publish_token(env, api)
+        self.assertEqual(token, "ghs_x")
+        claims = jwt.decode(signed[0], key.public_key(), algorithms=["RS256"])
+        self.assertEqual(claims["iss"], "123")
+        self.assertTrue(api.calls[0][1].endswith("/orgs/session-foundation/installation"))
+        self.assertEqual(api.calls[1][2]["json"], {"repositories": ["session-ios"]})
+
+    def refusal(self, env):
+        with self.assertRaises(SystemExit) as caught:
+            self.publish_token(env)
+        return str(caught.exception)
+
+    def test_a_missing_app_id_is_named(self):
+        message = self.refusal({"CREDENTIALS_DIRECTORY": self.credentials("k")})
+        self.assertIn("GITHUB_APP_ID is not set", message)
+        self.assertNotIn("private key", message)
+
+    def test_an_empty_key_is_named_with_where_it_comes_from(self):
+        """install.sh creates the file empty, so the unit starts and this is what says why."""
+        message = self.refusal({"CREDENTIALS_DIRECTORY": self.credentials(""),
+                                "GITHUB_APP_ID": "123"})
+        self.assertIn("private key is missing or empty (/etc/session-ops/github-app.pem",
+                      message)
+        self.assertNotIn("GITHUB_APP_ID", message)
+
+    def test_nothing_configured_names_both(self):
+        message = self.refusal({})
+        self.assertIn("GITHUB_APP_ID is not set", message)
+        self.assertIn("private key", message)
 
 
 class TestSnodeList(RepoTest):
@@ -296,9 +336,10 @@ class TestCrowdinSync(RepoTest):
 
     def test_each_target_publishes_on_its_own(self):
         env = {"SESSION_OPS_WORK_DIR": self.work, "CROWDIN_API_TOKEN": "t",
-               "PUBLISH_GIT_AUTHOR": AUTHOR, "GITHUB_PUBLISH_TOKEN": "pat"}
+               "PUBLISH_GIT_AUTHOR": AUTHOR}
         api = GitHubFake()
         with mock.patch.object(sync.download_translations_from_crowdin, "main"), \
+                mock.patch.object(sync.github, "publish_token", lambda owner, repos: "ghs_x"), \
                 mock.patch.object(sync.parse_xliff, "main"), \
                 mock.patch.object(sync, "generate", self.fake_generate), \
                 mock.patch.object(sync.github, "session", lambda token: api), \

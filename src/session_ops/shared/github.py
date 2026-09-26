@@ -1,15 +1,13 @@
 """GitHub's REST API for the jobs that publish to the platform repos: who they
 authenticate as, and the pull requests they keep open.
 
-Publishing authenticates as a GitHub App when one is configured, with an installation
-token minted per run and scoped to the repositories the job names: it expires in an
-hour, and pull requests show as the App rather than as a person. Without one it
-falls back to a token string, GITHUB_PUBLISH_TOKEN.
+Publishing authenticates as a GitHub App, with an installation token minted per run
+and scoped to the repositories the job names: it expires in an hour, and pull
+requests show as the App rather than as a person.
 
 Config (env vars):
     GITHUB_APP_ID                the App's id
     CREDENTIALS_DIRECTORY        set by systemd's LoadCredential=; holds github-app.pem
-    GITHUB_PUBLISH_TOKEN         otherwise, a token that can push and open PRs
 """
 import os
 import time
@@ -20,6 +18,8 @@ from session_ops.shared import http
 
 API = "https://api.github.com"
 APP_KEY_CREDENTIAL = "github-app.pem"
+# Where the publishing units' LoadCredential= reads it from.
+APP_KEY_PATH = "/etc/session-ops/github-app.pem"
 
 
 def session(token):
@@ -57,8 +57,8 @@ def installation_token(app_id, private_key, owner, repositories, api=None):
 
 
 def app_private_key():
-    """The App's key from systemd's credential store, or None. An empty file means no
-    App: the unit loads the credential whether or not one is configured."""
+    """The App's key from systemd's credential store, or None when there is none or
+    it is empty: install.sh creates the file empty so the units can start without it."""
     directory = os.environ.get("CREDENTIALS_DIRECTORY")
     if not directory:
         return None
@@ -70,14 +70,17 @@ def app_private_key():
 
 
 def publish_token(owner, repositories):
-    key, app_id = app_private_key(), os.environ.get("GITHUB_APP_ID")
-    if key and app_id:
-        return installation_token(app_id, key, owner, repositories)
-    token = os.environ.get("GITHUB_PUBLISH_TOKEN")
-    if not token:
-        raise SystemExit("No way to publish: set GITHUB_APP_ID and its key, or "
-                         "GITHUB_PUBLISH_TOKEN.")
-    return token
+    """An installation token for `repositories`; exits naming whatever is missing."""
+    app_id, key = os.environ.get("GITHUB_APP_ID"), app_private_key()
+    missing = []
+    if not app_id:
+        missing.append("GITHUB_APP_ID is not set")
+    if not key:
+        missing.append(f"the App's private key is missing or empty ({APP_KEY_PATH}, "
+                       f"loaded as the {APP_KEY_CREDENTIAL} credential)")
+    if missing:
+        raise SystemExit(f"Cannot publish: {'; '.join(missing)}.")
+    return installation_token(app_id, key, owner, repositories)
 
 
 def open_pull(api, repo, head):
