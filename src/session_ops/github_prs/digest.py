@@ -39,6 +39,7 @@ Usage:
 """
 import argparse
 import json
+import math
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -117,11 +118,12 @@ def search_open_prs(session, org, max_results=SEARCH_RESULT_LIMIT):
     """Every open PR in the org, newest activity first.
 
     Returns (items, truncated). `truncated` is the caller's cue that the counts are
-    a floor rather than a total.
+    a floor rather than a total: the result ceiling, a search GitHub reports as
+    incomplete, or pages that shifted under the fetch.
     """
-    items, page = [], 1
+    items, seen, incomplete = [], set(), False
     limit = min(max_results, SEARCH_RESULT_LIMIT)
-    while len(items) < limit:
+    for page in range(1, math.ceil(limit / PER_PAGE) + 1):
         payload = fetch_json(session, f"{API}/search/issues", params={
             "q": f"org:{org} is:pr is:open",
             "sort": "updated",
@@ -133,11 +135,16 @@ def search_open_prs(session, org, max_results=SEARCH_RESULT_LIMIT):
             "advanced_search": "true",
         })
         batch = payload.get("items", [])
-        items.extend(batch)
+        incomplete = incomplete or bool(payload.get("incomplete_results"))
+        # A PR updated between two page fetches jumps to page one, already read, and
+        # pushes that page's last item onto the next: one repeat, one PR short of total.
+        for item in batch:
+            if item.get("id") not in seen:
+                seen.add(item.get("id"))
+                items.append(item)
         total = payload.get("total_count", len(items))
         if len(batch) < PER_PAGE or len(items) >= total:
-            return items[:limit], total > len(items[:limit])
-        page += 1
+            return items[:limit], incomplete or total > len(items[:limit])
     return items[:limit], True
 
 
@@ -322,7 +329,8 @@ def build_header(new, updated, backlog, window_hours, truncated):
         lines.append("Nothing opened or updated.")
     lines.append(f"**{backlog}** open from contributors across the org.")
     if truncated:
-        lines.append("_GitHub capped the search at 1000 results; the counts are a floor._")
+        lines.append("_GitHub's search returned only part of the open PRs; "
+                     "the counts are a floor._")
     return "\n".join(lines)
 
 
