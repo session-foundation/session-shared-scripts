@@ -3,7 +3,8 @@ times out.
 
 Retries happen in urllib3, below the session, so a caller sees only the final
 answer. A 429, a 5xx or a rate-limited 403 that outlasts the budget comes back as a
-response, whatever its status; a transport failure that outlasts it raises. Every
+response, whatever its status, and at once when the server's wait already exceeds
+what the budget could sleep; a transport failure that outlasts it raises. Every
 method is retried, POST included, which is what the callers here have always relied
 on.
 
@@ -86,14 +87,25 @@ def _seconds_until_http_date(value):
 
 class _Retry(Retry):
     """urllib3's Retry with this repo's waits: 1 s doubling to 30 s, or what the
-    server asked for, capped at a minute."""
+    server asked for, capped at a minute.
+
+    A server wait the attempts left cannot cover even at a minute each is not waited
+    out at all: every retry would hit the same spent quota, and the sleeps alone can
+    outlast the unit's timeout, so systemd kills the job before it can alert.
+    """
 
     def increment(self, method=None, url=None, response=None, error=None, _pool=None,
                   _stacktrace=None):
         # is_retry() sees only the status. With raise_on_status off, MaxRetryError
-        # makes urllib3 hand this 403 back unretried.
+        # makes urllib3 hand the response back unretried.
         if response is not None and response.status == 403 and not is_rate_limited(response):
             raise MaxRetryError(_pool, url, ResponseError("403 without rate-limit headers"))
+        if response is not None and isinstance(self.total, int):
+            wait = retry_after_seconds(response, None)
+            if wait is not None and wait > MAX_RETRY_AFTER * self.total:
+                raise MaxRetryError(_pool, url, ResponseError(
+                    f"{response.status} asks for {wait:.0f} s, past what "
+                    f"{self.total} retries can wait"))
         return super().increment(method, url, response, error, _pool, _stacktrace)
 
     def get_backoff_time(self):
