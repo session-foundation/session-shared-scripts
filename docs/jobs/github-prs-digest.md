@@ -19,8 +19,8 @@ has a reason to already know about:
 **36** open from contributors across the org.
 
 **session-desktop**
-🟢 [#1958](…) @KyWB · 12h · 💬1 · Fix issue #563
-✏️ [#1904](…) @scrense-hash · 3h · 💬2 · feat: add SOCKS5 proxy support
+🟢 [#2001](…) @octocat · 12h · 💬1 · Fix a crash when pasting an image
+✏️ [#1990](…) @monalisa · 3h · 💬2 · feat: add a proxy setting
 ```
 
 🟢 is a PR the digest has not reported in the past year; ✏️ is one it has, which has
