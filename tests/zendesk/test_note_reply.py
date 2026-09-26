@@ -954,6 +954,15 @@ class Composition(unittest.TestCase):
     def test_en_dashes_go_too(self):
         self.assertEqual(undash_english("gone – sorry"), "gone, sorry")
 
+    def test_line_breaks_survive(self):
+        """A reply's list and its sign-off are separate lines to the customer."""
+        self.assertEqual(undash_english("Try these:\n– restart the app\n– reinstall it"),
+                         "Try these:\n- restart the app\n- reinstall it")
+        self.assertEqual(undash_english("Thanks for waiting —\n\nBest, Team"),
+                         "Thanks for waiting,\n\nBest, Team")
+        self.assertEqual(undash_english("Steps:\n  — one\n  — two"),
+                         "Steps:\n  - one\n  - two")
+
     def test_every_option_is_cleaned_not_just_the_first(self):
         result = note_reply.validate_composition(dict(ENGLISH, options=[
             option("eins — zwei"), option("drei — vier")]))
