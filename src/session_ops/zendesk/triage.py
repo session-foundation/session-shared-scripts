@@ -1104,7 +1104,7 @@ def main(argv=None):
     # rendering written there would be a write to a production ticket for a dialog
     # that can never be opened.
     if needs_discord:
-        attach_english(zd, subdomain, classified, shown, model,
+        attach_english(zd, subdomain, classified, shown, resolve_api_model(model),
                        get_env(ENGLISH_FIELD_ENV, required=False))
 
     messages, coverage = build_messages(findings, subdomain, stats, updated_ids)
