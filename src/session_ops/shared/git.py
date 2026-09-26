@@ -10,10 +10,25 @@ import subprocess
 
 
 def reason(stderr):
-    """git's own error line, rather than whatever a wrapper printed before it."""
+    """git's own error line, rather than whatever a wrapper printed before it.
+
+    On a rejected push the server's refusal says why; git's closing
+    "error: failed to push some refs" does not.
+    """
     lines = [line.strip() for line in stderr.splitlines() if line.strip()]
-    errors = [line for line in lines if line.startswith(("fatal:", "error:"))]
-    return (errors or lines or ["no output"])[0][:300]
+    for prefixes in (("remote: error:",), ("! [",), ("fatal:", "error:")):
+        errors = [line for line in lines if line.startswith(prefixes)]
+        if errors:
+            return errors[0][:300]
+    return (lines or ["no output"])[0][:300]
+
+
+def subcommand(args):
+    """The git command `args` run, past any leading `-c name=value` pairs."""
+    index = 0
+    while index < len(args) and args[index] == "-c":
+        index += 2
+    return args[index] if index < len(args) else "git"
 
 
 class Repo:
@@ -30,7 +45,7 @@ class Repo:
         done = subprocess.run(["git", "-C", self.path, *args], env=self.env,
                               capture_output=True, text=True, check=False)
         if check and done.returncode:
-            raise RuntimeError(f"git {args[0]} failed: {reason(done.stderr)}")
+            raise RuntimeError(f"git {subcommand(args)} failed: {reason(done.stderr)}")
         return done
 
     @classmethod

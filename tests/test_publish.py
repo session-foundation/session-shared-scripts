@@ -113,6 +113,42 @@ class TestGitErrors(unittest.TestCase):
         self.assertEqual(reason(stderr), "fatal: Could not read from remote repository.")
 
 
+class TestGitFailures(RepoTest):
+    def test_a_rejected_push_quotes_the_servers_refusal(self):
+        """GitHub says why in a remote: line; git's own closing error does not."""
+        bare = bare_repo(self.root, "app", "main", {"a.txt": "a"})
+        hook = os.path.join(bare, "hooks", "pre-receive")
+        with open(hook, "w", encoding="utf-8") as handle:
+            handle.write("#!/bin/sh\necho 'error: GH006: Protected branch update failed "
+                         "for refs/heads/main.' >&2\nexit 1\n")
+        os.chmod(hook, 0o755)
+        repo = self.clone("app", "main", ["/a.txt"])
+        with open(os.path.join(repo.path, "a.txt"), "w", encoding="utf-8") as handle:
+            handle.write("b")
+        repo.commit("change", AUTHOR)
+        with self.assertRaises(RuntimeError) as caught:
+            repo.push("main")
+        self.assertEqual(str(caught.exception), "git push failed: remote: error: GH006: "
+                         "Protected branch update failed for refs/heads/main.")
+
+    def test_a_rejection_without_a_remote_error_quotes_the_rejected_ref(self):
+        from session_ops.shared.git import reason
+        stderr = ("To https://github.com/o/r\n"
+                  " ! [remote rejected] HEAD -> main (pre-receive hook declined)\n"
+                  "error: failed to push some refs to 'https://github.com/o/r'\n")
+        self.assertEqual(reason(stderr),
+                         "! [remote rejected] HEAD -> main (pre-receive hook declined)")
+
+    def test_a_failed_commit_is_named_as_a_commit(self):
+        bare_repo(self.root, "app", "main", {"a.txt": "a"})
+        repo = self.clone("app", "main", ["/a.txt"])
+        with open(os.path.join(repo.path, "a.txt"), "w", encoding="utf-8") as handle:
+            handle.write("b")
+        with self.assertRaises(RuntimeError) as caught:
+            repo.commit("change", " <>")
+        self.assertRegex(str(caught.exception), r"^git commit failed: fatal: empty ident")
+
+
 class TestPullRequest(RepoTest):
     def setUp(self):
         super().setUp()
