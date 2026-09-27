@@ -62,7 +62,7 @@ env = ["CROWDIN_API_TOKEN", "CROWDIN_DISCORD_WEBHOOK_URL"]
 channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
 schedule = "*-*-* 03:00 UTC"
 max_age_hours = 28
-# About 20 minutes; a full scan without --croql is ~110k requests, an hour at 30/s.
+# About 9 minutes; a full scan without --croql is ~110k requests, about 85 minutes.
 timeout = "2h"
 
 [[job]]

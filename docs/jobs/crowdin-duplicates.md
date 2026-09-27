@@ -46,8 +46,9 @@ since CroQL cannot tell categories apart. Checked on 2026-09-25 against a full s
 a planted second suggestion on a singular string in `fr` was the one singular candidate
 across all 80 locales, and both found the same slot.
 
-Without `--croql`, a locale is one request per string: about 110,000 requests for the
-whole project, an hour at the 30 requests a second the client allows itself.
+A full run takes about 9 minutes, most of it the two listings each locale costs before
+its candidates. Without `--croql`, a locale is one request per string: about a minute
+each, and 85 minutes for the whole project.
 `session-ops run crowdin-duplicates -- --locales fr` without it is the way to check
 the narrowing again.
 
