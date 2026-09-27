@@ -28,7 +28,7 @@ Config (env vars, or flags for local runs):
     GITHUB_PRS_ORG        (optional) org to scan; defaults to session-foundation
 
 Usage:
-    # real run (what the timer does)
+    # real run, stateless: everything in the last 72 hours is new
     github-prs-digest
 
     # fetch and render, print the payload, post nothing

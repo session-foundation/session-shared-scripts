@@ -62,4 +62,4 @@ every other call keeps working. One read-only token covers everything here:
 
 - **No extra keys** - No strings that don't exist in English
 
-> **Note:** Plural strings skip variable/tag comparison because languages have different plural forms (English: 2, Arabic: 6, Russian: 4). It would be nice to add suppot for plural validation in the future.
+> **Note:** Plural strings skip variable/tag comparison because languages have different plural forms (English: 2, Arabic: 6, Russian: 4). It would be nice to add support for plural validation in the future.
