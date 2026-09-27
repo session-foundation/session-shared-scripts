@@ -21,7 +21,12 @@ OPS="$ROOT/.venv/bin/session-ops"
     exit 1
 }
 [ "$(id -u)" = 0 ] || { echo "install.sh: run as root" >&2; exit 1; }
-[ "$(stat -c %u "$ROOT")" = 0 ] || { echo "install.sh: $ROOT is not owned by root" >&2; exit 1; }
+unsafe=$(find "$ROOT" -xdev \( ! -user root -o \( ! -type l -perm /022 \) \) -print -quit)
+[ -z "$unsafe" ] || {
+    echo "install.sh: $unsafe is writable by someone other than root:" >&2
+    echo "  chown -R root:root $ROOT && chmod -R go-w $ROOT" >&2
+    exit 1
+}
 command -v uv >/dev/null || {
     echo "install.sh: uv is missing:" >&2
     echo "  curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh" >&2
