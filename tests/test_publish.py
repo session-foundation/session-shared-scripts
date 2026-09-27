@@ -226,9 +226,51 @@ class TestDirectPush(RepoTest):
         with open(os.path.join(repo.path, "generated/english.ts"), "w") as handle:
             handle.write("b")
         with contextlib.redirect_stdout(io.StringIO()):
-            self.assertIn("pushed", publish.direct_push(repo, "m", "main", "T", AUTHOR, False))
+            self.assertIn("pushed", publish.direct_push(repo, None, "m", "main", "T", "B",
+                                                        AUTHOR, False))
         self.assertEqual(git("show", "main:generated/english.ts",
                              cwd=os.path.join(self.root, "session-foundation", "module")), "b")
+
+
+class TestRehearsal(RepoTest):
+    """Production's bot branches and the module's main are never written."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.dict(os.environ, {"SESSION_OPS_REHEARSAL": "1"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def edit(self, name, branch, path):
+        repo = self.clone(name, branch, [f"/{path}"])
+        with open(os.path.join(repo.path, path), "w", encoding="utf-8") as handle:
+            handle.write("new\n")
+        return repo
+
+    def test_a_pull_request_goes_to_a_prefixed_branch_and_says_so(self):
+        bare_repo(self.root, "app", "dev", {"strings.xml": "old\n"})
+        api = GitHubFake()
+        with contextlib.redirect_stdout(io.StringIO()):
+            publish.pull_request(self.edit("app", "dev", "strings.xml"), api,
+                                 "session-foundation/app", "dev", "bot", "Title", "Body",
+                                 AUTHOR, False)
+        self.assertEqual(sorted(self.branches("app")), ["dev", "rehearsal/bot"])
+        opened = [c for c in api.calls if c[0] == "POST"][0][2]["json"]
+        self.assertEqual((opened["head"], opened["base"]), ("rehearsal/bot", "dev"))
+        self.assertTrue(opened["title"].startswith("[Rehearsal] "))
+        self.assertIn("do not merge", opened["body"])
+
+    def test_a_direct_push_opens_a_pull_request_instead(self):
+        bare_repo(self.root, "module", "main", {"generated/english.ts": "a"})
+        tip = git("rev-parse", "main", cwd=os.path.join(self.root, "session-foundation", "module"))
+        api = GitHubFake()
+        with contextlib.redirect_stdout(io.StringIO()):
+            publish.direct_push(self.edit("module", "main", "generated/english.ts"), api,
+                                "session-foundation/module", "main", "T", "B", AUTHOR, False)
+        self.assertEqual(git("rev-parse", "main",
+                             cwd=os.path.join(self.root, "session-foundation", "module")), tip)
+        opened = [c for c in api.calls if c[0] == "POST"][0][2]["json"]
+        self.assertEqual((opened["head"], opened["base"]), ("rehearsal/direct-push-to-main", "main"))
 
 
 class TestAppToken(unittest.TestCase):

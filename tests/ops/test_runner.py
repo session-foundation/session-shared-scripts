@@ -71,6 +71,15 @@ class TestRun(unittest.TestCase):
         mode = os.stat(os.path.join(self.state, "alerted")).st_mode & 0o777
         self.assertEqual(mode, 0o644)
 
+    def test_the_rehearsal_marker_reaches_the_job(self):
+        marker = os.path.join(self.state, "rehearsal")
+        with mock.patch.object(runner, "REHEARSAL_MARKER", marker):
+            self.run_job(job("succeeds"))
+            self.assertNotIn("SESSION_OPS_REHEARSAL", os.environ)
+            open(marker, "w").close()
+            self.run_job(job("succeeds"))
+        self.assertEqual(os.environ.get("SESSION_OPS_REHEARSAL"), "1")
+
     def test_an_exception_is_one_sentence_with_secrets_scrubbed(self):
         self.run_job(job("raises"), extra=["s3cr3t-value"])
         content = self.posted[0][1][0]["content"]

@@ -282,6 +282,56 @@ systemd-run --pipe --wait -p User=crowdin -p EnvironmentFile=/etc/session-ops/cr
   /opt/session-ops/.venv/bin/session-ops run crowdin-duplicates --dry-run -- --locales de
 ```
 
+## Rehearsing on a spare host
+
+A host with `/etc/session-ops/rehearsal` runs every job against live data without
+writing over production. Create it before the first `install.sh`:
+
+```bash
+install -d /etc/session-ops && touch /etc/session-ops/rehearsal
+```
+
+While it exists:
+
+- crowdin-sync and snode-list open `[Rehearsal]` pull requests from `rehearsal/…`
+  branches. Production's bot branches and their pull requests are never touched, and
+  session-localization gets a pull request against `main` instead of a push to it.
+- zendesk-digest's resolver reports what it would solve and solves nothing.
+
+What the file does not cover, so set it up this way:
+
+- Every `*_DISCORD_WEBHOOK_URL` and `ALERT_DISCORD_WEBHOOK_URL` points at your own
+  channels.
+- `ZENDESK_ENGLISH_FIELD_ID` stays unset: it writes to live tickets.
+- `RELAY_DRY_RUN=1` and `CROWDIN_RELAY_DRY_RUN=1`, and neither Zendesk's nor Crowdin's
+  webhook points here. Without them the relays receive nothing.
+- The GitHub App is installed on the three repositories, as for production.
+
+Run each job once rather than waiting for its timer, and read what it did in its
+journal, the Discord channels and the pull requests:
+
+```bash
+for job in github-prs-digest zendesk-digest crowdin-sync snode-list release-stats; do
+  systemctl start "session-ops@$job.service"
+done
+journalctl -u 'session-ops@*' --since -1h --no-pager
+```
+
+crowdin-duplicates needs its seed first (see above); after it, delete or add a
+suggestion in Crowdin and run it to see a post.
+
+To clean up, close the pull requests and delete their branches:
+
+```bash
+for repo in session-android session-ios session-localization; do
+  gh pr list -R "session-foundation/$repo" --state open --json number,headRefName \
+    -q '.[] | select(.headRefName | startswith("rehearsal/")) | .number' |
+    xargs -r -I{} gh pr close -R "session-foundation/$repo" {} --delete-branch
+done
+```
+
+Removing the file makes the next run publish for real.
+
 ## Updating
 
 ```bash

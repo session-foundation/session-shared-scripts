@@ -31,6 +31,8 @@ from session_ops.shared import discord, http
 from session_ops.zendesk import claude_cli
 
 ALERTED_MARKER = "alerted"
+# Present on a host rehearsing production: jobs publish beside it (publish.rehearsing).
+REHEARSAL_MARKER = "/etc/session-ops/rehearsal"
 ERROR_CHARS = 300
 SECRET_NAME = re.compile(r"TOKEN|SECRET|KEY|WEBHOOK|PASSWORD|SEED", re.IGNORECASE)
 # The bare path too: urllib3 quotes a failed request's URL without its host.
@@ -170,6 +172,8 @@ def run(job, dry_run=False, extra=()):
     missing = [name for name in job.env if not os.environ.get(name)]
     work = tempfile.mkdtemp(prefix=f"{job.name}-")
     os.environ["SESSION_OPS_WORK_DIR"] = work
+    if os.path.exists(REHEARSAL_MARKER):
+        os.environ["SESSION_OPS_REHEARSAL"] = "1"
     try:
         if missing:
             _step = "checking the environment"

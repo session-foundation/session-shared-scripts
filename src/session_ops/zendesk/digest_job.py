@@ -10,6 +10,7 @@ is reported and the digest runs anyway.
 import argparse
 
 from session_ops.ops.runner import Outcome, call_target, step
+from session_ops.platforms import publish
 from session_ops.zendesk import resolve_reviews, triage
 
 RESOLVER, DIGEST = "resolve reviews", "digest"
@@ -24,8 +25,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     step(RESOLVER)
-    resolved = call_target(resolve_reviews.main,
-                           ["--no-discord"] if args.dry_run else ["--apply"])
+    # A rehearsal reads the live Zendesk account, so it reports what it would solve.
+    report_only = args.dry_run or publish.rehearsing()
+    resolved = call_target(resolve_reviews.main, ["--no-discord"] if report_only else ["--apply"])
     step(DIGEST)
     digest = ["--window-hours", str(args.window_hours)]
     if args.state:

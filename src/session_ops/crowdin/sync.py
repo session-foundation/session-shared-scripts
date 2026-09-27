@@ -88,7 +88,7 @@ def generate(target, repo, parsed):
 def publish_target(target, repo, api, author, dry_run):
     name = f"{publish.ORG}/{REPOS[target]}"
     if target == "localization":
-        return publish.direct_push(repo, name, "main", TITLE, author, dry_run)
+        return publish.direct_push(repo, api, name, "main", TITLE, BODY, author, dry_run)
     return publish.pull_request(repo, api, name, "dev", BOT_BRANCH, TITLE, BODY, author,
                                 dry_run)
 

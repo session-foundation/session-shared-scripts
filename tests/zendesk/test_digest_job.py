@@ -57,6 +57,12 @@ class TestDigestJob(unittest.TestCase):
         self.assertIn("--no-discord", calls[0][1])
         self.assertIn("--dry-run", calls[1][1])
 
+    def test_a_rehearsal_solves_nothing_but_still_posts_the_digest(self):
+        with mock.patch.dict("os.environ", {"SESSION_OPS_REHEARSAL": "1"}):
+            _, calls = self.run_job(["--state", "/s/seen.json"])
+        self.assertNotIn("--apply", calls[0][1])
+        self.assertNotIn("--dry-run", calls[1][1])
+
     def test_every_flag_passed_on_is_one_the_script_defines(self):
         _, calls = self.run_job(["--state", "/s", "--dry-run"])
         _, real = self.run_job(["--state", "/s"])

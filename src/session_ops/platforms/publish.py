@@ -6,14 +6,28 @@ closed and the branch deleted, since there is nothing left to merge. A push whos
 matches the branch already there is skipped, so an unchanged run does not wake the
 pull request's reviewers.
 """
+import os
+
 from session_ops.shared import github
 
 GITHUB = "https://github.com"
 ORG = "session-foundation"
+REHEARSAL_PREFIX = "rehearsal/"
+REHEARSAL_NOTE = ("**Rehearsal of session-ops: do not merge.** Close it and delete the branch "
+                  "once reviewed; production publishes to the branch without the "
+                  f"`{REHEARSAL_PREFIX}` prefix.\n\n")
+
+
+def rehearsing():
+    """Whether this run publishes beside production rather than over it. The runner sets
+    it for every job while /etc/session-ops/rehearsal exists."""
+    return os.environ.get("SESSION_OPS_REHEARSAL") == "1"
 
 
 def pull_request(repo, api, name, base, branch, title, body, author, dry_run):
     """Publish `repo`'s uncommitted changes to `branch`. Returns a one-line result."""
+    if rehearsing():
+        branch, title, body = REHEARSAL_PREFIX + branch, f"[Rehearsal] {title}", REHEARSAL_NOTE + body
     if not repo.changed():
         if not dry_run:
             github.retire_branch(api, name, branch)
@@ -29,8 +43,12 @@ def pull_request(repo, api, name, base, branch, title, body, author, dry_run):
     return f"{name}: {github.ensure_pull(api, name, branch, base, title, body)}"
 
 
-def direct_push(repo, name, branch, message, author, dry_run):
-    """Commit `repo`'s changes straight onto `branch`, without forcing anything."""
+def direct_push(repo, api, name, branch, message, body, author, dry_run):
+    """Commit `repo`'s changes straight onto `branch`, without forcing anything. A
+    rehearsal opens a pull request against `branch` instead."""
+    if rehearsing():
+        return pull_request(repo, api, name, branch, f"direct-push-to-{branch}", message, body,
+                            author, dry_run)
     if not repo.changed():
         return f"{name}: no changes on {branch}"
     repo.commit(message, author)
