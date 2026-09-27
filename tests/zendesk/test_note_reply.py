@@ -666,6 +666,14 @@ class LatestCommand(unittest.TestCase):
                                           self.session_for("end-user"), "sub")
         self.assertIsNone(found)
 
+    def test_an_author_that_cannot_be_looked_up_fails_the_run(self):
+        """Rather than reading as a refusal, which would clear the queue tag."""
+        comments = [comment("claude: reply", cid=3)]
+        with self.assertRaises(SystemExit) as raised:
+            note_reply.latest_command(comments, API_USER,
+                                      fake_session(FakeResponse({}, status_code=503)), "sub")
+        self.assertIn(note_reply.TAG_QUEUED, str(raised.exception.code))
+
     def test_no_command_present(self):
         self.assertIsNone(note_reply.latest_command(
             [comment("just a note")], API_USER, fake_session(*[]), "sub"))

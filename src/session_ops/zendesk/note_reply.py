@@ -1124,6 +1124,10 @@ def latest_command(comments, api_user, session, subdomain):
         if not parsed:
             continue
         user = api.fetch_user(session, subdomain, comment.get("author_id"))
+        # An author we could not look up is not a refusal: exiting keeps TAG_QUEUED.
+        if not user:
+            sys.exit(f"Could not look up the author of note {comment.get('id')}; "
+                     f"it stays {TAG_QUEUED}.")
         if not may_command(user):
             print(f"Ignoring a command from {user.get('role') or 'an unknown user'}.")
             return None
