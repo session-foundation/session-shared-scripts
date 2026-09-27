@@ -6,6 +6,9 @@ Wants=network-online.target
 # Restart=always means this rarely reaches a failed state — only after crash-looping
 # past the start limit, which is exactly the case nobody would otherwise notice.
 OnFailure=session-ops-alert@%n.service
+# Wide enough that a loop of slow startups, RestartSec=2 apart, still trips it.
+StartLimitIntervalSec=5min
+StartLimitBurst=5
 
 [Service]
 Type=exec
