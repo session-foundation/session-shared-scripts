@@ -34,9 +34,14 @@ def fetch(session):
     if resp.status_code != 200:
         raise RuntimeError(f"{SOURCE} answered {resp.status_code}")
     try:
-        json.loads(resp.content)
-    except ValueError as exc:
-        raise RuntimeError(f"{SOURCE} is not JSON: {exc}") from exc
+        nodes = json.loads(resp.content).get("service_node_states")
+    except (ValueError, AttributeError) as exc:
+        raise RuntimeError(f"{SOURCE} is not a JSON object: {exc}") from exc
+    # An empty list parses as well as a full one, and strands clients just the same.
+    if not nodes or not isinstance(nodes, list) or not all(
+            isinstance(node, dict) and node.get("public_ip") and node.get("pubkey_ed25519")
+            for node in nodes):
+        raise RuntimeError(f"{SOURCE} holds no usable service_node_states")
     return resp.content
 
 

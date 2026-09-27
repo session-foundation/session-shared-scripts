@@ -300,8 +300,10 @@ class TestSnodeList(RepoTest):
             snode_list.main(list(argv))
         return out.getvalue()
 
+    NODE = {"public_ip": "203.0.113.7", "pubkey_ed25519": "ab" * 32}
+
     def test_the_fetched_list_is_committed_byte_for_byte(self):
-        body = '{"service_node_states": [1, 2]}'
+        body = json.dumps({"service_node_states": [self.NODE, self.NODE], "height": 1})
         self.assertIn("would push", self.run_job(body, "--dry-run"))
         with open(os.path.join(self.work, "session-ios", snode_list.PATH),
                   encoding="utf-8") as handle:
@@ -310,6 +312,14 @@ class TestSnodeList(RepoTest):
     def test_a_body_that_is_not_json_is_never_published(self):
         with self.assertRaises(RuntimeError):
             self.run_job("<html>rate limited</html>", "--dry-run")
+
+    def test_an_empty_or_malformed_list_is_never_published(self):
+        for body in ("[]", "{}", '{"service_node_states": []}',
+                     '{"service_node_states": [{"public_ip": "203.0.113.7"}]}'):
+            response = FakeResponse(None)
+            response.text = body
+            with self.subTest(body=body), self.assertRaises(RuntimeError):
+                snode_list.fetch(FakeSession([response]))
 
 
 class TestCrowdinSync(RepoTest):
