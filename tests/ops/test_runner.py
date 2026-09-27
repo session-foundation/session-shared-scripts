@@ -62,6 +62,15 @@ class TestRun(unittest.TestCase):
         self.assertIn("systemctl start session-ops@demo.service", content)
         self.assertEqual(self.marker(), "inv-1")
 
+    def test_the_marker_is_readable_by_the_backstop_under_a_private_umask(self):
+        previous = os.umask(0o077)
+        try:
+            self.run_job(job("exits"))
+        finally:
+            os.umask(previous)
+        mode = os.stat(os.path.join(self.state, "alerted")).st_mode & 0o777
+        self.assertEqual(mode, 0o644)
+
     def test_an_exception_is_one_sentence_with_secrets_scrubbed(self):
         self.run_job(job("raises"), extra=["s3cr3t-value"])
         content = self.posted[0][1][0]["content"]

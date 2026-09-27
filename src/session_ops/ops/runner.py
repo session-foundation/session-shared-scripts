@@ -125,6 +125,8 @@ def mark_alerted(state_dir):
     try:
         with open(os.path.join(state_dir, ALERTED_MARKER), "w", encoding="utf-8") as handle:
             handle.write(invocation)
+            # The job's UMask makes it 0600; the backstop reads it as another account.
+            os.fchmod(handle.fileno(), 0o644)
     except OSError as exc:
         print(f"Could not record the alert ({exc}); the backstop may repeat it.",
               file=sys.stderr)

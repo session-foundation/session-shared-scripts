@@ -37,6 +37,9 @@ SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 # The open slots, shared with session-ops@crowdin-duplicates under a file lock.
 StateDirectory=session-ops/crowdin-duplicates
+# As session-ops@.service sets them; systemd reapplies the mode at every start.
+StateDirectoryMode=0711
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

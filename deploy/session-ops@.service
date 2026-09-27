@@ -19,6 +19,11 @@ ExecStartPost=+/usr/bin/touch /var/lib/session-ops/stamps/%i
 # reboots. What must outlive a run goes in the state directory.
 PrivateTmp=yes
 StateDirectory=session-ops/%i
+# Other accounts may open a file here by name but not list the directory, and the
+# umask keeps every file private: only the `alerted` marker is made readable, for
+# the backstop, which runs as sessionops.
+StateDirectoryMode=0711
+UMask=0077
 CacheDirectory=session-ops/%i
 
 NoNewPrivileges=yes
