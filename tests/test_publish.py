@@ -93,6 +93,19 @@ class TestSparseCheckout(RepoTest):
         self.assertFalse(os.path.exists(os.path.join(repo.path, "src/Main.kt")))
         self.assertFalse(repo.changed())
 
+    def test_a_relative_path_lands_where_it_names(self):
+        bare_repo(self.root, "app", "dev", {"res/strings.xml": "a"})
+        previous = os.getcwd()
+        os.chdir(self.work)
+        os.mkdir("nested")
+        try:
+            repo = Repo.sparse_clone(f"file://{self.root}/session-foundation/app", "dev",
+                                     "nested/app", ["/res/"])
+        finally:
+            os.chdir(previous)
+        self.assertEqual(repo.path, os.path.join(os.path.realpath(self.work), "nested", "app"))
+        self.assertTrue(os.path.exists(os.path.join(repo.path, "res/strings.xml")))
+
     def test_the_token_travels_in_the_environment_not_the_command_line(self):
         """Any account on the box can read another process's argv from `ps`."""
         import base64

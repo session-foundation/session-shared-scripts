@@ -51,7 +51,9 @@ class Repo:
     @classmethod
     def sparse_clone(cls, url, branch, path, patterns, token=None, blob_filter=True):
         """Check out only `patterns` (gitignore syntax) of `branch`'s tip."""
-        repo = cls(os.path.dirname(path) or ".", token)
+        # Absolute, since the clone runs from the parent and would resolve it again.
+        path = os.path.abspath(path)
+        repo = cls(os.path.dirname(path), token)
         repo.git("clone", "--depth", "1", "--no-checkout", "--branch", branch,
                  *(["--filter=blob:none"] if blob_filter else []), url, path)
         repo.path = path
