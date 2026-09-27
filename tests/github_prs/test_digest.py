@@ -196,6 +196,16 @@ class TestLines(unittest.TestCase):
     def test_a_pr_with_no_comments_says_nothing_about_them(self):
         self.assertNotIn("💬", digest.build_pr_line(pr(9, comments=0), NOW, True))
 
+    def test_a_masked_link_in_a_title_shows_its_url(self):
+        line = digest.build_pr_line(pr(9, title="[Get the build](https://evil.example/x)"),
+                                    NOW, True)
+        self.assertTrue(line.endswith(r"\[Get the build\](<https://evil.example/x>)"))
+
+    def test_a_bare_url_in_a_title_is_not_previewed(self):
+        for title in ("see https://a.example/b", "see <https://a.example/b>"):
+            line = digest.build_pr_line(pr(9, title=title), NOW, True)
+            self.assertTrue(line.endswith("see <https://a.example/b>"), line)
+
     def test_long_titles_are_clipped(self):
         line = digest.build_pr_line(pr(9, title="x" * 200), NOW, True)
         self.assertIn("…", line)

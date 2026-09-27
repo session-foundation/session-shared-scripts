@@ -41,6 +41,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from operator import itemgetter
@@ -267,6 +268,7 @@ def save_state(path, state, reported, retention_days=DEFAULT_RETENTION_DAYS, cov
 # rather than mid-list, unless one repository alone outgrows a message.
 MAX_COMPONENTS_PER_MESSAGE = 10
 TITLE_CHARS = 90
+URL = re.compile(r"<?(https?://[^\s<>()\[\]\\]+)>?")
 
 NEW_MARKER = "🟢"
 UPDATED_MARKER = "✏️"
@@ -286,10 +288,16 @@ def age(then, now):
     return f"{days // 7}w"
 
 
+def show_links(text):
+    """`text` with every link shown as its bare URL: never masked behind other words,
+    and never previewed."""
+    return URL.sub(r"<\1>", text.replace("[", "\\[").replace("]", "\\]"))
+
+
 def build_pr_line(pr, now, is_new):
     marker = NEW_MARKER if is_new else UPDATED_MARKER
     stamp = age(parse_time(pr["created_at"] if is_new else pr["updated_at"]), now)
-    title = clip(pr.get("title"), TITLE_CHARS)
+    title = show_links(clip(pr.get("title"), TITLE_CHARS))
     if pr.get("draft"):
         title = f"[draft] {title}"
     comments = pr.get("comments") or 0
