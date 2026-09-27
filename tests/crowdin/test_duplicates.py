@@ -323,6 +323,35 @@ class TestRelayCheck(unittest.TestCase):
             relay.check(12, "de")
         crowdin.assert_not_called()
 
+    def test_a_state_moved_aside_mid_check_is_not_recreated(self):
+        directory = tempfile.mkdtemp()
+        state_path = os.path.join(directory, "duplicates.json")
+        duplicates.save(state_path, duplicates.empty_state())
+
+        def move_aside(*args):
+            os.rename(state_path, state_path + ".old")
+            return [finding(12, "de")]
+
+        api = FakeSession([FakeResponse({"data": {"id": 12, "identifier": "g", "text": "Hi"}})])
+        env = {"CROWDIN_DUPLICATES_STATE": state_path, "CROWDIN_DISCORD_WEBHOOK_URL": "https://hook"}
+        with mock.patch.object(relay, "crowdin",
+                               lambda: (sdk.client("t", 1, session=api), PROJECT)), \
+                mock.patch.object(relay.duplicates, "check_string", move_aside), \
+                mock.patch.object(relay.discord, "post_to_discord") as post, \
+                mock.patch.dict(os.environ, env), contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            relay.check(12, "de")
+        post.assert_not_called()
+        self.assertFalse(os.path.exists(state_path))
+
+
+class TestLoad(unittest.TestCase):
+    def test_a_missing_state_is_refused_unless_the_caller_allows_it(self):
+        path = os.path.join(tempfile.mkdtemp(), "none.json")
+        with self.assertRaises(SystemExit):
+            duplicates.load(path)
+        self.assertEqual(duplicates.load(path, missing_ok=True), duplicates.empty_state())
+
 
 if __name__ == "__main__":
     unittest.main()

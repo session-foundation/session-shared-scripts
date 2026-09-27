@@ -111,11 +111,15 @@ def empty_state():
     return {"version": STATE_VERSION, "slots": {}, "checked": {}}
 
 
-def load(path):
+def load(path, missing_ok=False):
     """The state at `path`. Unlike a digest's dedup file, a lost one is not harmless:
-    every open slot would be reported as new, so an unreadable file stops the run."""
+    every open slot would be reported as new, so a missing or unreadable file stops
+    the run unless the caller is seeding it or writing nothing."""
     if not os.path.exists(path):
-        return empty_state()
+        if missing_ok:
+            return empty_state()
+        raise SystemExit(f"No state at {path}: record what is open first with --seed, "
+                         f"or every open slot is posted as new.")
     with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
     if data.get("version") != STATE_VERSION:

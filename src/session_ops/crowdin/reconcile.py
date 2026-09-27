@@ -29,7 +29,6 @@ Usage:
 import argparse
 import concurrent.futures
 import json
-import os
 import sys
 
 from session_ops.crowdin import duplicates, sdk
@@ -110,9 +109,8 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true",
                         help="Print what would be posted; write nothing.")
     args = parser.parse_args(argv)
-    if not (args.seed or args.dry_run or os.path.exists(args.state)):
-        sys.exit(f"No state at {args.state}: record what is open first with --seed, "
-                 f"or every open slot is posted as new.")
+    if not (args.seed or args.dry_run):
+        duplicates.load(args.state)  # refuses a missing state before the scan, not after
 
     token = get_env("CROWDIN_API_TOKEN")
     webhook = get_env("CROWDIN_DISCORD_WEBHOOK_URL",
@@ -141,7 +139,7 @@ def main(argv=None):
         sys.exit("No locale could be scanned.")
 
     with duplicates.locked(args.state):
-        state = duplicates.load(args.state)
+        state = duplicates.load(args.state, missing_ok=args.seed or args.dry_run)
         checked = {**vanished(state, strings, None if args.locales else project.locales,
                               started), **checked}
         opened, resolved = duplicates.apply(state, findings, checked, duplicates.now(),
