@@ -120,6 +120,13 @@ class TestMessagesFromEntries(unittest.TestCase):
         types = [c["type"] for c in message["components"][0]["components"]]
         self.assertEqual(types, [discord.TEXT_DISPLAY, discord.SEPARATOR, discord.TEXT_DISPLAY])
 
+    def test_no_message_can_ping(self):
+        entries = [("@everyone look", {1}), ("<@&123> and @here", {2})]
+        messages, _ = discord.messages_from_entries("header", entries, 1)
+        self.assertEqual(len(messages), 2)
+        for message in messages:
+            self.assertEqual(message["allowed_mentions"], {"parse": []})
+
     def test_only_the_first_message_carries_the_header(self):
         entries = [(f"e{i}", {i}) for i in range(3)]
         messages, coverage = discord.messages_from_entries("header", entries, 2)

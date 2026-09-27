@@ -35,7 +35,9 @@ def separator():
 
 
 def container_message(blocks):
+    # Entries quote text written by outsiders (PR titles, logins, tickets): never ping.
     return {"flags": COMPONENTS_V2_FLAG,
+            "allowed_mentions": {"parse": []},
             "components": [{"type": CONTAINER, "components": blocks}]}
 
 
