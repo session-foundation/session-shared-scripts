@@ -31,7 +31,7 @@ CLAUDE_CLI = "claude"
 # CLAUDE_CODE_OAUTH_TOKEN is deliberately not in this list. It is a subscription
 # credential like the interactive login, not an API key, and it is the only one of
 # these an unattended host can renew on a yearly rather than weekly cadence — see
-# deploy/README.md. Nothing else can set it: it has never been written by anything
+# deploy/env/zendesk.env.example. Nothing else can set it: it has never been written by anything
 # this repo deploys, so it reaches the CLI only because somebody put it there.
 CLAUDE_AUTH_OVERRIDES = (
     "ANTHROPIC_API_KEY",

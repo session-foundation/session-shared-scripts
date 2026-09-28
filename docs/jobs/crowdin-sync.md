@@ -32,7 +32,7 @@ Gradle build runs here.
 
 Publishing authenticates as the GitHub App: `GITHUB_APP_ID` in `publish.env` and its
 key in `/etc/session-ops/github-app.pem`, and a run missing either exits naming it (a
-dry run needs neither); see [deploy/README.md](../../deploy/README.md#secrets).
+dry run needs neither); see [publish.env.example](../../deploy/env/publish.env.example).
 Commits are authored as `PUBLISH_GIT_AUTHOR`.
 
 ### Crowdin token scopes
@@ -43,7 +43,7 @@ every other call keeps working. One read-only token covers everything here:
 
 | Token | Scopes | Used by |
 | --- | --- | --- |
-| `CROWDIN_API_TOKEN`, keyring `translation-api-token` | read-only: Projects, Source files & strings, Translations, Glossaries | this sync, [the duplicate report](crowdin-duplicates.md) and its relay |
+| `CROWDIN_API_TOKEN`, keyring `translation-api-token` | read-only: Projects, Source files & strings, Translations, Glossaries | this sync and [the duplicate report](crowdin-duplicates.md) |
 
 ## Validation Rules
 
