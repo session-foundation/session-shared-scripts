@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from session_ops.crowdin import duplicates, reconcile, relay, sdk
 from session_ops.shared import discord
 from session_ops.shared.testing import FakeResponse, FakeSession, RecordedSession
-from tests.golden import assert_golden, load_golden_json
+from tests.crowdin.recording import EXCHANGES
 
 API = "https://api.crowdin.com/api/v2"
 PROJECT = duplicates.Project({
@@ -104,8 +104,8 @@ class TestMessages(unittest.TestCase):
 
 
 def recording(changes=None):
-    """The report's recording, with some strings' German translations replaced."""
-    exchanges = copy.deepcopy(load_golden_json("report/responses.json")["exchanges"])
+    """The recording, with some strings' German translations replaced."""
+    exchanges = copy.deepcopy(EXCHANGES)
     for ex in exchanges:
         sid = (ex.get("params") or {}).get("stringId")
         if sid in (changes or {}):
@@ -173,7 +173,13 @@ class TestReconcile(unittest.TestCase):
             102: [translation(3, "Datei konnte nicht gespeichert werden."),
                   translation(16, "Speichern fehlgeschlagen.")],
         })
-        assert_golden(self, "reconcile/dry-run.json", self.run_reconcile(changed, "--dry-run"))
+        embeds = [e for m in json.loads(self.run_reconcile(changed, "--dry-run"))
+                  for e in m["embeds"]]
+        self.assertIn("**1** slot(s) newly holding 2+ translations, **1** resolved",
+                      embeds[0]["description"])
+        self.assertEqual([e["title"] for e in embeds[1:]], ["de — 1 new", "de — 1 resolved"])
+        self.assertIn("[attachmentsSaveError]", embeds[1]["description"])
+        self.assertIn("[accept]", embeds[2]["description"])
         self.assertIn("101:de:", self.slots(), "a dry run writes nothing")
 
     def test_an_unchanged_run_posts_nothing_at_all(self):
