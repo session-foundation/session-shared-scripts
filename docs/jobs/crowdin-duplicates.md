@@ -40,8 +40,13 @@ across all 80 locales, and both found the same slot.
 A full run takes about 9 minutes, most of it the two listings each locale costs before
 its candidates. Without `--croql`, a locale is one request per string: about a minute
 each, and 85 minutes for the whole project.
-`session-ops run crowdin-duplicates -- --locales fr` without it is the way to check
-the narrowing again.
+To check the narrowing again, compare one locale with and without it, posting and
+writing nothing (as the `crowdin` user, with `crowdin.env` loaded):
+
+```bash
+crowdin-reconcile-duplicates --dry-run --state /tmp/none.json --locales fr
+crowdin-reconcile-duplicates --dry-run --state /tmp/none.json --locales fr --croql
+```
 
 ## The sharded report
 

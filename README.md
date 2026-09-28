@@ -17,8 +17,8 @@ share for translations. One package, `session_ops`, deployed to one self-hosted 
 | `release-stats` | On demand: download counts of the latest releases | [release-stats](docs/jobs/release-stats.md) |
 | `session-ops-silence` | Discord alerts for a job that failed, or stopped running | [session-ops-silence](docs/jobs/session-ops-silence.md) |
 
-Run by hand, not scheduled: [`sogs-ban` and `sogs-perms`](docs/tools/sogs-ban.md) for
-community bans.
+Run by hand, not scheduled: [`sogs-ban`](docs/tools/sogs-ban.md) for community bans, and
+[`sogs-perms`](src/session_ops/sogs/perms.py) for a room's per-account permissions.
 
 ## Development
 

@@ -13,7 +13,8 @@ cannot reach the seed nodes. A change opens, or updates, a pull request from
 | Re-run | `systemctl start session-ops@snode-list.service` |
 | Logs | `journalctl -u session-ops@snode-list -n 50 --no-pager` |
 
-The file is committed exactly as fetched, but only once it parses as JSON: an error
-page published as the fallback would strand exactly the clients it exists for. The
+The file is committed exactly as fetched, but only once it holds service nodes, each
+with an IP and a key: an error page or an empty list published as the fallback would
+strand exactly the clients it exists for. The
 branch follows the same rules as [the translation sync's](crowdin-sync.md): rebuilt
 from `dev`, not pushed when unchanged, retired when `dev` already has the list.

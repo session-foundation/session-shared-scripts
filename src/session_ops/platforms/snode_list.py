@@ -3,8 +3,9 @@ Daily: copy the service node list from session-desktop-dynamic-assets into sessi
 as the fallback a new client uses when it cannot reach the seed nodes, and open a pull
 request from feature/update-static-snode-list when it changed.
 
-The list is published as fetched, byte for byte, but only once it parses as JSON: a
-fallback that fails to parse would strand exactly the clients it exists for.
+The list is published as fetched, byte for byte, but only once it holds service nodes,
+each with an IP and a key: a fallback that is empty or unreadable would strand exactly
+the clients it exists for.
 
     session-ops run snode-list [--dry-run]
 """
