@@ -665,6 +665,21 @@ class LatestCommand(unittest.TestCase):
                                       fake_session(FakeResponse({}, status_code=503)), "sub")
         self.assertIn(note_reply.TAG_QUEUED, str(raised.exception.code))
 
+    def test_an_author_zendesk_no_longer_has_is_refused(self):
+        comments = [comment("claude: reply", cid=3)]
+        self.assertIsNone(note_reply.latest_command(
+            comments, API_USER, fake_session(FakeResponse({}, status_code=404)), "sub"))
+
+    def test_a_handled_command_needs_no_lookup(self):
+        """So a lookup failing on the run Claude's own outcome note triggers cannot leave
+        a served command looking stuck."""
+        session = fake_session()
+        comments = [comment(f"done {note_reply.done_marker(3)}", author=API_USER, cid=4),
+                    comment("claude: reply", cid=3)]
+        found = note_reply.latest_command(comments, API_USER, session, "sub")
+        self.assertEqual(found["id"], 3)
+        self.assertEqual(session.calls, [])
+
     def test_no_command_present(self):
         self.assertIsNone(note_reply.latest_command(
             [comment("just a note")], API_USER, fake_session(*[]), "sub"))

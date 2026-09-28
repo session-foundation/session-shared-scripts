@@ -1109,16 +1109,20 @@ def latest_command(comments, api_user, session, subdomain):
         parsed = parse_command(comment_text(comment))
         if not parsed:
             continue
-        user = api.fetch_user(session, subdomain, comment.get("author_id"))
-        # An author we could not look up is not a refusal: exiting keeps TAG_QUEUED.
-        if not user:
-            sys.exit(f"Could not look up the author of note {comment.get('id')}; "
+        command = {"id": comment.get("id"), "author": comment.get("author_id"),
+                   "action": parsed[0], "brief": parsed[1]}
+        # Handled already, so its author was allowed then; main says so and clears the tag.
+        if api.has_marker(comments, done_marker(command["id"])):
+            return command
+        user = api.lookup_user(session, subdomain, command["author"])
+        # A lookup that failed is not a refusal: exiting keeps TAG_QUEUED for a retry.
+        if user is None:
+            sys.exit(f"Could not look up the author of note {command['id']}; "
                      f"it stays {TAG_QUEUED}.")
         if not may_command(user):
             print(f"Ignoring a command from {user.get('role') or 'an unknown user'}.")
             return None
-        return {"id": comment.get("id"), "author": comment.get("author_id"),
-                "action": parsed[0], "brief": parsed[1]}
+        return command
     return None
 
 

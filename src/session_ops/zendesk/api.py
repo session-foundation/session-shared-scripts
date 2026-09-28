@@ -227,20 +227,28 @@ def has_marker(comments, wanted):
 AGENT_ROLES = ("agent", "admin")
 
 
+def lookup_user(session, subdomain, user_id):
+    """One Zendesk user; {} when Zendesk answers that there is none; None when it could
+    not be asked, so a caller can tell a user that is gone from a lookup to retry."""
+    url = f"https://{subdomain}.zendesk.com/api/v2/users/{user_id}.json"
+    try:
+        resp = session.request("GET", url, attempts=2)
+        if resp.status_code == 404:
+            return {}
+        if resp.status_code >= 400:
+            return None
+        return (resp.json() or {}).get("user") or {}
+    except requests.RequestException:
+        return None
+
+
 def fetch_user(session, subdomain, user_id):
     """One Zendesk user, or {} when it cannot be read.
 
     An author we cannot resolve is treated as a customer by customer_authors, so a
     failed lookup widens the sample rather than silencing it.
     """
-    url = f"https://{subdomain}.zendesk.com/api/v2/users/{user_id}.json"
-    try:
-        resp = session.request("GET", url, attempts=2)
-        if resp.status_code >= 400:
-            return {}
-        return (resp.json() or {}).get("user") or {}
-    except requests.RequestException:
-        return {}
+    return lookup_user(session, subdomain, user_id) or {}
 
 
 def customer_authors(session, subdomain, ticket, comments):
