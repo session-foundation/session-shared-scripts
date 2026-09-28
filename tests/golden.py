@@ -1,13 +1,7 @@
-"""Byte-for-byte comparison of a job's output with tests/goldens/."""
-import json
+"""Byte-for-byte comparison of generated output with tests/goldens/."""
 import os
 
 GOLDENS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "goldens")
-
-
-def load_golden_json(relpath):
-    with open(os.path.join(GOLDENS_DIR, relpath), encoding="utf-8") as handle:
-        return json.load(handle)
 
 
 def assert_golden(case, relpath, actual):

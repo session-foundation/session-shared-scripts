@@ -33,7 +33,7 @@ uv run ruff check .
 
 `tests/sogs` skips itself unless `session_util` is importable; see
 [its dependencies](docs/tools/sogs-ban.md#dependencies) for why it is not on PyPI.
-[tests/goldens](tests/goldens/README.md) pins each job's output byte for byte.
+[tests/goldens](tests/goldens/README.md) pins the systemd drop-ins generated from `jobs.toml`.
 
 ## Workflow Failure Notificaiton
 
