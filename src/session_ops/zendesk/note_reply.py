@@ -47,11 +47,6 @@ Config (env vars, or flags for local runs):
     ZENDESK_SUBDOMAIN     e.g. "mycompany"  -> https://mycompany.zendesk.com
     ZENDESK_EMAIL         agent email for API token auth; authors every comment
     ZENDESK_API_TOKEN     Zendesk API token
-    ZENDESK_NOTE_AUTHORS  (optional) comma-separated Zendesk user ids allowed to
-                          command it. Unset means any agent or admin on the account,
-                          which is already the set of people who can write a private
-                          note at all.
-    ZENDESK_NOTE_MODEL    (optional) overrides the model
     ZENDESK_HOUSE_ANSWERS (optional) path to the house-answer file — what support
                           usually replied to each kind of problem, per platform.
                           Absent, drafting works exactly as it does without it
@@ -214,18 +209,9 @@ def api_user_id(session, subdomain):
 
 
 def may_command(user):
-    """Whether this Zendesk user may drive the command.
-
-    Default is any agent or admin: only they can write a private note in the first
-    place, so an allowlist is a narrowing, not the gate. Setting ZENDESK_NOTE_AUTHORS
-    narrows it to named ids — and an id that is not on the account fails closed,
-    because the role check is applied either way.
-    """
-    if user.get("role") not in ("agent", "admin"):
-        return False
-    allowed = [item.strip() for item in
-               (os.environ.get("ZENDESK_NOTE_AUTHORS") or "").split(",") if item.strip()]
-    return not allowed or str(user.get("id")) in allowed
+    """Whether this Zendesk user may drive the command: any agent or admin, the people
+    who can write a private note at all."""
+    return user.get("role") in ("agent", "admin")
 
 
 def change_tags(session, subdomain, ticket_id, add=(), drop=()):
@@ -1139,7 +1125,7 @@ def latest_command(comments, api_user, session, subdomain):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Act on claude: notes on a Zendesk ticket.")
     parser.add_argument("--ticket", type=int, required=True)
-    parser.add_argument("--model", default=os.environ.get("ZENDESK_NOTE_MODEL", DEFAULT_MODEL),
+    parser.add_argument("--model", default=DEFAULT_MODEL,
                         help="a model id, or opus, sonnet or haiku for the id the digest "
                              "would use")
     parser.add_argument("--dry-run", action="store_true",

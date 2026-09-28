@@ -73,8 +73,7 @@ the tool silently stops working for them.
 
 Only private comments count, so a customer typing `claude:` into a public reply is
 ignored. The author must be an agent or admin — the set of people who can write a
-private note at all. `ZENDESK_NOTE_AUTHORS` narrows that to named user ids; the role
-check still applies, so an id on the list that is not an agent is still refused.
+private note at all.
 
 An unauthorised author **stops** the search rather than falling through to an older
 command. Their note is the most recent instruction on the ticket, and quietly acting
@@ -135,8 +134,6 @@ A trigger, and a webhook it calls:
 | Secret | Description |
 | --- | --- |
 | `ZENDESK_WEBHOOK_SECRET` | Shared secret Zendesk signs the webhook with. Unset refuses every request |
-| `ZENDESK_NOTE_AUTHORS` | *(optional)* Comma-separated Zendesk user ids allowed to command it. Unset means any agent or admin |
-| `ZENDESK_NOTE_MODEL` | *(optional)* Overrides the model |
 
 The Zendesk credentials and Claude authentication are the ones the digest already
 uses. `RELAY_DRY_RUN` covers this path too: the whole run happens and nothing is

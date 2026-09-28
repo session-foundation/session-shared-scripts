@@ -627,15 +627,6 @@ class Authorisation(unittest.TestCase):
     def test_end_users_may_not(self):
         self.assertFalse(note_reply.may_command({"id": AGENT, "role": "end-user"}))
 
-    def test_allowlist_narrows_further(self):
-        with Patched(os, environ={**os.environ, "ZENDESK_NOTE_AUTHORS": "1,2"}):
-            self.assertFalse(note_reply.may_command({"id": AGENT, "role": "agent"}))
-            self.assertTrue(note_reply.may_command({"id": 2, "role": "agent"}))
-
-    def test_allowlist_does_not_override_the_role_check(self):
-        with Patched(os, environ={**os.environ, "ZENDESK_NOTE_AUTHORS": str(AGENT)}):
-            self.assertFalse(note_reply.may_command({"id": AGENT, "role": "end-user"}))
-
 
 class LatestCommand(unittest.TestCase):
     def session_for(self, role="agent"):

@@ -125,8 +125,6 @@ ZENDESK_API_TOKEN=
 ZENDESK_DISCORD_WEBHOOK_URL=
 # The secret on the Zendesk webhook. Empty refuses every note webhook.
 ZENDESK_WEBHOOK_SECRET=
-# Optional. Zendesk user ids allowed to drive `claude:` notes; empty is any agent or admin.
-#ZENDESK_NOTE_AUTHORS=
 # Optional. Grounds `claude: draft` and is all of `claude: explain`. It holds customer
 # text, so it is not in the repo; copy it by hand:
 #     install -o zendesk -g zendesk -m 640 house_answers.json /var/lib/session-ops/zendesk-digest/
