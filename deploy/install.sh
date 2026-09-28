@@ -120,6 +120,8 @@ for job in $("$OPS" list --not-ready); do
 done
 if [ -s "$ETC/zendesk.env" ]; then
     systemctl enable zendesk-relay.service >/dev/null
+    # A relay that hit its start limit refuses `start` until the limit is cleared.
+    systemctl reset-failed zendesk-relay.service 2>/dev/null || true
     systemctl try-restart zendesk-relay.service
     systemctl start zendesk-relay.service
     echo "running zendesk-relay.service"
