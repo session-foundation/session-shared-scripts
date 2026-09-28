@@ -20,7 +20,7 @@ NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
 CUTOFF = NOW - timedelta(hours=25)
 
 
-def pr(number=1, login="octocat", repo="session-android", created="2026-09-24T08:00:00Z",
+def pr(number=1, login="example-contributor-1", repo="session-android", created="2026-09-24T08:00:00Z",
        updated=None, title="Fix a thing", user_type="User", **extra):
     item = {
         "id": 10_000 + number,
@@ -176,10 +176,10 @@ class TestAge(unittest.TestCase):
 
 class TestLines(unittest.TestCase):
     def test_a_new_pr_line_carries_the_link_author_and_age(self):
-        line = digest.build_pr_line(pr(2151, login="octocat"), NOW, True)
+        line = digest.build_pr_line(pr(2151, login="example-contributor-1"), NOW, True)
         self.assertIn(digest.NEW_MARKER, line)
         self.assertIn("[#2151](https://github.com/session-foundation/session-android/pull/2151)", line)
-        self.assertIn("@octocat", line)
+        self.assertIn("@example-contributor-1", line)
         self.assertIn("4h", line)
 
     def test_an_updated_line_ages_from_the_update_not_the_creation(self):

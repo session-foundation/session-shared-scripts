@@ -19,8 +19,8 @@ has a reason to already know about:
 **36** open from contributors across the org.
 
 **session-desktop**
-🟢 [#2001](…) @octocat · 12h · 💬1 · Fix a crash when pasting an image
-✏️ [#1990](…) @monalisa · 3h · 💬2 · feat: add a proxy setting
+🟢 [#2001](…) @example-contributor-1 · 12h · 💬1 · Fix a crash when pasting an image
+✏️ [#1990](…) @example-contributor-2 · 3h · 💬2 · feat: add a proxy setting
 ```
 
 🟢 is a PR the digest has not reported in the past year; ✏️ is one it has, which has
@@ -75,13 +75,6 @@ page fetches — the digest says the counts are a floor instead of failing.
 [`maintainers.txt`](../../src/session_ops/github_prs/maintainers.txt), one login per line, matched
 case-insensitively. Bot accounts need no entry — every account GitHub types as a `Bot`
 is dropped, so a renamed Dependabot stays out on its own.
-
-Neither of the two things GitHub could answer this with is a substitute. Org membership
-covers six accounts, two of which are not in the review loop; push access is held by a
-dozen more as outside collaborators, several of them contractors whose PRs are exactly
-what the digest is for. Both would get it wrong in both directions, so the list is
-written by hand — and goes stale silently, since a new maintainer's PRs are reported as
-a stranger's until someone adds them.
 
 ## What is left out
 

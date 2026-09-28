@@ -86,32 +86,6 @@ Once the server is upgraded past `21e2ef2` the fallback can be dropped: those ro
 then resolve a 05 id themselves, and against both blinded candidates, so the first
 attempt answers and the loop never reaches the rest. It is harmless until then.
 
-## Letting a test account post
-
-Our rooms are read-only to everyone but moderators, so a test account has nothing for
-the deletion step to delete and the run proves nothing.
-[`perms.py`](../../src/session_ops/sogs/perms.py) grants it write permission in
-one room, and takes it back afterwards:
-
-```sh
-uv run sogs-perms --room session-updates --write on --upload on 05<test account>
-# ... post from that account, then ban it, then:
-uv run sogs-perms --room session-updates --write default --upload default 05<test account>
-```
-
-`on` grants, `off` denies (muting one account without banning it), `default` drops the
-override back to the room's own default. The endpoint answers with the account's
-remaining overrides, so an empty object is the confirmation that the last one is gone.
-
-This route is blinded-id-only too, and here guessing the wrong one of the two is
-silent rather than loud: the endpoint creates the account row it is given, so the
-permission would land on an id nobody holds and the answer would look like success.
-The two candidates are resolved first against `POST /inbox/<id>` with an empty body —
-`400` is the server saying that account exists, `404` that it does not, and nothing is
-delivered either way because the `400` comes before the message is read. An account
-that has never opened the community answers `404` under both, and so does a banned
-one: unban before granting.
-
 ## The server
 
 `SOGS_URL` and `SOGS_PUBKEY` are constants in the script, not configuration. This bans
