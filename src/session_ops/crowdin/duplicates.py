@@ -221,7 +221,5 @@ def build_messages(opened, resolved, still_open, project):
     return discord.pack_embeds(embeds)
 
 
-
-
 def now():
     return time.time()

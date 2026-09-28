@@ -226,8 +226,6 @@ def build_messages(findings, scanned_locales, note=""):
     return discord.pack_embeds(embeds)
 
 
-
-
 def post_to_discord(webhook_url, messages):
     # A fresh, unauthenticated session: the Crowdin Bearer token must never be
     # sent to Discord.

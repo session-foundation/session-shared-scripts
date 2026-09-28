@@ -1,4 +1,5 @@
-"""A synthetic Crowdin project with one locale, de, in the shape of the API's answers."""
+"""A synthetic Crowdin project in the shape of the API's answers. It targets de, fr and
+es-ES, but only de's translations are recorded: a test scans de alone."""
 
 EXCHANGES = [{'method': 'GET',
   'url': 'https://api.crowdin.com/api/v2/projects/618696',
