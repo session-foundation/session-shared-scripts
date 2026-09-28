@@ -260,6 +260,19 @@ class TestRehearsal(RepoTest):
         self.assertTrue(opened["title"].startswith("[Rehearsal] "))
         self.assertIn("do not merge", opened["body"])
 
+    def test_nothing_to_publish_leaves_production_s_pull_request_alone(self):
+        bare_repo(self.root, "app", "dev", {"strings.xml": "old\n"})
+        repo = self.clone("app", "dev", ["/strings.xml"])
+        api = GitHubFake(open_pulls=[{"number": 5, "html_url": "https://github.com/pr/5"}])
+        with contextlib.redirect_stdout(io.StringIO()):
+            publish.pull_request(repo, api, "session-foundation/app", "dev", "bot", "Title",
+                                 "Body", AUTHOR, False)
+        listed = [c[2]["params"]["head"] for c in api.calls if c[0] == "GET"]
+        deleted = [c[1] for c in api.calls if c[0] == "DELETE"]
+        self.assertEqual(listed, ["session-foundation:rehearsal/bot"])
+        self.assertEqual(len(deleted), 1)
+        self.assertTrue(deleted[0].endswith("/git/refs/heads/rehearsal/bot"))
+
     def test_a_direct_push_opens_a_pull_request_instead(self):
         bare_repo(self.root, "module", "main", {"generated/english.ts": "a"})
         tip = git("rev-parse", "main", cwd=os.path.join(self.root, "session-foundation", "module"))
