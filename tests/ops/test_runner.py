@@ -71,14 +71,25 @@ class TestRun(unittest.TestCase):
         mode = os.stat(os.path.join(self.state, "alerted")).st_mode & 0o777
         self.assertEqual(mode, 0o644)
 
-    def test_the_rehearsal_marker_reaches_the_job(self):
+    def test_the_rehearsal_marker_reaches_the_job_while_it_runs(self):
         marker = os.path.join(self.state, "rehearsal")
         with mock.patch.object(runner, "REHEARSAL_MARKER", marker):
-            self.run_job(job("succeeds"))
-            self.assertNotIn("SESSION_OPS_REHEARSAL", os.environ)
+            self.run_job(job("records_rehearsal"))
             open(marker, "w").close()
-            self.run_job(job("succeeds"))
-        self.assertEqual(os.environ.get("SESSION_OPS_REHEARSAL"), "1")
+            self.run_job(job("records_rehearsal"))
+        self.assertEqual(fake_jobs.calls, [False, True])
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads the marker whatever its directory's mode")
+    def test_a_marker_that_cannot_be_read_fails_the_run_before_the_job(self):
+        locked = os.path.join(self.state, "etc")
+        os.mkdir(locked)
+        open(os.path.join(locked, "rehearsal"), "w").close()
+        os.chmod(locked, 0)
+        self.addCleanup(os.chmod, locked, 0o700)
+        with mock.patch.object(runner, "REHEARSAL_MARKER", os.path.join(locked, "rehearsal")):
+            self.assertEqual(self.run_job(job("records_rehearsal")), 1)
+        self.assertEqual(fake_jobs.calls, [])
+        self.assertIn("cannot tell whether this host rehearses", self.posted[0][1][0]["content"])
 
     def test_an_exception_is_one_sentence_with_secrets_scrubbed(self):
         self.run_job(job("raises"), extra=["s3cr3t-value"])

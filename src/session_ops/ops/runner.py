@@ -31,8 +31,20 @@ from session_ops.shared import discord, http
 from session_ops.zendesk import claude_cli
 
 ALERTED_MARKER = "alerted"
-# Present on a host rehearsing production: jobs publish beside it (publish.rehearsing).
+# Present on a host rehearsing production: jobs publish beside it (env.rehearsing).
 REHEARSAL_MARKER = "/etc/session-ops/rehearsal"
+
+
+def rehearsal_marker():
+    """True or False, or the reason it cannot tell. Not being able to tell stops the run:
+    publishing for real by mistake is what the marker exists to prevent."""
+    try:
+        os.stat(REHEARSAL_MARKER)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        return f"cannot read {REHEARSAL_MARKER} ({exc.strerror}), so cannot tell whether this host rehearses"
+    return True
 ERROR_CHARS = 300
 SECRET_NAME = re.compile(r"TOKEN|SECRET|KEY|WEBHOOK|PASSWORD|SEED", re.IGNORECASE)
 # The bare path too: urllib3 quotes a failed request's URL without its host.
@@ -172,12 +184,17 @@ def run(job, dry_run=False, extra=()):
     missing = [name for name in job.env if not os.environ.get(name)]
     work = tempfile.mkdtemp(prefix=f"{job.name}-")
     os.environ["SESSION_OPS_WORK_DIR"] = work
-    if os.path.exists(REHEARSAL_MARKER):
+    rehearsal = rehearsal_marker()
+    if rehearsal is True:
         os.environ["SESSION_OPS_REHEARSAL"] = "1"
+        print("Rehearsal: publishing to rehearsal/ branches and writing nothing to tickets.")
     try:
         if missing:
             _step = "checking the environment"
             outcome, error = Outcome(), f"missing {', '.join(missing)} in the environment"
+        elif rehearsal not in (True, False):
+            _step = "checking for a rehearsal"
+            outcome, error = Outcome(), rehearsal
         else:
             outcome, error = call(job, job.argv(dry_run, state_dir) + list(extra))
     finally:

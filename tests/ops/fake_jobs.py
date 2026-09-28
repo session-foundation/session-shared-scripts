@@ -1,11 +1,16 @@
 """Entry points for the runner's tests."""
 from session_ops.ops.runner import Outcome, step
+from session_ops.shared.env import rehearsing
 
 calls = []
 
 
 def succeeds(argv):
     calls.append(argv)
+
+
+def records_rehearsal(argv):
+    calls.append(rehearsing())
 
 
 def exits(argv):
