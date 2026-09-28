@@ -6,5 +6,3 @@ d /var/lib/session-ops/stamps 0755 root root -
 # The copies of a run's inputs and outputs a job keeps for debugging. The box reboots
 # often and nothing else prunes them; systemd-tmpfiles-clean.timer applies this daily.
 e /var/lib/session-ops/*/runs - - - 14d
-# nginx's error log for the Crowdin route, whose URL carries the webhook secret.
-d /var/log/session-ops 0700 root root -

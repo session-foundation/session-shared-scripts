@@ -8,7 +8,7 @@ name, so a rename cannot unsubscribe a unit the way matching on a workflow name 
 A `session-ops run` reports its own failures, with more to say than this can, and
 records the invocation it reported. This stays quiet for that invocation and speaks
 for the rest: a run killed, timed out, or unable to reach Discord, and any unit that
-is not a job, such as the relays.
+is not a job, such as the Zendesk relay.
 
 Posts over ALERT_DISCORD_WEBHOOK_URL, else ZENDESK_DISCORD_WEBHOOK_URL, rather than
 anything with a bot token: a failure notifier should depend on as little as possible

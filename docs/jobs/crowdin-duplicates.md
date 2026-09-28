@@ -6,11 +6,11 @@ for a plural string, is what gets exported. A slot is (string, locale, plural ca
 
 | | |
 | --- | --- |
-| Runs | `crowdin-relay.service`, always on, behind nginx at `POST /crowdin/suggestions/<secret>`; `session-ops@crowdin-duplicates.timer`, daily 03:00 UTC |
-| Secrets | `/etc/session-ops/crowdin.env`: a read-only `CROWDIN_API_TOKEN`, the channel's webhook, `CROWDIN_WEBHOOK_SECRET` |
-| Dry run | `session-ops run crowdin-duplicates --dry-run -- --locales de`; `CROWDIN_RELAY_DRY_RUN=1` for the relay |
+| Runs | `session-ops@crowdin-duplicates.timer`, daily 03:00 UTC |
+| Secrets | `/etc/session-ops/crowdin.env`: a read-only `CROWDIN_API_TOKEN` and the channel's webhook |
+| Dry run | `session-ops run crowdin-duplicates --dry-run -- --locales de` |
 | Re-run | `systemctl start session-ops@crowdin-duplicates.service` |
-| Logs | `journalctl -u crowdin-relay -u session-ops@crowdin-duplicates -n 50 --no-pager` |
+| Logs | `journalctl -u session-ops@crowdin-duplicates -n 50 --no-pager` |
 
 ## How it stays current
 
@@ -18,24 +18,15 @@ The open slots live in `/var/lib/session-ops/crowdin-duplicates/duplicates.json`
 only what changed: slots newly holding 2+ translations, and slots that no longer do.
 Nothing changed, nothing is posted.
 
-- **The relay** takes Crowdin's suggestion events (added, updated, deleted, approved,
-  disapproved), answers at once, then re-checks the one (string, locale) the event names.
-  Crowdin signs nothing, so the secret is the webhook URL's last path segment.
-- **Reconciliation** judges every string of every locale once a day. Crowdin never
-  retries a webhook it failed to deliver, so this is what keeps the state correct; the
-  relay only makes it prompt. Anything missed is posted at most a day late. A slot
-  whose string was deleted, or whose locale left the project, resolves here: the
-  relay cannot see either.
-
-Both write the state under a file lock. The relay records when it checked each
-(string, locale), and reconciliation ignores its own older view of that one, so a scan
-that started before a suggestion landed cannot resolve what the event just opened.
-The state is written only once Discord accepted every message, so a failed post is
-repeated in full rather than lost.
+Reconciliation judges every string of every locale once a day, so a new duplicate is
+posted within a day, well before the weekly export. A slot whose string was deleted,
+or whose locale left the project, resolves. One reconciliation runs at a time: one
+started while another holds the state's lock exits. The state is written only once
+Discord accepted every message, so a failed post is repeated in full rather than lost.
 
 Losing the state is not harmless the way a digest's dedup file is: every open slot
-would be reported again. So reconciliation, like the relay, refuses to run without a
-state file; seed one with `--seed`, which records without posting.
+would be reported again. So reconciliation refuses to run without a state file; seed
+one with `--seed`, which records without posting.
 
 ## Cost
 

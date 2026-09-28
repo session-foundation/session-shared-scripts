@@ -15,7 +15,7 @@ the step it was on, one sentence of error with secrets scrubbed, each target's r
 and the commands to read the journal and re-run it. It records the invocation it
 reported, and `OnFailure=` starts `session-ops-alert`, which stays quiet for that
 invocation and otherwise posts the unit, the host and the last line it logged: a run
-killed, timed out, or unable to reach Discord, and the relays, which are not jobs. A
+killed, timed out, or unable to reach Discord, and the Zendesk relay, which is not a job. A
 dead Claude Code login is named as such, since re-running the job does not fix it.
 
 **A run that never happened.** A timer left disabled, a unit renamed, a host down

@@ -10,11 +10,9 @@ import tempfile
 import unittest
 from unittest import mock
 
-from fastapi.testclient import TestClient
-
-from session_ops.crowdin import duplicates, reconcile, relay, sdk
+from session_ops.crowdin import duplicates, reconcile, sdk
 from session_ops.shared import discord
-from session_ops.shared.testing import FakeResponse, FakeSession, RecordedSession
+from session_ops.shared.testing import RecordedSession
 from tests.crowdin.recording import EXCHANGES
 
 API = "https://api.crowdin.com/api/v2"
@@ -31,49 +29,32 @@ def finding(sid, lang="de", cat=None, count=2, identifier=None):
 class TestApply(unittest.TestCase):
     def test_a_new_slot_opens_and_a_gone_one_resolves(self):
         state = duplicates.empty_state()
-        opened, _ = duplicates.apply(state, [finding(1)], {"1:de": 10, "2:de": 10}, 10, False)
+        opened, _ = duplicates.apply(state, [finding(1)], {"1:de", "2:de"}, 10)
         self.assertEqual([s["stringId"] for s in opened], [1])
-        opened, resolved = duplicates.apply(state, [finding(2)], {"1:de": 20, "2:de": 20},
-                                            20, False)
+        opened, resolved = duplicates.apply(state, [finding(2)], {"1:de", "2:de"}, 20)
         self.assertEqual(([s["stringId"] for s in opened], [s["stringId"] for s in resolved]),
                          ([2], [1]))
         self.assertEqual(list(state["slots"]), ["2:de:"])
 
     def test_an_open_slot_seen_again_is_not_news(self):
         state = duplicates.empty_state()
-        duplicates.apply(state, [finding(1)], {"1:de": 10}, 10, False)
-        self.assertEqual(duplicates.apply(state, [finding(1, count=3)], {"1:de": 20}, 20, False),
-                         ([], []))
+        duplicates.apply(state, [finding(1)], {"1:de"}, 10)
+        self.assertEqual(duplicates.apply(state, [finding(1, count=3)], {"1:de"}, 20), ([], []))
         self.assertEqual(state["slots"]["1:de:"]["count"], 3)
 
-    def test_only_the_checked_scopes_are_judged(self):
-        """A relay check of one string must not resolve every other open slot."""
+    def test_only_the_judged_scopes_are_touched(self):
+        """A string that failed to fetch keeps its open slot rather than resolving."""
         state = duplicates.empty_state()
-        duplicates.apply(state, [finding(1), finding(2)], {"1:de": 10, "2:de": 10}, 10, False)
-        _, resolved = duplicates.apply(state, [], {"2:de": 20}, 20, True)
+        duplicates.apply(state, [finding(1), finding(2)], {"1:de", "2:de"}, 10)
+        _, resolved = duplicates.apply(state, [], {"2:de"}, 20)
         self.assertEqual([s["stringId"] for s in resolved], [2])
         self.assertIn("1:de:", state["slots"])
 
     def test_each_plural_category_is_its_own_slot(self):
         state = duplicates.empty_state()
-        duplicates.apply(state, [finding(1, cat="one"), finding(1, cat="few")],
-                         {"1:de": 10}, 10, False)
-        _, resolved = duplicates.apply(state, [finding(1, cat="one")], {"1:de": 20}, 20, False)
+        duplicates.apply(state, [finding(1, cat="one"), finding(1, cat="few")], {"1:de"}, 10)
+        _, resolved = duplicates.apply(state, [finding(1, cat="one")], {"1:de"}, 20)
         self.assertEqual([s["pluralCategory"] for s in resolved], ["few"])
-
-    def test_a_scan_older_than_an_event_check_leaves_that_scope_alone(self):
-        """The scan fetched before the suggestion landed; the event saw it."""
-        state = duplicates.empty_state()
-        duplicates.apply(state, [finding(1)], {"1:de": 50}, 50, remember=True)
-        opened, resolved = duplicates.apply(state, [], {"1:de": 40, "2:de": 40}, 60, False)
-        self.assertEqual((opened, resolved), ([], []))
-        self.assertIn("1:de:", state["slots"])
-
-    def test_forgetting_keeps_only_checks_newer_than_the_scan(self):
-        state = duplicates.empty_state()
-        state["checked"] = {"1:de": 10, "2:de": 30}
-        duplicates.forget_checks_before(state, 20)
-        self.assertEqual(state["checked"], {"2:de": 30})
 
 
 class TestMessages(unittest.TestCase):
@@ -153,12 +134,10 @@ class TestReconcile(unittest.TestCase):
         with open(self.state, encoding="utf-8") as handle:
             return sorted(json.load(handle)["slots"])
 
-    def add_slot(self, sid, lang, checked_at=None):
+    def add_slot(self, sid, lang):
         state = duplicates.load(self.state)
         state["slots"][duplicates.slot_key(sid, lang, None)] = duplicates.record(
             finding(sid, lang), 1)
-        if checked_at is not None:
-            state["checked"][duplicates.scope_key(sid, lang)] = checked_at
         duplicates.save(self.state, state)
 
     def test_seeding_records_every_open_slot_and_posts_nothing(self):
@@ -214,12 +193,6 @@ class TestReconcile(unittest.TestCase):
         self.assertEqual(self.slots(), ["101:de:", "104:de:other", "105:de:one",
                                         "105:de:other"])
 
-    def test_a_relay_check_newer_than_the_scan_keeps_a_string_the_listing_missed(self):
-        self.run_reconcile(recording(), "--seed")
-        self.add_slot(108, "de", checked_at=duplicates.now() + 3600)
-        self.run_reconcile(recording(), "--seed")
-        self.assertIn("108:de:", self.slots())
-
     def test_a_slot_whose_locale_left_the_project_resolves(self):
         exchanges = only_locale(recording(), "de")
         self.run_reconcile(exchanges, "--seed", locales=None)
@@ -241,6 +214,12 @@ class TestReconcile(unittest.TestCase):
     def test_an_unseeded_state_still_allows_a_dry_run(self):
         self.assertIn("107", self.run_reconcile(recording(), "--dry-run"))
 
+    def test_a_second_run_refuses_while_one_holds_the_state(self):
+        self.run_reconcile(recording(), "--seed")
+        with duplicates.only_run(self.state), self.assertRaises(SystemExit) as stopped:
+            self.run_reconcile(recording(), "--dry-run")
+        self.assertIn("Another reconciliation", str(stopped.exception.code))
+
     def test_a_failed_post_writes_no_state(self):
         self.run_reconcile(recording(), "--seed")
         with open(self.state, encoding="utf-8") as handle:
@@ -254,111 +233,20 @@ class TestReconcile(unittest.TestCase):
             self.assertEqual(handle.read(), before)
 
 
-class TestRelay(unittest.TestCase):
-    SECRET = "s3cret"
-
-    def setUp(self):
-        self.client = TestClient(relay.app)
-        self.checked = []
-        patcher = mock.patch.object(relay, "check", lambda sid, lang: self.checked.append((sid, lang)))
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
-    def post(self, secret, payload, env_secret=SECRET):
-        with mock.patch.dict(os.environ, {"CROWDIN_WEBHOOK_SECRET": env_secret}):
-            return self.client.post(f"/crowdin/suggestions/{secret}", json=payload)
-
-    def event(self, sid=12, lang="uk", name="suggestion.added"):
-        return {"event": name, "translation": {"sourceString": {"id": str(sid)},
-                                               "targetLanguage": {"id": lang}}}
-
-    def test_the_right_secret_acks_and_checks_the_slot(self):
-        resp = self.post(self.SECRET, self.event())
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(self.checked, [(12, "uk")])
-
-    def test_a_wrong_secret_is_indistinguishable_from_no_route(self):
-        self.assertEqual(self.post("guess", self.event()).status_code, 404)
-        self.assertEqual(self.checked, [])
-
-    def test_an_unset_secret_refuses_everything(self):
-        self.assertEqual(self.post("", self.event(), env_secret="").status_code, 404)
-        self.assertEqual(self.post("x", self.event(), env_secret="").status_code, 404)
-
-    def test_a_batched_delivery_checks_each_scope_once(self):
-        payload = {"events": [self.event(12, "uk"), self.event(12, "uk", "suggestion.deleted"),
-                              self.event(13, "de"), {"event": "file.added"}]}
-        self.post(self.SECRET, payload)
-        self.assertEqual(sorted(self.checked), [(12, "uk"), (13, "de")])
-
-    def test_the_older_string_key_is_read_too(self):
-        event = {"event": "suggestion.updated",
-                 "translation": {"string": {"id": 7}, "targetLanguage": {"id": "fr"}}}
-        self.assertEqual(relay.scopes_from(event), {(7, "fr")})
-
-    def test_an_unplaceable_event_is_acked_and_left_to_reconciliation(self):
-        resp = self.post(self.SECRET, {"event": "suggestion.added", "translation": {}})
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(self.checked, [])
-
-
-class TestRelayCheck(unittest.TestCase):
-    def test_a_check_posts_what_changed_and_records_it(self):
-        directory = tempfile.mkdtemp()
-        state_path = os.path.join(directory, "duplicates.json")
-        duplicates.save(state_path, duplicates.empty_state())
-        api = FakeSession([
-            FakeResponse({"data": {"id": 12, "identifier": "greeting", "text": "Hi"}}),
-            FakeResponse({"data": [{"data": translation(1, "Hallo")},
-                                   {"data": translation(2, "Servus")}]}),
-            FakeResponse({"data": []}),
-        ])
-        webhook = FakeSession([FakeResponse({}, status_code=204)])
-        env = {"CROWDIN_DUPLICATES_STATE": state_path, "CROWDIN_DISCORD_WEBHOOK_URL": "https://hook"}
-        with mock.patch.object(relay, "crowdin",
-                               lambda: (sdk.client("t", 1, session=api), PROJECT)), \
-                mock.patch.object(relay.http, "Session", lambda: webhook), \
-                mock.patch.dict(os.environ, env), contextlib.redirect_stdout(io.StringIO()):
-            relay.check(12, "de")
-        self.assertIn("greeting", webhook.calls[0][2]["json"]["embeds"][1]["description"])
-        self.assertEqual(list(duplicates.load(state_path)["slots"]), ["12:de:"])
-        self.assertIn("12:de", duplicates.load(state_path)["checked"])
-
-    def test_an_unseeded_state_makes_the_relay_do_nothing(self):
-        env = {"CROWDIN_DUPLICATES_STATE": "/nonexistent/duplicates.json"}
-        with mock.patch.object(relay, "crowdin") as crowdin, mock.patch.dict(os.environ, env), \
-                contextlib.redirect_stdout(io.StringIO()):
-            relay.check(12, "de")
-        crowdin.assert_not_called()
-
-    def test_a_state_moved_aside_mid_check_is_not_recreated(self):
-        directory = tempfile.mkdtemp()
-        state_path = os.path.join(directory, "duplicates.json")
-        duplicates.save(state_path, duplicates.empty_state())
-
-        def move_aside(*args):
-            os.rename(state_path, state_path + ".old")
-            return [finding(12, "de")]
-
-        api = FakeSession([FakeResponse({"data": {"id": 12, "identifier": "g", "text": "Hi"}})])
-        env = {"CROWDIN_DUPLICATES_STATE": state_path, "CROWDIN_DISCORD_WEBHOOK_URL": "https://hook"}
-        with mock.patch.object(relay, "crowdin",
-                               lambda: (sdk.client("t", 1, session=api), PROJECT)), \
-                mock.patch.object(relay.duplicates, "check_string", move_aside), \
-                mock.patch.object(relay.discord, "post_to_discord") as post, \
-                mock.patch.dict(os.environ, env), contextlib.redirect_stdout(io.StringIO()), \
-                contextlib.redirect_stderr(io.StringIO()):
-            relay.check(12, "de")
-        post.assert_not_called()
-        self.assertFalse(os.path.exists(state_path))
-
-
 class TestLoad(unittest.TestCase):
     def test_a_missing_state_is_refused_unless_the_caller_allows_it(self):
         path = os.path.join(tempfile.mkdtemp(), "none.json")
         with self.assertRaises(SystemExit):
             duplicates.load(path)
         self.assertEqual(duplicates.load(path, missing_ok=True), duplicates.empty_state())
+
+    def test_a_state_written_with_relay_check_times_loads_without_them(self):
+        path = os.path.join(tempfile.mkdtemp(), "old.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"version": duplicates.STATE_VERSION, "slots": {"1:de:": {}},
+                       "checked": {"1:de": 5}}, handle)
+        self.assertEqual(duplicates.load(path), {"version": duplicates.STATE_VERSION,
+                                                 "slots": {"1:de:": {}}})
 
 
 if __name__ == "__main__":

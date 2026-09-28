@@ -8,7 +8,6 @@ on one machine, from one root-owned clone at `/opt/session-ops`;
 | --- | --- |
 | `session-ops@<job>.timer` → `.service` | One per job; a generated drop-in sets its account, env files and schedule. |
 | `zendesk-relay.service` | Always on, `127.0.0.1:8080`: Zendesk's `claude:` note webhooks. |
-| `crowdin-relay.service` | Always on, `127.0.0.1:8081`: Crowdin's suggestion webhooks. |
 | `session-ops-alert@.service` | Every unit's `OnFailure=` backstop; see [session-ops-silence](../docs/jobs/session-ops-silence.md). |
 
 `session-ops list` shows the jobs and schedules; `session-ops run <job> [--dry-run]
@@ -83,8 +82,7 @@ rm -rf /opt/zendesk /opt/github-prs /etc/zendesk /etc/github-prs /var/lib/zendes
 
 ### The Crowdin duplicate-translation report
 
-Seed the open slots once. Until then the relay ignores deliveries and reconciliation
-refuses to run, so every `crowdin-duplicates` timer run fails with the seed
+Seed the open slots once. Until then reconciliation refuses to run, so every `crowdin-duplicates` timer run fails with the seed
 instruction. About an hour, read-only, posts nothing:
 
 ```bash
@@ -94,15 +92,10 @@ systemd-run --pipe --wait -p User=crowdin -p EnvironmentFile=/etc/session-ops/cr
   --state /var/lib/session-ops/crowdin-duplicates/duplicates.json
 ```
 
-Add the `location ^~ /crowdin/suggestions/` block of `nginx-webhooks.conf` to the live
-file (see [Updating](#updating)). In Crowdin, project → Integrations → Webhooks → Add:
-URL `https://webhooks.session.codes/crowdin/suggestions/<CROWDIN_WEBHOOK_SECRET>`, POST,
-`application/json`, events *Suggestion added, updated, deleted, approved and disapproved*.
-
 ## Secrets
 
 A `#` starts a comment only as a line's first character; a trailing one becomes part
-of the value. A relay reads its file at start, so restart it after an edit. To see
+of the value. The Zendesk relay reads its file at start, so restart it after an edit. To see
 what a unit loads (`systemctl show -p Environment` omits `EnvironmentFile=`):
 
 ```bash
@@ -159,11 +152,6 @@ ALERT_DISCORD_WEBHOOK_URL=
 # Read-only. Scopes: Projects, Source files & strings, Translations.
 CROWDIN_API_TOKEN=
 CROWDIN_DISCORD_WEBHOOK_URL=
-# The last path segment of the URL given to Crowdin; empty refuses every delivery.
-# openssl rand -hex 32
-CROWDIN_WEBHOOK_SECRET=
-# The relay prints what it would post.
-#CROWDIN_RELAY_DRY_RUN=1
 ```
 
 ### `/etc/session-ops/publish.env`
@@ -266,15 +254,9 @@ systemd-run --pipe --wait -p User=sessionops -p EnvironmentFile=/etc/session-ops
 ls -l /var/lib/session-ops/stamps/     # one file per job that has succeeded
 ```
 
-**9. The Crowdin relay and reconciliation.** A suggestion typed in the Crowdin editor
-should then log a line in `journalctl -fu crowdin-relay`.
+**9. The Crowdin reconciliation**, on one locale and posting nothing:
 
 ```bash
-curl -sS -o /dev/null -w '%{http_code}\n' -X POST 127.0.0.1:8081/crowdin/suggestions/wrong \
-  -H 'Content-Type: application/json' -d '{}'                       # expect 404
-. /etc/session-ops/crowdin.env; curl -sS -X POST \
-  "127.0.0.1:8081/crowdin/suggestions/$CROWDIN_WEBHOOK_SECRET" \
-  -H 'Content-Type: application/json' -d '{}'                       # expect "checks":0
 systemd-run --pipe --wait -p User=crowdin -p EnvironmentFile=/etc/session-ops/crowdin.env \
   -p StateDirectory=session-ops/crowdin-duplicates \
   /opt/session-ops/.venv/bin/session-ops run crowdin-duplicates --dry-run -- --locales de
@@ -301,8 +283,8 @@ What the file does not cover, so set it up this way:
 - Every `*_DISCORD_WEBHOOK_URL` and `ALERT_DISCORD_WEBHOOK_URL` points at your own
   channels.
 - `ZENDESK_ENGLISH_FIELD_ID` stays unset: it writes to live tickets.
-- `RELAY_DRY_RUN=1` and `CROWDIN_RELAY_DRY_RUN=1`, and neither Zendesk's nor Crowdin's
-  webhook points here. Without them the relays receive nothing.
+- `RELAY_DRY_RUN=1`, and Zendesk's webhook does not point here. Without it the relay
+  receives nothing.
 - The GitHub App is installed on the three repositories, as for production.
 
 Run each job once rather than waiting for its timer, and read what it did in its

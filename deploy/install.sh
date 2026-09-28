@@ -90,6 +90,9 @@ for old in zendesk-digest github-prs-digest session-ops-silence crowdin-duplicat
     rm -f "$UNITS/$old.service" "$UNITS/$old.timer"
 done
 rm -f "$UNITS/zendesk-alert@.service" "$UNITS/github-prs-alert@.service"
+# Retired: the daily reconciliation alone keeps the duplicates state.
+systemctl disable --now crowdin-relay.service 2>/dev/null || true
+rm -f "$UNITS/crowdin-relay.service"
 
 install -m 644 "$ROOT"/deploy/*.service "$ROOT"/deploy/*.timer "$UNITS/"
 # Only the generated files go, so a drop-in added by hand survives.
@@ -115,17 +118,14 @@ done
 for job in $("$OPS" list --not-ready); do
     echo "not enabled: session-ops@$job.timer (its env file is empty)"
 done
-for relay in zendesk-relay crowdin-relay; do
-    env_file=$(systemctl show -p EnvironmentFiles --value "$relay.service" | cut -d' ' -f1)
-    if [ -s "$env_file" ]; then
-        systemctl enable "$relay.service" >/dev/null
-        systemctl try-restart "$relay.service"
-        systemctl start "$relay.service"
-        echo "running $relay.service"
-    else
-        echo "not enabled: $relay.service ($env_file is empty)"
-    fi
-done
+if [ -s "$ETC/zendesk.env" ]; then
+    systemctl enable zendesk-relay.service >/dev/null
+    systemctl try-restart zendesk-relay.service
+    systemctl start zendesk-relay.service
+    echo "running zendesk-relay.service"
+else
+    echo "not enabled: zendesk-relay.service ($ETC/zendesk.env is empty)"
+fi
 
 if [ ! -s "$ETC/alerts.env" ]; then
     cat >&2 <<EOF

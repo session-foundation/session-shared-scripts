@@ -4,12 +4,7 @@ which are open, and telling Discord what changed.
 A slot is (string, locale, plural category). Exactly one translation per slot is the
 goal, so a slot with two or more needs someone to choose the keeper.
 
-The state is the set of open slots. Two writers keep it current: the relay, one
-(string, locale) at a time as Crowdin reports suggestions, and reconciliation, over
-every string of every locale it scans. Crowdin never retries a webhook, so
-reconciliation is what makes the state correct; the relay only makes it prompt.
-Each writer records when it checked each (string, locale), and the newer check wins,
-so a scan that began before an event cannot undo what the event found.
+The state is the set of open slots, written only by the daily reconciliation.
 """
 import collections
 import contextlib
@@ -65,15 +60,10 @@ def slots_for_string(translations, approved_ids, lang, sid, meta, web_url):
     return found
 
 
-def check_string(client, sid, lang, meta, web_url, approved_ids=None):
-    """Fetch one (string, locale) and return its open slots. `approved_ids` saves a
-    request when the caller already listed the locale's approvals."""
+def check_string(client, sid, lang, meta, web_url, approved_ids):
+    """Fetch one (string, locale) and return its open slots."""
     translations = sdk.fetch_all(client.string_translations, "list_string_translations",
                                  stringId=sid, languageId=lang)
-    if approved_ids is None:
-        approved_ids = {a["translationId"] for a in sdk.fetch_all(
-            client.string_translations, "list_translation_approvals",
-            stringId=sid, languageId=lang)}
     return slots_for_string(translations, approved_ids, lang, sid, meta, web_url)
 
 
@@ -106,7 +96,7 @@ def scope_key(sid, lang):
 
 
 def empty_state():
-    return {"version": STATE_VERSION, "slots": {}, "checked": {}}
+    return {"version": STATE_VERSION, "slots": {}}
 
 
 def load(path, missing_ok=False):
@@ -123,7 +113,7 @@ def load(path, missing_ok=False):
     if data.get("version") != STATE_VERSION:
         raise SystemExit(f"{path} is version {data.get('version')!r}, expected "
                          f"{STATE_VERSION}; move it aside and --seed again.")
-    return data
+    return {"version": STATE_VERSION, "slots": data.get("slots", {})}
 
 
 def save(path, state):
@@ -134,10 +124,14 @@ def save(path, state):
 
 
 @contextlib.contextmanager
-def locked(path):
-    """Hold the state's lock: the relay and reconciliation run as separate processes."""
+def only_run(path):
+    """Refuse to start while another reconciliation holds `path`'s lock: two scans of
+    different ages applied in either order would each undo the other's view."""
     with open(f"{path}.lock", "w") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SystemExit(f"Another reconciliation holds {path}.lock; not starting.")
         try:
             yield
         finally:
@@ -151,18 +145,12 @@ def record(finding, now):
             "opened_at": now}
 
 
-def apply(state, findings, checked, now, remember):
-    """Merge a check into the state. Returns (opened, resolved) slot records.
+def apply(state, findings, judged, now):
+    """Merge a scan into the state. Returns (opened, resolved) slot records.
 
-    `checked` maps scope_key -> when that (string, locale) was fetched. Only those
-    scopes are judged, and only where the state holds no newer check: a slot outside
-    them, or checked later by someone else, is left exactly as it is.
-
-    `remember` keeps the check times, which only matters while a reconciliation that
-    started earlier may still be scanning: the relay's checks, not a scan's own.
+    `judged` is the scope_keys whose every slot the scan saw. A slot outside them is
+    left exactly as it is, so a string that failed to fetch keeps what it had.
     """
-    newer = state["checked"]
-    judged = {scope for scope, at in checked.items() if at >= newer.get(scope, 0)}
     current = {slot_key(f["stringId"], f["locale"], f["pluralCategory"]): f
                for f in findings if scope_key(f["stringId"], f["locale"]) in judged}
     opened, resolved = [], []
@@ -175,16 +163,7 @@ def apply(state, findings, checked, now, remember):
         else:
             state["slots"][key] = record(finding, now)
             opened.append(state["slots"][key])
-    if remember:
-        for scope in judged:
-            newer[scope] = checked[scope]
     return opened, resolved
-
-
-def forget_checks_before(state, cutoff):
-    """Drop the check times no scan still running can predate: a reconciliation that
-    started at `cutoff` has applied, and the next starts later."""
-    state["checked"] = {k: at for k, at in state["checked"].items() if at > cutoff}
 
 
 # ---- Discord -----------------------------------------------------------------
