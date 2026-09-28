@@ -300,9 +300,12 @@ journalctl -u 'session-ops@*' --since -1h --no-pager
 crowdin-duplicates needs its seed first (see above); after it, delete or add a
 suggestion in Crowdin and run it to see a post.
 
-To clean up, close the pull requests and delete their branches:
+To end the rehearsal, stop the host first: its timers keep opening rehearsal pull
+requests until they are disabled. Then close those pull requests and delete their
+branches:
 
 ```bash
+systemctl disable --now 'session-ops@*.timer' zendesk-relay.service
 for repo in session-android session-ios session-localization; do
   gh pr list -R "session-foundation/$repo" --state open --json number,headRefName \
     -q '.[] | select(.headRefName | startswith("rehearsal/")) | .number' |
@@ -310,7 +313,9 @@ for repo in session-android session-ios session-localization; do
 done
 ```
 
-Removing the file makes the next run publish for real.
+Leave `/etc/session-ops/rehearsal` in place on a host that is only stopped. Remove it
+only to promote the host to production, once the production host it replaces is off:
+from its next run it publishes for real, to the same branches and to `main`.
 
 ## Updating
 
