@@ -87,7 +87,7 @@ instruction. About an hour, read-only, posts nothing:
 
 ```bash
 systemd-run --pipe --wait -p User=crowdin -p EnvironmentFile=/etc/session-ops/crowdin.env \
-  -p StateDirectory=session-ops/crowdin-duplicates \
+  -p StateDirectory=session-ops/crowdin-duplicates -p StateDirectoryMode=0711 -p UMask=0077 \
   /opt/session-ops/.venv/bin/crowdin-reconcile-duplicates --seed \
   --state /var/lib/session-ops/crowdin-duplicates/duplicates.json
 ```
@@ -258,7 +258,7 @@ ls -l /var/lib/session-ops/stamps/     # one file per job that has succeeded
 
 ```bash
 systemd-run --pipe --wait -p User=crowdin -p EnvironmentFile=/etc/session-ops/crowdin.env \
-  -p StateDirectory=session-ops/crowdin-duplicates \
+  -p StateDirectory=session-ops/crowdin-duplicates -p StateDirectoryMode=0711 -p UMask=0077 \
   /opt/session-ops/.venv/bin/session-ops run crowdin-duplicates --dry-run -- --locales de
 ```
 
@@ -361,6 +361,6 @@ killed run has written no state, and `Persistent=yes` runs a missed schedule onc
 
   ```bash
   systemd-run --pipe --wait -p User=zendesk -p EnvironmentFile=/etc/session-ops/zendesk.env \
-    /opt/session-ops/.venv/bin/session-ops run zendesk-digest -- --window-hours 168
+    -p UMask=0077 /opt/session-ops/.venv/bin/session-ops run zendesk-digest -- --window-hours 168
   ```
 - **A lost `seen.json`** re-reports that digest's window once.
