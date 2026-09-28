@@ -19,12 +19,10 @@ import os
 import time
 
 from session_ops.crowdin import sdk
+from session_ops.shared import discord
 from session_ops.shared.discord import clip
 
 STATE_VERSION = 1
-MAX_EMBEDS_PER_MESSAGE = 10
-MAX_DESC_CHARS = 3800
-MAX_MESSAGE_CHARS = 6000
 OPEN_COLOR, RESOLVED_COLOR = 0xE67E22, 0x2ECC71
 
 
@@ -212,7 +210,7 @@ def section_embeds(slots, project, title, color, suffix):
         lines, used, first = [], 0, True
         for slot in items:
             line = slot_line(slot, project, suffix)
-            if lines and used + len(line) + 1 > MAX_DESC_CHARS:
+            if lines and used + len(line) + 1 > discord.MAX_EMBED_DESCRIPTION_CHARS:
                 embeds.append({"title": title(lang, len(items)) if first else f"{lang} (cont.)",
                                "description": "\n".join(lines), "color": color})
                 lines, used, first = [], 0, False
@@ -241,29 +239,9 @@ def build_messages(opened, resolved, still_open, project):
                              OPEN_COLOR, lambda s: f" — **{s['count']}** translations")
     embeds += section_embeds(resolved, project, lambda lang, n: f"{lang} — {n} resolved",
                              RESOLVED_COLOR, lambda s: "")
-    return pack_embeds(embeds)
+    return discord.pack_embeds(embeds)
 
 
-def embed_len(e):
-    total = len(e.get("title") or "") + len(e.get("description") or "")
-    for fld in e.get("fields", []):
-        total += len(fld.get("name") or "") + len(fld.get("value") or "")
-    return total
-
-
-def pack_embeds(embeds):
-    """Messages within Discord's 10 embeds and 6000 characters apiece."""
-    messages, chunk, used = [], [], 0
-    for e in embeds:
-        size = embed_len(e)
-        if chunk and (len(chunk) >= MAX_EMBEDS_PER_MESSAGE or used + size > MAX_MESSAGE_CHARS):
-            messages.append({"embeds": chunk})
-            chunk, used = [], 0
-        chunk.append(e)
-        used += size
-    if chunk:
-        messages.append({"embeds": chunk})
-    return messages
 
 
 def now():

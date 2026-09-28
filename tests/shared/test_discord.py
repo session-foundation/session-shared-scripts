@@ -101,6 +101,21 @@ class TestChunkEntries(unittest.TestCase):
         self.assertIs(discord.chunk_entries([entry], 10)[0][0], entry)
 
 
+class TestPackEmbeds(unittest.TestCase):
+    def test_splits_on_the_embed_count(self):
+        messages = discord.pack_embeds([{"title": str(i)} for i in range(11)])
+        self.assertEqual([len(m["embeds"]) for m in messages], [10, 1])
+
+    def test_splits_on_the_text_budget_and_keeps_order(self):
+        embeds = [{"title": "a", "description": "x" * 4000},
+                  {"title": "b", "description": "y" * 2500}]
+        messages = discord.pack_embeds(embeds)
+        self.assertEqual([[e["title"] for e in m["embeds"]] for m in messages], [["a"], ["b"]])
+
+    def test_counts_fields_toward_the_budget(self):
+        self.assertEqual(discord.embed_len({"title": "t", "fields": [{"name": "n", "value": "vv"}]}), 4)
+
+
 class TestMessagesFromEntries(unittest.TestCase):
     def texts(self, message):
         return [c["content"] for c in message["components"][0]["components"]

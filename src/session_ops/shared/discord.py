@@ -19,6 +19,10 @@ TEXT_DISPLAY = 10
 SEPARATOR = 14
 # Discord's ceiling on all the text in one Components V2 message.
 MAX_MESSAGE_TEXT_CHARS = 4000
+# Discord's ceilings on a message of embeds.
+MAX_EMBEDS_PER_MESSAGE = 10
+MAX_EMBED_DESCRIPTION_CHARS = 4096
+MAX_EMBEDS_TEXT_CHARS = 6000
 
 
 def clip(text, limit):
@@ -93,6 +97,29 @@ def messages_from_entries(header, entries, max_items, max_chars=MAX_MESSAGE_TEXT
         messages.append(container_message(blocks))
         coverage.append(set().union(*(ids for _, ids in chunk)) if chunk else set())
     return messages, coverage
+
+
+def embed_len(embed):
+    """The characters Discord counts toward MAX_EMBEDS_TEXT_CHARS."""
+    total = len(embed.get("title") or "") + len(embed.get("description") or "")
+    for fld in embed.get("fields", []):
+        total += len(fld.get("name") or "") + len(fld.get("value") or "")
+    return total
+
+
+def pack_embeds(embeds):
+    """Messages within Discord's embed count and text budget, embeds kept in order."""
+    messages, chunk, used = [], [], 0
+    for embed in embeds:
+        size = embed_len(embed)
+        if chunk and (len(chunk) >= MAX_EMBEDS_PER_MESSAGE or used + size > MAX_EMBEDS_TEXT_CHARS):
+            messages.append({"embeds": chunk})
+            chunk, used = [], 0
+        chunk.append(embed)
+        used += size
+    if chunk:
+        messages.append({"embeds": chunk})
+    return messages
 
 
 def components_webhook_url(webhook_url):

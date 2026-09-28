@@ -13,6 +13,7 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 from session_ops.crowdin import duplicates, reconcile, relay, sdk
+from session_ops.shared import discord
 from session_ops.shared.testing import FakeResponse, FakeSession, RecordedSession
 from tests.golden import assert_golden, load_golden_json
 
@@ -94,10 +95,11 @@ class TestMessages(unittest.TestCase):
         opened = [finding(i, identifier="x" * 80) for i in range(400)]
         messages = duplicates.build_messages(opened, [], 400, PROJECT)
         embeds = [e for m in messages for e in m["embeds"]]
-        self.assertTrue(all(len(e["description"]) <= duplicates.MAX_DESC_CHARS
+        self.assertTrue(all(len(e["description"]) <= discord.MAX_EMBED_DESCRIPTION_CHARS
                             for e in embeds if "description" in e))
-        self.assertTrue(all(sum(duplicates.embed_len(e) for e in m["embeds"])
-                            <= duplicates.MAX_MESSAGE_CHARS for m in messages))
+        self.assertTrue(all(sum(discord.embed_len(e) for e in m["embeds"])
+                            <= discord.MAX_EMBEDS_TEXT_CHARS for m in messages))
+        self.assertTrue(all(len(m["embeds"]) <= discord.MAX_EMBEDS_PER_MESSAGE for m in messages))
         self.assertEqual(sum(e["description"].count("\n• ") + 1 for e in embeds[1:]), 400)
 
 
