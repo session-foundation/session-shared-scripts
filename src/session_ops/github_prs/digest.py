@@ -268,7 +268,7 @@ def save_state(path, state, reported, retention_days=DEFAULT_RETENTION_DAYS, cov
 # rather than mid-list, unless one repository alone outgrows a message.
 MAX_COMPONENTS_PER_MESSAGE = 10
 TITLE_CHARS = 90
-URL = re.compile(r"<?(https?://[^\s<>()\[\]\\]+)>?")
+URL = re.compile(r"<?(https?://[^\s<>()\[\]\\]+)>?", re.IGNORECASE)
 
 NEW_MARKER = "🟢"
 UPDATED_MARKER = "✏️"
@@ -291,7 +291,9 @@ def age(then, now):
 def show_links(text):
     """`text` with every link shown as its bare URL: never masked behind other words,
     and never previewed."""
-    return URL.sub(r"<\1>", text.replace("[", "\\[").replace("]", "\\]"))
+    # Backslashes first: an escape already in the title would otherwise cancel ours.
+    text = text.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+    return URL.sub(r"<\1>", text)
 
 
 def build_pr_line(pr, now, is_new):

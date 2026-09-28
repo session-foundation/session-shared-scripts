@@ -201,6 +201,15 @@ class TestLines(unittest.TestCase):
                                     NOW, True)
         self.assertTrue(line.endswith(r"\[Get the build\](<https://evil.example/x>)"))
 
+    def test_a_title_that_escapes_its_own_brackets_is_still_not_a_link(self):
+        line = digest.build_pr_line(pr(9, title=r"\[Get the build\](https://evil.example/x)"),
+                                    NOW, True)
+        self.assertTrue(line.endswith(r"\\\[Get the build\\\](<https://evil.example/x>)"), line)
+
+    def test_an_uppercase_scheme_is_not_previewed_either(self):
+        line = digest.build_pr_line(pr(9, title="see HTTPS://a.example/b"), NOW, True)
+        self.assertTrue(line.endswith("see <HTTPS://a.example/b>"), line)
+
     def test_a_bare_url_in_a_title_is_not_previewed(self):
         for title in ("see https://a.example/b", "see <https://a.example/b>"):
             line = digest.build_pr_line(pr(9, title=title), NOW, True)
