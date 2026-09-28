@@ -1974,6 +1974,22 @@ class TestEnglishTranscript(unittest.TestCase):
                 triage.main(["--findings", path, "--model", "opus"])
         self.assertEqual(seen, [claude_cli.API_MODEL_ALIASES["opus"]])
 
+    def test_a_rehearsal_writes_no_transcript(self):
+        seen = []
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "findings.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump([finding(1)], handle)
+            with Patched(triage, attach_english=lambda *a: seen.append(a[5]),
+                         post_to_discord=lambda session, url, messages: len(messages)), \
+                    mock.patch.dict(os.environ, {"ZENDESK_SUBDOMAIN": "acme",
+                                                 "ZENDESK_DISCORD_WEBHOOK_URL": "https://x/y",
+                                                 "ZENDESK_ENGLISH_FIELD_ID": "42",
+                                                 "SESSION_OPS_REHEARSAL": "1"}), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                triage.main(["--findings", path])
+        self.assertEqual(seen, [None])
+
     def said(self, **kwargs):
         """attach_english's console output for one call."""
         out = io.StringIO()

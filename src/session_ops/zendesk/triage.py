@@ -81,7 +81,7 @@ import requests
 
 from session_ops.shared import discord, http, state as dedup
 from session_ops.shared.discord import clip, post_to_discord
-from session_ops.shared.env import get_env
+from session_ops.shared.env import get_env, rehearsing
 from session_ops.shared.text import squash
 from session_ops.zendesk.api import (REVIEW_CHANNEL, SEARCH_RESULT_LIMIT, fetch_comments,
                                      fetch_tickets,
@@ -1102,10 +1102,10 @@ def main(argv=None):
     # Gated on the post actually happening, not just on --dry-run. --no-discord is
     # the flag CI runs with, and a run that posts no card creates no button — so a
     # rendering written there would be a write to a production ticket for a dialog
-    # that can never be opened.
+    # that can never be opened. A rehearsal passes no field, so it writes nothing.
     if needs_discord:
         attach_english(zd, subdomain, classified, shown, resolve_api_model(model),
-                       get_env(ENGLISH_FIELD_ENV, required=False))
+                       None if rehearsing() else get_env(ENGLISH_FIELD_ENV, required=False))
 
     messages, coverage = build_messages(findings, subdomain, stats, updated_ids)
     if args.dry_run:

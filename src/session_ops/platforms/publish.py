@@ -6,9 +6,8 @@ closed and the branch deleted, since there is nothing left to merge. A push whos
 matches the branch already there is skipped, so an unchanged run does not wake the
 pull request's reviewers.
 """
-import os
-
 from session_ops.shared import github
+from session_ops.shared.env import rehearsing
 
 GITHUB = "https://github.com"
 ORG = "session-foundation"
@@ -16,12 +15,6 @@ REHEARSAL_PREFIX = "rehearsal/"
 REHEARSAL_NOTE = ("**Rehearsal of session-ops: do not merge.** Close it and delete the branch "
                   "once reviewed; production publishes to the branch without the "
                   f"`{REHEARSAL_PREFIX}` prefix.\n\n")
-
-
-def rehearsing():
-    """Whether this run publishes beside production rather than over it. The runner sets
-    it for every job while /etc/session-ops/rehearsal exists."""
-    return os.environ.get("SESSION_OPS_REHEARSAL") == "1"
 
 
 def pull_request(repo, api, name, base, branch, title, body, author, dry_run):
