@@ -77,7 +77,10 @@ channels, set `RELAY_DRY_RUN=1`, and leave Zendesk's webhook on the production h
 To end it, stop the timers, then close the rehearsal pull requests:
 
 ```bash
-systemctl disable --now 'session-ops@*.timer' zendesk-relay.service
+for link in /etc/systemd/system/timers.target.wants/session-ops@*.timer; do
+  [ -L "$link" ] && systemctl disable --now "${link##*/}"
+done
+systemctl disable --now zendesk-relay.service
 for repo in session-android session-ios session-localization; do
   gh pr list -R "session-foundation/$repo" --state open --json number,headRefName \
     -q '.[] | select(.headRefName | startswith("rehearsal/")) | .number' |
