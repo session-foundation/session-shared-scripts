@@ -12,7 +12,7 @@ public releases API, as two CSV files.
 
 The files land in `/var/lib/session-ops/release-stats/runs/<stamp>/` and are pruned
 after 14 days. From a checkout, `uv run python -m session_ops.platforms.release_stats
---out .` writes them to the current directory.
+--out .` writes them to a timestamped folder in the current directory, `./<YYYYmmddTHHMMSSZ>/`.
 
 | Desktop column | Assets counted |
 | --- | --- |
