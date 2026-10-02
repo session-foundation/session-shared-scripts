@@ -84,6 +84,13 @@ install -d -o zendesk -g zendesk "$STATE/zendesk-digest"
 move /var/lib/github-prs/seen.json "$STATE/github-prs-digest/seen.json" 640 ghdigest
 move /var/lib/zendesk/seen.json "$STATE/zendesk-digest/seen.json" 640 zendesk
 move /var/lib/zendesk/house_answers.json "$STATE/zendesk-digest/house_answers.json" 640 zendesk
+# zendesk.env was copied as is, still naming the old path, which the README says to remove.
+OLD_HOUSE=/var/lib/zendesk/house_answers.json
+NEW_HOUSE="$STATE/zendesk-digest/house_answers.json"
+if [ -e "$NEW_HOUSE" ] && grep -qx "ZENDESK_HOUSE_ANSWERS=$OLD_HOUSE" "$ETC/zendesk.env"; then
+    sed -i "s|^ZENDESK_HOUSE_ANSWERS=$OLD_HOUSE\$|ZENDESK_HOUSE_ANSWERS=$NEW_HOUSE|" "$ETC/zendesk.env"
+    echo "pointed ZENDESK_HOUSE_ANSWERS in $ETC/zendesk.env at $NEW_HOUSE"
+fi
 
 install -m 644 "$ROOT/deploy/session-ops.tmpfiles" /etc/tmpfiles.d/session-ops.conf
 systemd-tmpfiles --create session-ops.conf
