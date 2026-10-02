@@ -189,12 +189,12 @@ def section_embeds(slots, project, title, color, suffix):
         lines, used, first = [], 0, True
         for slot in items:
             line = slot_line(slot, project, suffix)
-            if lines and used + len(line) + 1 > discord.MAX_EMBED_DESCRIPTION_CHARS:
+            if lines and used + discord.text_len(line) + 1 > discord.MAX_EMBED_DESCRIPTION_CHARS:
                 embeds.append({"title": title(lang, len(items)) if first else f"{lang} (cont.)",
                                "description": "\n".join(lines), "color": color})
                 lines, used, first = [], 0, False
             lines.append(line)
-            used += len(line) + 1
+            used += discord.text_len(line) + 1
         embeds.append({"title": title(lang, len(items)) if first else f"{lang} (cont.)",
                        "description": "\n".join(lines), "color": color})
     return embeds

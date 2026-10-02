@@ -87,6 +87,12 @@ class TestChunkEntries(unittest.TestCase):
         entries = [("x" * 2500, {1}), ("y" * 2500, {2})]
         self.assertEqual(len(discord.chunk_entries(entries, 10)), 2)
 
+    def test_an_emoji_outside_the_bmp_counts_twice(self):
+        self.assertEqual(discord.text_len("🟢 ✏️ a"), 7)
+        # 1,000 code points each, but 2,000 UTF-16 units: together over the 4,000 budget.
+        entries = [("🟢" * 1000 + "x" * 1001, {1}), ("💬" * 1000, {2})]
+        self.assertEqual(len(discord.chunk_entries(entries, 10)), 2)
+
     def test_the_header_is_charged_to_the_first_message_only(self):
         entries = [("x" * 1900, {1}), ("x" * 1900, {2})]
         self.assertEqual(len(discord.chunk_entries(entries, 10, first_used=0)), 1)

@@ -48,7 +48,7 @@ from operator import itemgetter
 
 
 from session_ops.shared import discord, http, state as dedup
-from session_ops.shared.discord import MAX_MESSAGE_TEXT_CHARS, clip
+from session_ops.shared.discord import MAX_MESSAGE_TEXT_CHARS, clip, text_len
 from session_ops.shared.env import get_env
 
 API = "https://api.github.com"
@@ -314,14 +314,14 @@ def split_block(heading, entries, max_chars):
     A block over the budget is rejected by Discord, and since nothing in it is then
     recorded, the same block would be rebuilt every run until the window moved on.
     """
-    blocks, lines, ids, used = [], [heading], set(), len(heading)
+    blocks, lines, ids, used = [], [heading], set(), text_len(heading)
     for line, key in entries:
-        if ids and used + 1 + len(line) > max_chars:
+        if ids and used + 1 + text_len(line) > max_chars:
             blocks.append(("\n".join(lines), ids))
-            lines, ids, used = [heading], set(), len(heading)
+            lines, ids, used = [heading], set(), text_len(heading)
         lines.append(line)
         ids.add(key)
-        used += 1 + len(line)
+        used += 1 + text_len(line)
     blocks.append(("\n".join(lines), ids))
     return blocks
 
@@ -373,7 +373,7 @@ def build_messages(new, updated, backlog, window_hours, now, truncated=False):
     header = build_header(new, updated, backlog, window_hours, truncated)
     # Every block is sized to fit beside the header, though only the first message
     # carries it: simpler than sizing the first block differently.
-    blocks = group_by_repo(new, updated, now, MAX_MESSAGE_TEXT_CHARS - len(header))
+    blocks = group_by_repo(new, updated, now, MAX_MESSAGE_TEXT_CHARS - text_len(header))
     return discord.messages_from_entries(header, blocks, MAX_COMPONENTS_PER_MESSAGE)
 
 

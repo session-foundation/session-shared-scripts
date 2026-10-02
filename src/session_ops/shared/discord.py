@@ -25,6 +25,12 @@ MAX_EMBED_DESCRIPTION_CHARS = 4096
 MAX_EMBEDS_TEXT_CHARS = 6000
 
 
+def text_len(text):
+    """Length in UTF-16 code units, which an emoji outside the BMP counts twice: never less
+    than what Discord measures against the limits above."""
+    return len(text.encode("utf-16-le")) // 2
+
+
 def clip(text, limit):
     text = (text or "").strip()
     return text if len(text) <= limit else text[: limit - 1] + "…"
@@ -65,11 +71,11 @@ def chunk_entries(entries, max_items, max_chars=MAX_MESSAGE_TEXT_CHARS, first_us
     for entry in entries:
         text, _ = entry
         if current and (len(current) >= max_items
-                        or current_chars + len(text) > max_chars):
+                        or current_chars + text_len(text) > max_chars):
             chunks.append(current)
             current, current_chars = [], 0
         current.append(entry)
-        current_chars += len(text)
+        current_chars += text_len(text)
     if current:
         chunks.append(current)
     return chunks
@@ -86,7 +92,7 @@ def messages_from_entries(header, entries, max_items, max_chars=MAX_MESSAGE_TEXT
     message.
     """
     messages, coverage = [], []
-    chunks = chunk_entries(entries, max_items, max_chars, first_used=len(header)) or [[]]
+    chunks = chunk_entries(entries, max_items, max_chars, first_used=text_len(header)) or [[]]
     for index, chunk in enumerate(chunks):
         blocks = []
         if index == 0:
@@ -101,9 +107,9 @@ def messages_from_entries(header, entries, max_items, max_chars=MAX_MESSAGE_TEXT
 
 def embed_len(embed):
     """The characters Discord counts toward MAX_EMBEDS_TEXT_CHARS."""
-    total = len(embed.get("title") or "") + len(embed.get("description") or "")
+    total = text_len(embed.get("title") or "") + text_len(embed.get("description") or "")
     for fld in embed.get("fields", []):
-        total += len(fld.get("name") or "") + len(fld.get("value") or "")
+        total += text_len(fld.get("name") or "") + text_len(fld.get("value") or "")
     return total
 
 
