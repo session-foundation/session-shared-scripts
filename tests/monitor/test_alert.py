@@ -73,9 +73,8 @@ class TestAuthDetection(unittest.TestCase):
 
 
 class TestMessage(unittest.TestCase):
-    def build(self, detail="", journal_unit=None):
-        return alert.build_message("zendesk-digest.service", "angus",
-                                   journal_unit, detail=detail)
+    def build(self, detail=""):
+        return alert.build_message("zendesk-digest.service", "angus", detail=detail)
 
     def test_a_login_failure_says_so_and_says_what_to_run(self):
         message = self.build(alert.last_job_line(JOURNAL))
@@ -96,12 +95,6 @@ class TestMessage(unittest.TestCase):
             with self.subTest(detail=detail):
                 self.assertIn("journalctl -u zendesk-digest.service",
                               self.build(detail))
-
-    def test_a_step_that_is_not_a_unit_points_at_the_unit_that_ran_it(self):
-        message = alert.build_message("resolve_reviews.py", "angus",
-                                      "zendesk-digest.service", detail="")
-        self.assertIn("as part of zendesk-digest.service", message)
-        self.assertIn("journalctl -u zendesk-digest.service", message)
 
     def test_an_unreadable_journal_leaves_the_message_it_always_sent(self):
         message = self.build("")

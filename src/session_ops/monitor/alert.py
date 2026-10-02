@@ -20,7 +20,7 @@ SupplementaryGroups=systemd-journal; without it the excerpt is dropped and the a
 is what it always was, rather than failing.
 
 Usage:
-    session-ops-alert <name> [journal-unit]
+    session-ops-alert <unit>
 """
 import os
 import re
@@ -83,23 +83,18 @@ RESULTS = {"timeout": "timed out", "signal": "was killed", "core-dump": "crashed
            "watchdog": "stopped answering its watchdog"}
 
 
-def build_message(unit, host, journal_unit=None, detail="", result=""):
+def build_message(unit, host, detail="", result=""):
     """What the channel gets: what broke, where, what it said, and where to look.
 
     The journalctl line stays even when the excerpt is there — one line is rarely the
     whole story, and a unit that failed before it said anything still leaves it empty.
-
-    `journal_unit` is for a step that is not a unit of its own. The digest runs the
-    resolver as its own first ExecStart, so naming that step in the journalctl line
-    would send whoever reads it to a unit systemd has never heard of.
     """
-    origin = f", as part of {journal_unit}" if journal_unit else ""
     how = f" ({RESULTS.get(result, result)})" if result else ""
-    parts = [f"❌ **{unit}** failed on `{host}`{origin}{how}."]
+    parts = [f"❌ **{unit}** failed on `{host}`{how}."]
     if detail:
         parts.append(f"> {detail}")
     parts += advice(detail)
-    parts.append(f"`journalctl -u {journal_unit or unit} -n 50 --no-pager`")
+    parts.append(f"`journalctl -u {unit} -n 50 --no-pager`")
     return "\n".join(parts)
 
 
@@ -118,17 +113,18 @@ def already_alerted(unit, state_root="/var/lib/session-ops"):
 
 def main(argv=None):
     args = [arg.strip() for arg in (sys.argv[1:] if argv is None else argv)]
-    if not args or len(args) > 2 or not args[0]:
-        sys.exit("usage: session-ops-alert <name> [journal-unit]")
-    if already_alerted(args[-1]):
-        print(f"{args[-1]} reported this failure itself.")
+    if len(args) != 1 or not args[0]:
+        sys.exit("usage: session-ops-alert <unit>")
+    unit = args[0]
+    if already_alerted(unit):
+        print(f"{unit} reported this failure itself.")
         return
     webhook = (os.environ.get("ALERT_DISCORD_WEBHOOK_URL")
                or get_env("ZENDESK_DISCORD_WEBHOOK_URL"))
-    invocation = unit_property(args[-1], "InvocationID") or None
-    detail = scrub(last_job_line(journal_tail(args[-1], invocation=invocation)))
-    message = build_message(args[0], socket.gethostname(), *args[1:], detail=detail,
-                            result=unit_property(args[-1], "Result"))
+    invocation = unit_property(unit, "InvocationID") or None
+    detail = scrub(last_job_line(journal_tail(unit, invocation=invocation)))
+    message = build_message(unit, socket.gethostname(), detail=detail,
+                            result=unit_property(unit, "Result"))
     payload = {"content": message, "allowed_mentions": {"parse": []}}
     # A fresh session, never a Zendesk one — that carries the API-token auth header,
     # and Discord has no business receiving it.
