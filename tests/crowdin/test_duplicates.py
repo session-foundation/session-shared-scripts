@@ -180,7 +180,7 @@ class TestReconcile(unittest.TestCase):
                 mock.patch.dict(os.environ, {"CROWDIN_API_TOKEN": "t"}), \
                 contextlib.redirect_stdout(io.StringIO()), \
                 contextlib.redirect_stderr(io.StringIO()):
-            reconcile.main(["--state", self.state, "--locales", "de", "--croql", "--seed"])
+            reconcile.main(["--state", self.state, "--locales", "de", "--croql", "--reseed"])
         checked = {params.get("stringId") for method, url, params, _ in session.calls
                    if url.endswith("/translations")}
         self.assertEqual(checked, {104, 105})
@@ -189,7 +189,7 @@ class TestReconcile(unittest.TestCase):
     def test_a_slot_whose_string_was_deleted_resolves_in_every_locale(self):
         self.run_reconcile(recording(), "--seed")
         self.add_slot(107, "fr")
-        self.run_reconcile(without_string(recording(), 107), "--seed")
+        self.run_reconcile(without_string(recording(), 107), "--reseed")
         self.assertEqual(self.slots(), ["101:de:", "104:de:other", "105:de:one",
                                         "105:de:other"])
 
@@ -197,10 +197,18 @@ class TestReconcile(unittest.TestCase):
         exchanges = only_locale(recording(), "de")
         self.run_reconcile(exchanges, "--seed", locales=None)
         self.add_slot(101, "it")
-        self.run_reconcile(exchanges, "--seed", locales=("de",))
+        self.run_reconcile(exchanges, "--reseed", locales=("de",))
         self.assertIn("101:it:", self.slots(), "--locales judges only the named locales")
-        self.run_reconcile(exchanges, "--seed", locales=None)
+        self.run_reconcile(exchanges, "--reseed", locales=None)
         self.assertNotIn("101:it:", self.slots())
+
+    def test_seeding_over_an_existing_state_is_refused_without_reseed(self):
+        self.run_reconcile(recording(), "--seed")
+        self.add_slot(107, "fr")
+        with self.assertRaises(SystemExit) as stopped:
+            self.run_reconcile(recording(), "--seed")
+        self.assertIn("--reseed", str(stopped.exception.code))
+        self.assertIn("107:fr:", self.slots(), "the refused seed wrote nothing")
 
     def test_an_unseeded_state_stops_a_posting_run_before_crowdin(self):
         with mock.patch.object(reconcile.discord, "post_to_discord") as post, \

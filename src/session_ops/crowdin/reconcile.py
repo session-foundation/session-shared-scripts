@@ -23,12 +23,14 @@ Config (env vars):
 
 Usage:
     crowdin-reconcile-duplicates --seed --state PATH   # first run: record, post nothing
+    crowdin-reconcile-duplicates --reseed --state PATH # the same over an existing state
     crowdin-reconcile-duplicates --state PATH          # what the timer does
     crowdin-reconcile-duplicates --dry-run --state PATH --locales de
 """
 import argparse
 import concurrent.futures
 import json
+import os
 import sys
 
 from session_ops.crowdin import duplicates, sdk
@@ -101,10 +103,16 @@ def main(argv=None):
                         help="Narrow each locale with a CroQL query before checking strings.")
     parser.add_argument("--max-workers", type=int, default=16)
     parser.add_argument("--seed", action="store_true",
-                        help="Record what is open without posting it.")
+                        help="Record what is open without posting it; refuses an existing state.")
+    parser.add_argument("--reseed", action="store_true",
+                        help="--seed over an existing state, absorbing unposted what changed since.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print what would be posted; write nothing.")
     args = parser.parse_args(argv)
+    if args.seed and os.path.exists(args.state):
+        sys.exit(f"{args.state} already exists, and --seed would absorb every change since "
+                 f"it was written without posting it. Use --reseed to do that on purpose.")
+    args.seed = args.seed or args.reseed
     if not (args.seed or args.dry_run):
         duplicates.load(args.state)  # refuses a missing state before the scan, not after
     with duplicates.only_run(args.state):

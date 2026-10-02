@@ -26,7 +26,9 @@ Discord accepted every message, so a failed post is repeated in full rather than
 
 Losing the state is not harmless the way a digest's dedup file is: every open slot
 would be reported again. So reconciliation refuses to run without a state file; seed
-one with `--seed`, which records without posting.
+one with `--seed`, which records without posting. `--seed` refuses a state that already
+exists, since it would absorb every change since without posting it; `--reseed` does
+that on purpose.
 
 ## Cost
 
