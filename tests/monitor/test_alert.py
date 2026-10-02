@@ -6,6 +6,7 @@ import unittest
 from unittest import mock
 
 from session_ops.monitor import alert
+from session_ops.zendesk import claude_cli
 
 # What the digest itself left in the journal on 2026-09-23.
 JOURNAL = """\
@@ -35,24 +36,32 @@ class TestLastJobLine(unittest.TestCase):
 
 class TestAuthDetection(unittest.TestCase):
     def test_the_host_failure_is_recognised(self):
-        self.assertTrue(alert.is_auth_failure(alert.last_job_line(JOURNAL)))
+        self.assertTrue(claude_cli.is_auth_failure(alert.last_job_line(JOURNAL)))
 
     def test_the_cli_rewordings_are_covered(self):
         for line in ("Invalid API key · Please run /login",
                      "OAuth token expired",
                      "Request failed: unauthorized",
-                     "Credit balance is too low",
                      "it printed nothing, which is what a login it can no longer use "
                      "looks like; check that `claude` is still signed in."):
             with self.subTest(line=line):
-                self.assertTrue(alert.is_auth_failure(CLI + line))
+                self.assertTrue(claude_cli.is_auth_failure(CLI + line))
+
+    def test_a_failure_the_cli_reported_with_exit_zero_is_recognised_too(self):
+        self.assertTrue(claude_cli.is_auth_failure(
+            "claude reported failure on a batch (subtype='error'): Please run /login"))
+
+    def test_an_account_out_of_credit_is_not_told_to_log_in(self):
+        line = CLI + "Credit balance is too low"
+        self.assertFalse(claude_cli.is_auth_failure(line))
+        self.assertIn("out of credit", alert.build_message("x.service", "angus", detail=line))
 
     def test_an_ordinary_failure_is_not_a_login_problem(self):
         for line in ("Zendesk 500 on /api/v2/search.json",
                      "claude did not finish a batch of 5 tickets within 1800s.",
                      ""):
             with self.subTest(line=line):
-                self.assertFalse(alert.is_auth_failure(line))
+                self.assertFalse(claude_cli.is_auth_failure(line))
 
     def test_a_dead_zendesk_token_is_not_a_dead_claude_login(self):
         """Zendesk's 401 body says "authenticate" too, and re-logging the CLI in
@@ -60,7 +69,7 @@ class TestAuthDetection(unittest.TestCase):
         for line in ('Zendesk search failed (401): {"error":"Couldn\'t authenticate you"}',
                      'update_many failed (401): {"error":"Couldn\'t authenticate you"}'):
             with self.subTest(line=line):
-                self.assertFalse(alert.is_auth_failure(line))
+                self.assertFalse(claude_cli.is_auth_failure(line))
 
 
 class TestMessage(unittest.TestCase):

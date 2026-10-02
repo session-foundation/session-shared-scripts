@@ -32,7 +32,7 @@ from session_ops.ops.runner import scrub
 from session_ops.shared import http
 from session_ops.shared.discord import post_to_discord
 from session_ops.shared.env import get_env
-from session_ops.zendesk.claude_cli import is_auth_failure, relogin_advice
+from session_ops.zendesk.claude_cli import advice
 
 
 EXCERPT_CHARS = 400
@@ -98,8 +98,7 @@ def build_message(unit, host, journal_unit=None, detail="", result=""):
     parts = [f"❌ **{unit}** failed on `{host}`{origin}{how}."]
     if detail:
         parts.append(f"> {detail}")
-    if is_auth_failure(detail):
-        parts += relogin_advice()
+    parts += advice(detail)
     parts.append(f"`journalctl -u {journal_unit or unit} -n 50 --no-pager`")
     return "\n".join(parts)
 

@@ -115,8 +115,9 @@ def alert_message(job, host, current_step, error, outcome):
         mark = "✅" if not result else ("⚠️" if name in outcome.optional else "❌")
         lines.append(f"{mark} **{name}**" + (f": {result}" if result else ""))
     journal = f"`journalctl -u session-ops@{job.name} -n 50 --no-pager`"
-    if any(claude_cli.is_auth_failure(text) for text in (error, *outcome.targets.values())):
-        lines += [*claude_cli.relogin_advice(), journal]
+    account = claude_cli.advice(error, *outcome.targets.values())
+    if account:
+        lines += [*account, journal]
     else:
         lines.append(f"{journal} · re-run: `systemctl start session-ops@{job.name}.service`")
     return "\n".join(lines)
