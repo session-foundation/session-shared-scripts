@@ -769,6 +769,13 @@ class Writes(unittest.TestCase):
                                    add_tags=[note_reply.TAG_SENT])
         self.assertIn("comment", session.calls[0][2]["json"]["ticket"])
 
+    def test_a_public_reply_is_sent_once_and_a_note_keeps_the_retries(self):
+        """A retried public PUT whose first attempt landed would email the customer twice."""
+        session = fake_session(FakeResponse({"ticket": {}}), FakeResponse({"ticket": {}}))
+        note_reply.write_to_ticket(session, "sub", 7, "reply", public=True)
+        note_reply.write_to_ticket(session, "sub", 7, "note", public=False)
+        self.assertEqual([kw.get("attempts") for _, _, kw in session.calls], [1, None])
+
 
 class DraftNote(unittest.TestCase):
     def test_carries_the_back_translation_for_a_foreign_ticket(self):

@@ -342,7 +342,9 @@ def write_to_ticket(session, subdomain, ticket_id, body, public,
     if status:
         fields["status"] = status
     url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}.json"
-    resp = session.request("PUT", url, json={"ticket": fields})
+    # A public comment emails the customer, so it is sent once: a retry after a timeout
+    # whose PUT had landed would email them twice. Notes keep the session's retries.
+    resp = session.request("PUT", url, json={"ticket": fields}, attempts=1 if public else None)
     if resp.status_code >= 400:
         sys.exit(f"Zendesk rejected the {'reply' if public else 'note'} on "
                  f"#{ticket_id} ({resp.status_code}).")
@@ -977,7 +979,7 @@ def run_reply(session, subdomain, ticket, comments, command, api_user, dry_run):
     # The note carrying the done marker goes FIRST, before the irreversible act.
     # Sent second, a failure between the two would leave the customer emailed and the
     # command unclaimed, and the next run would email them again — the one thing the
-    # marker exists to prevent. The cost of this order is the opposite and much
+    # marker exists to prevent. Within this run, write_to_ticket sends the reply once. The cost of this order is the opposite and much
     # smaller: if the public comment then fails, the ticket carries a note saying a
     # reply was sent when none was, and the run exits non-zero saying so.
     write_to_ticket(session, subdomain, ticket_id,
