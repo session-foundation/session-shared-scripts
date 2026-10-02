@@ -123,7 +123,7 @@ def alert_message(job, host, current_step, error, outcome):
 
 
 def post_alert(job, message):
-    webhook = os.environ.get("ALERT_DISCORD_WEBHOOK_URL") or os.environ.get(job.channel_env)
+    webhook = os.environ.get(job.channel_env) or os.environ.get("ALERT_DISCORD_WEBHOOK_URL")
     if not webhook:
         print("No alert webhook in the environment; leaving it to the OnFailure backstop.",
               file=sys.stderr)

@@ -1,13 +1,17 @@
 """
 Daily: copy the service node list from session-desktop-dynamic-assets into session-ios,
 as the fallback a new client uses when it cannot reach the seed nodes, and open a pull
-request from feature/update-static-snode-list when it changed.
+request from feature/update-static-snode-list when it changed. Each run posts how many
+nodes are requesting exit to the translations channel.
 
 The list is published as fetched, byte for byte, but only once it holds service nodes,
 each with an IP and a key: a fallback that is empty or unreadable would strand exactly
 the clients it exists for.
 
     session-ops run snode-list [--dry-run]
+
+Environment:
+    CROWDIN_DISCORD_WEBHOOK_URL   where the summary goes (not needed with --dry-run)
 """
 import argparse
 import json
@@ -16,7 +20,8 @@ import tempfile
 
 from session_ops.ops.runner import step
 from session_ops.platforms import publish
-from session_ops.shared import github, http
+from session_ops.shared import discord, github, http
+from session_ops.shared.env import get_env
 from session_ops.shared.git import Repo
 
 SOURCE = ("https://raw.githubusercontent.com/session-foundation/"
@@ -46,11 +51,23 @@ def fetch(session):
     return resp.content
 
 
+def summary(content, result):
+    """The channel's line: nodes asking to exit (`requested_unlock_height` set), then
+    what happened to the pull request."""
+    data = json.loads(content)
+    nodes = data["service_node_states"]
+    exiting = sum(1 for node in nodes if node.get("requested_unlock_height"))
+    return (f"🛰️ **snode-list**: {exiting} of {len(nodes)} service nodes are requesting "
+            f"exit at height {data.get('height')}.\n{result}")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.strip().split("\n")[0])
     parser.add_argument("--dry-run", action="store_true",
                         help="Commit locally and show the change; push nothing.")
     args = parser.parse_args(argv)
+    # Resolved first, so a missing secret stops the run before it publishes anything.
+    webhook = get_env("CROWDIN_DISCORD_WEBHOOK_URL", required=not args.dry_run)
 
     author = os.environ.get("PUBLISH_GIT_AUTHOR") or "session-ops <session-ops@localhost>"
     work = os.environ.get("SESSION_OPS_WORK_DIR") or tempfile.mkdtemp(prefix="snode-list-")
@@ -63,6 +80,15 @@ def main(argv=None):
     with open(os.path.join(repo.path, PATH), "wb") as handle:
         handle.write(content)
     step("publish")
-    print(publish.pull_request(repo, github.session(token) if token else None,
-                               f"{publish.ORG}/{REPO}", "dev", BRANCH, TITLE, BODY, author,
-                               args.dry_run))
+    result = publish.pull_request(repo, github.session(token) if token else None,
+                                  f"{publish.ORG}/{REPO}", "dev", BRANCH, TITLE, BODY, author,
+                                  args.dry_run)
+    print(result)
+    step("report")
+    message = summary(content, result)
+    if args.dry_run:
+        print(message)
+        return
+    payload = {"content": message, "allowed_mentions": {"parse": []}}
+    if discord.post_to_discord(http.Session(), webhook, [payload]) != 1:
+        raise RuntimeError("Discord did not accept the summary")

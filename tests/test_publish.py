@@ -377,6 +377,14 @@ class TestSnodeList(RepoTest):
                   encoding="utf-8") as handle:
             self.assertEqual(handle.read(), body)
 
+    def test_the_summary_counts_the_nodes_requesting_exit(self):
+        exiting = dict(self.NODE, requested_unlock_height=2212248)
+        staying = dict(self.NODE, requested_unlock_height=0)
+        body = json.dumps({"service_node_states": [exiting, staying, self.NODE],
+                           "height": 2210944})
+        self.assertIn("1 of 3 service nodes are requesting exit at height 2210944",
+                      self.run_job(body, "--dry-run"))
+
     def test_a_body_that_is_not_json_is_never_published(self):
         with self.assertRaises(RuntimeError):
             self.run_job("<html>rate limited</html>", "--dry-run")

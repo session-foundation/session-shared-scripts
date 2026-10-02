@@ -7,7 +7,8 @@
 #   entry          module:function, called with the job's argv
 #   args           {state} is the job's /var/lib/session-ops/<name>
 #   env            variables the run refuses to start without
-#   channel_env    where its failures are reported, unless ALERT_DISCORD_WEBHOOK_URL is set
+#   channel_env    where it posts, and where its own failures are reported; a job
+#                  without one reports to ALERT_DISCORD_WEBHOOK_URL
 #   unit           further [Service] lines, over the template's hardening
 #
 # Timezones go in the schedule itself: systemd has no Timezone= key and ignores one.
@@ -98,8 +99,9 @@ name = "snode-list"
 description = "Fallback service node list into session-ios"
 entry = "session_ops.platforms.snode_list:main"
 user = "publisher"
-env_files = ["/etc/session-ops/publish.env"]
-env = ["PUBLISH_GIT_AUTHOR"]
+env_files = ["/etc/session-ops/crowdin.env", "/etc/session-ops/publish.env"]
+env = ["PUBLISH_GIT_AUTHOR", "CROWDIN_DISCORD_WEBHOOK_URL"]
+channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
 # Clear of update_static_snode_list.yml's 10:30 UTC run, which pushes the same branch.
 schedule = "*-*-* 13:00 Australia/Melbourne"
 max_age_hours = 28

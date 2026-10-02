@@ -167,9 +167,8 @@ class TestRun(unittest.TestCase):
         self.assertEqual(self.posted, [])
         self.assertIsNone(self.marker())
 
-    def test_the_jobs_own_channel_is_used_without_an_alert_channel(self):
-        with mock.patch.dict(os.environ, {"ALERT_DISCORD_WEBHOOK_URL": "",
-                                          "DEMO_HOOK": "https://hook/demo"}):
+    def test_the_jobs_own_channel_wins_over_the_alert_channel(self):
+        with mock.patch.dict(os.environ, {"DEMO_HOOK": "https://hook/demo"}):
             self.run_job(job("exits", channel_env="DEMO_HOOK"))
         self.assertEqual(self.posted[0][0], "https://hook/demo")
 

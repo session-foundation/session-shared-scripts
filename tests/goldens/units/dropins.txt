@@ -93,6 +93,7 @@ Description=Fallback service node list into session-ios
 [Service]
 User=publisher
 Group=publisher
+EnvironmentFile=/etc/session-ops/crowdin.env
 EnvironmentFile=/etc/session-ops/publish.env
 TimeoutStartSec=10min
 LoadCredential=github-app.pem:/etc/session-ops/github-app.pem
