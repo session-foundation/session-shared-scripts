@@ -25,6 +25,7 @@ through a whole schedule: nothing fails, so nothing alerts. Each scheduled unit 
 `session-ops-silence` posts every job in
 [`jobs.toml`](../../src/session_ops/jobs.toml) whose stamp is older than its
 `max_age_hours`, repeating daily while it stays quiet. A job with no stamp is timed from
-the first check that found it missing, so installing the checker alerts on nothing.
+the first check that found it missing, so a job left disabled alerts once that is older
+than its `max_age_hours`: every scheduled job is meant to run.
 
 A job in `jobs.toml` with a `schedule` is watched; the `session-ops@` template stamps it.
