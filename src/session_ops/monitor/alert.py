@@ -10,9 +10,10 @@ records the invocation it reported. This stays quiet for that invocation and spe
 for the rest: a run killed, timed out, or unable to reach Discord, and any unit that
 is not a job, such as the Zendesk relay.
 
-Posts over ALERT_DISCORD_WEBHOOK_URL, else ZENDESK_DISCORD_WEBHOOK_URL, rather than
-anything with a bot token: a failure notifier should depend on as little as possible
-of whatever just broke.
+Posts over ALERT_DISCORD_WEBHOOK_URL from alerts.env, the only env file this unit loads,
+rather than anything with a bot token: a failure notifier should depend on as little as
+possible of whatever just broke. Without it the backstop is off: it says so in the
+journal and exits cleanly, rather than failing on every failure it was meant to report.
 
 The failed unit's last journal line comes with it, so the channel says what broke
 rather than only that something did. Reading the journal needs the unit to carry
@@ -31,7 +32,6 @@ import sys
 from session_ops.ops.runner import scrub
 from session_ops.shared import http
 from session_ops.shared.discord import post_to_discord
-from session_ops.shared.env import get_env
 from session_ops.zendesk.claude_cli import advice
 
 
@@ -119,8 +119,11 @@ def main(argv=None):
     if already_alerted(unit):
         print(f"{unit} reported this failure itself.")
         return
-    webhook = (os.environ.get("ALERT_DISCORD_WEBHOOK_URL")
-               or get_env("ZENDESK_DISCORD_WEBHOOK_URL"))
+    webhook = os.environ.get("ALERT_DISCORD_WEBHOOK_URL")
+    if not webhook:
+        print(f"No ALERT_DISCORD_WEBHOOK_URL in alerts.env, so the backstop is off: "
+              f"{unit} is not reported.")
+        return
     invocation = unit_property(unit, "InvocationID") or None
     detail = scrub(last_job_line(journal_tail(unit, invocation=invocation)))
     message = build_message(unit, socket.gethostname(), detail=detail,

@@ -1,6 +1,8 @@
 """
     uv run python -m unittest tests.monitor.test_alert
 """
+import contextlib
+import io
 import subprocess
 import unittest
 from unittest import mock
@@ -167,6 +169,16 @@ class TestMain(unittest.TestCase):
             alert.main(["zendesk-relay.service"])
         self.assertIn("Discord unreachable", posted[0]["content"])
         self.assertNotIn("t0ken-value", posted[0]["content"])
+
+    def test_without_an_alert_webhook_the_backstop_is_off_and_exits_cleanly(self):
+        with mock.patch.dict(alert.os.environ, {"ALERT_DISCORD_WEBHOOK_URL": "",
+                                                "ZENDESK_DISCORD_WEBHOOK_URL": "https://z"}), \
+                mock.patch.object(alert, "already_alerted", return_value=False), \
+                mock.patch.object(alert, "post_to_discord") as post, \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            alert.main(["zendesk-relay.service"])
+        post.assert_not_called()
+        self.assertIn("backstop is off", out.getvalue())
 
 
 class TestAlreadyAlerted(unittest.TestCase):
