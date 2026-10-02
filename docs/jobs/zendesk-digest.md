@@ -122,7 +122,6 @@ The trade is process startup, a few seconds per call, against holding an API cre
 | `--state`              | flag             | *(unset)*                                               | Dedup state file. [`jobs.toml`](../../src/session_ops/jobs.toml) points this at `/var/lib/session-ops/zendesk-digest/seen.json` |
 | `--state-retention-days` | flag           | `30`                                                    | Forget state entries older than N days |
 | `ZENDESK_QUERY`        | env / `--query`  | *(unset)*                                               | Explicit Zendesk search query. Overrides `--window-hours` entirely |
-| `ZENDESK_TRIAGE_MODEL` | env / `--model`  | `claude-opus-5`                                         | Overrides the model. Takes a full id, or a shorthand (`opus`, `sonnet`, `haiku`) mapped to an id via `API_MODEL_ALIASES`. **Leave it unset for normal operation** — the default lives in the script so there's one place to change it |
 | `--findings`           | flag             | *(unset)*                                               | Render a findings JSON classified elsewhere, skipping Zendesk and Claude entirely. Pairs with `--dump-batch` |
 | `--max-tickets`        | flag             | `100`                                                   | Runaway guard on tickets analyzed per run, **not** a batch size. Zendesk's search API caps a query at 1000 results, so higher values don't fetch more |
 | `--batch-size`         | flag             | `400`                                                   | Split batches larger than this across multiple requests |
@@ -132,16 +131,15 @@ The trade is process startup, a few seconds per call, against holding an API cre
 | `--no-discord`         | flag             | off                                                     | Analyze but post nothing, printing counts only. Records no state, so the next run still reports those tickets. Unlike `--dry-run` it prints no ticket content |
 | `--effort`             | flag             | `medium`                                                | Claude reasoning effort (`low`–`max`) |
 
-### Why this model, and why pinned
+### Why this model, and why the alias
 
 **Opus**, because the hard part of this job isn't per-ticket classification — enum-constrained categories with prompt guidance is squarely mid-tier work. It's the two batch-wide fields: `cluster` has to spot that a German app-store review and an English bug report describe one root cause, and `priority_rank` has to stay consistent across the whole batch. Those need the model to hold ~45 heterogeneous tickets in mind at once. The exact-transcription requirement (a 66-character Session ID copied verbatim) points the same way. And the entire job costs **single-digit dollars a month** on any current model — roughly $10 on Opus 5 against $6 on Sonnet 5 and $2 on Haiku 4.5 — so trading classification quality for a few dollars would be optimising the wrong thing when the cost of a miss is an unseen security report or a crash cluster nobody grouped.
 
-**Pinned to an id rather than the `opus` alias**, because this is an unattended digest. An alias resolves to the newest Opus the credential allows, so severity calibration and cluster labels would shift on someone else's release schedule, with no run in between to notice it. Bumping the pin is a deliberate one-line change in [triage.py](../../src/session_ops/zendesk/triage.py) (`DEFAULT_MODEL`).
-
-Two cases for overriding it:
-
-- **Large backfills.** A `reset_state` run at `--max-tickets 1000` chunks into 400-ticket requests, where Opus latency and spend actually show up and cross-chunk cluster fidelity is already reduced by design. `ZENDESK_TRIAGE_MODEL=sonnet` for those.
-- **Never Fable 5.** It prices above Opus tier, targets long-horizon agentic reasoning, and requires 30-day data retention — all wrong for batch classification of support tickets.
+**The `opus` alias rather than a pinned id**, for every Zendesk call: the digest, the
+transcripts and the `claude:` notes. The CLI resolves it to its newest Opus, so a new model
+arrives with a CLI update and nothing here needs bumping. The cost: the digest's clusters,
+priority ranks and severity calibration can shift when that happens, with no run in between
+to compare. There is no override; one model is all this job supports.
 
 ### Batch size vs. ticket cap
 

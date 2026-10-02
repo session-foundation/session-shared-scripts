@@ -67,7 +67,6 @@ from session_ops.shared.env import get_env
 from session_ops.shared.text import undash_english
 from session_ops.zendesk import api, claude_cli, transcript
 
-DEFAULT_MODEL = "claude-sonnet-5"
 COMPOSE_TIMEOUT_SECONDS = 240
 PLACEMENT_TIMEOUT_SECONDS = 120
 
@@ -1131,13 +1130,10 @@ def latest_command(comments, api_user, session, subdomain):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Act on claude: notes on a Zendesk ticket.")
     parser.add_argument("--ticket", type=int, required=True)
-    parser.add_argument("--model", default=DEFAULT_MODEL,
-                        help="a model id, or opus, sonnet or haiku for the id the digest "
-                             "would use")
     parser.add_argument("--dry-run", action="store_true",
                         help="do everything except write to Zendesk")
     args = parser.parse_args(argv)
-    model = claude_cli.resolve_api_model(args.model)
+    model = claude_cli.MODEL
 
     subdomain = get_env("ZENDESK_SUBDOMAIN")
     session = api.zendesk_session(get_env("ZENDESK_EMAIL"),

@@ -44,9 +44,6 @@ Config (env vars, or flags for local runs):
                           with resolve_reviews.py's tally and the failure alerts
                           (not needed with --dry-run or --no-discord)
     ZENDESK_QUERY         (optional) Zendesk search query; see DEFAULT_QUERY
-    ZENDESK_TRIAGE_MODEL  (optional) Claude model id or alias; defaults to
-                          claude-opus-5. Set it to override, e.g. `sonnet` for a
-                          large backfill.
 
 Usage:
     # real run (CI): reads everything from the environment
@@ -88,7 +85,7 @@ from session_ops.zendesk.api import (REVIEW_CHANNEL, SEARCH_RESULT_LIMIT, fetch_
                                      hydrate_requester_activity, is_store_review,
                                      review_platform, review_stars, ticket_url,
                                      zendesk_session)
-from session_ops.zendesk.claude_cli import claude_cli_json, resolve_api_model
+from session_ops.zendesk.claude_cli import MODEL, claude_cli_json
 from session_ops.zendesk.transcript import ENGLISH_FIELD_ENV, attach_english
 
 # Never analyzed. A store review cannot be answered the way a ticket can: it takes
@@ -169,14 +166,6 @@ def window_label(hours):
         days = hours // 24
         return f"updated in the past {days} day{'s' if days > 1 else ''}"
     return f"updated in the past {hours}h"
-# A pinned id rather than the `opus` alias, deliberately. This is an unattended
-# digest a human skims: the batch-wide fields (`cluster`, `priority_rank`) and the
-# severity calibration shift when the model underneath changes, and an alias would
-# move them on someone else's release schedule. Opus rather than a cheaper tier
-# because clustering asks the model to recognise one root cause across 45 tickets in
-# several languages, and the whole job costs single-digit dollars a month either way.
-# Bumping this is a one-line, deliberate change.
-DEFAULT_MODEL = "claude-opus-5"
 DEFAULT_MAX_TICKETS = 100
 DESCRIPTION_CHARS = 1500  # per-ticket description sent to Claude (triage only)
 # One classification runs ~100 output tokens per ticket, and adaptive thinking draws
@@ -910,9 +899,6 @@ def main(argv=None):
     parser.add_argument("--window-hours", type=int, metavar="N",
                         help="Only analyze unsolved tickets updated in the last N hours. "
                              "The scheduled weekday run uses 72.")
-    parser.add_argument("--model", help=f"Claude model id, or an alias (opus, sonnet, "
-                                        f"haiku) mapped to an id "
-                                        f"(else ZENDESK_TRIAGE_MODEL, else {DEFAULT_MODEL}).")
     parser.add_argument("--effort", default="medium", choices=["low", "medium", "high", "xhigh", "max"],
                         help="Claude reasoning effort (default: medium).")
     parser.add_argument("--max-tickets", type=int, default=DEFAULT_MAX_TICKETS,
@@ -959,7 +945,6 @@ def main(argv=None):
     # cannot deliver. A dump exits before rendering, so it never needs them either.
     needs_discord = not (args.dry_run or args.no_discord or args.dump_batch)
     webhook = get_env("ZENDESK_DISCORD_WEBHOOK_URL", args.webhook, required=needs_discord)
-    model = args.model or os.environ.get("ZENDESK_TRIAGE_MODEL") or DEFAULT_MODEL
 
     stats = {}
     state = None
@@ -1061,13 +1046,13 @@ def main(argv=None):
         compact = [compact_ticket(t) for t in tickets]
 
         if args.dump_batch:
-            dump_batch(args.dump_batch, compact, model)
+            dump_batch(args.dump_batch, compact, MODEL)
             print(f"Wrote {len(compact)} tickets to {args.dump_batch} — this file contains "
                   f"ticket content, so keep it out of the repo.")
             print("Classify it, then: --findings <path> --dry-run")
             return
 
-        analyzer = partial(analyze, resolve_api_model(model), args.effort)
+        analyzer = partial(analyze, MODEL, args.effort)
         findings = analyze_in_chunks(analyzer, compact, args.batch_size)
 
         # Keep only findings whose id maps to a fetched ticket, in case of drift.
@@ -1104,7 +1089,7 @@ def main(argv=None):
     # rendering written there would be a write to a production ticket for a dialog
     # that can never be opened. A rehearsal passes no field, so it writes nothing.
     if needs_discord:
-        attach_english(zd, subdomain, classified, shown, resolve_api_model(model),
+        attach_english(zd, subdomain, classified, shown, MODEL,
                        None if rehearsing() else get_env(ENGLISH_FIELD_ENV, required=False))
 
     messages, coverage = build_messages(findings, subdomain, stats, updated_ids)

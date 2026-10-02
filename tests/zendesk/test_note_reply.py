@@ -15,7 +15,9 @@ sends the wrong thing to a real person:
   * a replayed webhook must not send twice
   * `reply` must send what was reviewed, byte for byte
 """
+import contextlib
 import html
+import io
 import os
 import re
 import unittest
@@ -1036,7 +1038,7 @@ class Composition(unittest.TestCase):
         self.assertLessEqual(len(brief), note_reply.BRIEF_CHARS)
 
 
-class ModelFlag(unittest.TestCase):
+class Model(unittest.TestCase):
     def model_for(self, flag):
         seen = []
         env = {"ZENDESK_SUBDOMAIN": "sub", "ZENDESK_EMAIL": "e", "ZENDESK_API_TOKEN": "t"}
@@ -1051,15 +1053,13 @@ class ModelFlag(unittest.TestCase):
             note_reply.main(["--ticket", "7", *flag])
         return seen[0]
 
-    def test_an_alias_means_the_id_the_digest_would_use(self):
-        """Passed through, `opus` would be whatever the CLI calls opus that week."""
-        self.assertEqual(self.model_for(["--model", "opus"]), claude_cli.API_MODEL_ALIASES["opus"])
+    def test_every_call_uses_the_clis_opus_alias(self):
+        self.assertEqual(self.model_for([]), claude_cli.MODEL)
+        self.assertEqual(claude_cli.MODEL, "opus")
 
-    def test_a_pinned_id_passes_through(self):
-        self.assertEqual(self.model_for(["--model", "claude-opus-4-8"]), "claude-opus-4-8")
-
-    def test_the_default_is_unchanged(self):
-        self.assertEqual(self.model_for([]), note_reply.DEFAULT_MODEL)
+    def test_there_is_no_model_flag(self):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            self.model_for(["--model", "sonnet"])
 
 
 if __name__ == "__main__":

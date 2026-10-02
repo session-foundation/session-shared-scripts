@@ -1,5 +1,5 @@
 """The Claude Code CLI as the Zendesk jobs call it: one schema-enforced request,
-the model aliases, and a failure worth quoting.
+the model, and a failure worth quoting.
 """
 import json
 import os
@@ -7,15 +7,10 @@ import subprocess
 import sys
 
 
-# Shorthands for the override, so ZENDESK_TRIAGE_MODEL=sonnet works for a big
-# backfill without anyone looking up an id. The API takes ids only, so they are
-# mapped here; each is the newest model in its family, and a full id passes through
-# untouched.
-API_MODEL_ALIASES = {
-    "opus": "claude-opus-5",
-    "sonnet": "claude-sonnet-5",
-    "haiku": "claude-haiku-4-5",
-}
+# The CLI's alias for its newest Opus, the one model every Zendesk call uses. A new Opus
+# arrives with a CLI update and nothing changes here; the digest's clusters and severity
+# calibration can shift with it.
+MODEL = "opus"
 
 
 # The classifier is the local Claude Code CLI rather than the Anthropic SDK, so
@@ -44,14 +39,6 @@ CLAUDE_AUTH_OVERRIDES = (
 # this log must not carry ticket text, so nothing here is ever passed through whole.
 CLI_FAILURE_CHARS = 300
 
-
-def resolve_api_model(model):
-    """Map a shorthand model name onto the id `claude --model` expects.
-
-    Anything that isn't a known shorthand passes through untouched, so a pinned id
-    (`claude-opus-4-8`) or a model newer than this table still works.
-    """
-    return API_MODEL_ALIASES.get(model, model)
 
 
 def cli_failure_detail(stdout, stderr, limit=CLI_FAILURE_CHARS):

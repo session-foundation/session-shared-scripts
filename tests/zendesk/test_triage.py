@@ -1241,29 +1241,6 @@ class TestTicketsFromPayload(unittest.TestCase):
             triage.tickets_from_payload({"tickets": [["not", "an", "object"]]}, "x")
 
 
-class TestResolveApiModel(unittest.TestCase):
-    """The CLI resolves aliases itself; the API takes ids, so only that path maps."""
-
-    def test_every_alias_maps_to_an_id(self):
-        for alias, model_id in claude_cli.API_MODEL_ALIASES.items():
-            self.assertEqual(claude_cli.resolve_api_model(alias), model_id)
-            self.assertTrue(model_id.startswith("claude-"), model_id)
-
-    def test_the_default_model_resolves_to_an_api_id(self):
-        """The API 404s on a bare shorthand, so whatever DEFAULT_MODEL is —
-        a pinned id today, an alias if that ever changes — it has to resolve to one."""
-        resolved = claude_cli.resolve_api_model(triage.DEFAULT_MODEL)
-        self.assertNotIn(resolved, claude_cli.API_MODEL_ALIASES)
-        self.assertTrue(resolved.startswith("claude-"), resolved)
-
-    def test_a_full_id_passes_through(self):
-        self.assertEqual(claude_cli.resolve_api_model("claude-opus-4-8"), "claude-opus-4-8")
-
-    def test_an_unknown_value_passes_through(self):
-        """A model newer than this table should reach the API rather than be rewritten."""
-        self.assertEqual(claude_cli.resolve_api_model("claude-future-9"), "claude-future-9")
-
-
 class TestAnalyzeInChunks(unittest.TestCase):
     """A batch of 2000 would need ~204K output tokens, past the 128K ceiling, so
     oversized batches must split rather than truncate."""
@@ -1959,8 +1936,7 @@ class TestEnglishTranscript(unittest.TestCase):
         guard = source.rindex("if needs_discord:", 0, call)
         self.assertNotIn("\n    ", source[guard:call].rstrip())
 
-    def test_the_transcript_gets_the_same_resolved_model_as_the_classification(self):
-        """The CLI reads an alias as whatever it calls `opus` that week."""
+    def test_the_transcript_uses_the_same_model_as_the_classification(self):
         seen = []
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "findings.json")
@@ -1971,8 +1947,8 @@ class TestEnglishTranscript(unittest.TestCase):
                     mock.patch.dict(os.environ, {"ZENDESK_SUBDOMAIN": "acme",
                                                  "ZENDESK_DISCORD_WEBHOOK_URL": "https://x/y"}), \
                     contextlib.redirect_stdout(io.StringIO()):
-                triage.main(["--findings", path, "--model", "opus"])
-        self.assertEqual(seen, [claude_cli.API_MODEL_ALIASES["opus"]])
+                triage.main(["--findings", path])
+        self.assertEqual(seen, [claude_cli.MODEL])
 
     def test_a_rehearsal_writes_no_transcript(self):
         seen = []
