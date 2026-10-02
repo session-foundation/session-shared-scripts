@@ -62,7 +62,10 @@ however long that takes, provided it is still open when that run searches. Three
 the reach back stops at `--state-retention-days` (365), past which the state has
 forgotten what it reported anyway; a state file that is lost or unreadable falls back to
 the plain 72-hour window for one run; and a search cut short at GitHub's 1000 results
-can miss the least recently updated PRs.
+can miss the least recently updated PRs. A search that comes back short of its total does
+not move `covered_until`, so the next run looks again. One shortfall goes unseen: past 100
+open PRs the search is paged, and a PR that closes between two page fetches shifts one
+item onto a page already read, with totals that still agree.
 
 One search fetches every open PR in the org and the window is applied to the result
 here rather than in the query — that is what buys the backlog count for the cost of a

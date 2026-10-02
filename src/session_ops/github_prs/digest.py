@@ -436,9 +436,9 @@ def main(argv=None):
     if args.state:
         landed = set().union(*coverage[:posted]) if posted else set()
         reported = [pr for pr in new + changed if pr_id(pr) in landed]
-        # A partial post keeps this run's cutoff, so the next run reaches back over the
-        # PRs whose message never landed.
-        covered = searched_at if posted == len(messages) else cutoff
+        # A partial post, or a search that came back short, keeps this run's cutoff, so
+        # the next run reaches back over the PRs it did not deliver.
+        covered = searched_at if posted == len(messages) and not truncated else cutoff
         kept, pruned = save_state(args.state, state, reported,
                                   args.state_retention_days, covered)
         print(f"State: {len(reported)} recorded, {kept} tracked "

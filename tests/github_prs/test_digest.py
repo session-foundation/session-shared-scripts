@@ -437,7 +437,8 @@ class TestAcrossRuns(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.path = os.path.join(directory.name, "seen.json")
 
-    def run_digest(self, at, prs, accepted=99, search_takes=timedelta(0), dry_run=False):
+    def run_digest(self, at, prs, accepted=99, search_takes=timedelta(0), dry_run=False,
+                   truncated=False):
         """Returns the PR numbers in each message sent, and the first message's JSON."""
         clock = [at]
 
@@ -448,7 +449,7 @@ class TestAcrossRuns(unittest.TestCase):
 
         def search(session, org):
             clock[0] += search_takes
-            return prs, False
+            return prs, truncated
 
         sent = []
 
@@ -525,6 +526,12 @@ class TestAcrossRuns(unittest.TestCase):
         self.assertEqual(self.covered(), stamp(tuesday - timedelta(hours=72)))
         self.run_digest(tuesday + timedelta(hours=1), moved, accepted=0)
         self.assertEqual(self.covered(), stamp(tuesday - timedelta(hours=72)))
+
+    def test_a_search_that_came_back_short_does_not_advance_the_stamp(self):
+        monday = local(2026, 9, 21, 16, 0)
+        self.run_digest(monday, [])
+        self.run_digest(monday + timedelta(days=1), [], truncated=True)
+        self.assertEqual(self.covered(), stamp(monday + timedelta(days=1) - timedelta(hours=72)))
 
 
 class TestFetching(unittest.TestCase):
