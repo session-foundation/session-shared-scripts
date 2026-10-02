@@ -49,11 +49,3 @@ writing nothing (as the `crowdin` user, with `crowdin.env` loaded):
 crowdin-reconcile-duplicates --dry-run --state /tmp/none.json --locales fr
 crowdin-reconcile-duplicates --dry-run --state /tmp/none.json --locales fr --croql
 ```
-
-## The sharded report
-
-`crowdin-report-duplicates` is the scan this replaces: it lists every open slot rather
-than what changed, a rotating eighth of the locales a day, from
-`.github/workflows/crowdin_multiple_translations_report.yml`. It stays until a full
-reconciliation cycle has run clean on the host. `--json` writes the complete findings,
-which is still the way to get every open slot in one file.

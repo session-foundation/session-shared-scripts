@@ -35,17 +35,3 @@ uv run ruff check .
 [its dependencies](docs/tools/sogs-ban.md#dependencies) for why it is not on PyPI.
 [tests/goldens](tests/goldens/README.md) pins the systemd drop-ins generated from `jobs.toml`.
 
-## Workflow Failure Notificaiton
-
-If a workflow fails and is in the list of workflows monitored by the failure notificaiton workflow, the failure notificaiton workflow will send a message to a discord webhook.
-
-### Required Secrets
-
-| Secret                | Description                 |
-| --------------------- | --------------------------- |
-| `DISCORD_WEBHOOK_URL` | Url for the Discord webhook |
-
-### Trigger Test Notification
-
-The failure notification can be triggered by manualy running the Test Failure Notification workflow.
-

@@ -12,7 +12,7 @@ straight onto session-localization's `main`, the TypeScript module Desktop and Q
 | Re-run | `systemctl start session-ops@crowdin-sync.service`; one platform with `session-ops run crowdin-sync -- --only ios` |
 | Logs | `journalctl -u session-ops@crowdin-sync -n 100 --no-pager`; the run's downloads, parsed JSON and validation report under `/var/lib/session-ops/crowdin-sync/runs/`, for 14 days |
 
-One process, where the workflow was eight jobs passing artefacts:
+One process, in order:
 
 1. **Download** every locale's XLIFF export, approved translations only, plus the
    non-translatable glossary terms.

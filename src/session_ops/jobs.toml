@@ -87,7 +87,6 @@ user = "publisher"
 env_files = ["/etc/session-ops/crowdin.env", "/etc/session-ops/publish.env"]
 env = ["CROWDIN_API_TOKEN", "PUBLISH_GIT_AUTHOR"]
 channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
-# Clear of check_for_crowdin_updates.yml's run, which pushes the same branches.
 schedule = "Mon 13:00 Australia/Melbourne"
 max_age_hours = 176
 timeout = "1h"
@@ -102,7 +101,6 @@ user = "publisher"
 env_files = ["/etc/session-ops/crowdin.env", "/etc/session-ops/publish.env"]
 env = ["PUBLISH_GIT_AUTHOR", "CROWDIN_DISCORD_WEBHOOK_URL"]
 channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
-# Clear of update_static_snode_list.yml's 10:30 UTC run, which pushes the same branch.
 schedule = "*-*-* 13:00 Australia/Melbourne"
 max_age_hours = 28
 timeout = "10min"

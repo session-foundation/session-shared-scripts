@@ -12,7 +12,7 @@ and the alert says which. Android's own CI validates its pull request, so no Gra
 build runs here.
 
 The run's inputs, outputs and validation report are kept under the job's
-runs/<stamp>/ for 14 days, which is what the workflow's artefacts were for.
+runs/<stamp>/ for 14 days.
 
 Config (env vars):
     CROWDIN_API_TOKEN     read-only

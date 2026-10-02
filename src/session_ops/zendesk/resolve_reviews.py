@@ -52,10 +52,8 @@ Config (env vars, or flags for local runs):
     ZENDESK_EMAIL         agent email for API token auth
     ZENDESK_API_TOKEN     Zendesk API token
     ZENDESK_DISCORD_WEBHOOK_URL
-                          Discord incoming webhook for the triage channel — the same
-                          one the digest posts to, not the shared
-                          DISCORD_WEBHOOK_URL the failure notifier uses (only needed
-                          with --apply)
+                          Discord incoming webhook for the triage channel, the one
+                          the digest posts to (only needed with --apply)
 
 Usage:
     # report what would be solved, touch nothing (the default)
@@ -269,8 +267,8 @@ def build_message(counts, *, url=None, examined=0, attempted=0, remaining=0,
     only speaks when it acted is indistinguishable from a job that has quietly
     stopped working — and this one exists to keep a number moving that nobody
     watches directly — so a no-op run reports what it looked at instead. The runs
-    that die before there is a message to post are covered by an if: failure() step
-    in the workflow, which posts to the same channel.
+    that die before there is a message to post are reported by `session-ops run`, to
+    the same channel.
 
     Keyword-only: these are six independent facts about one run, and at a call site
     `build_message(counts, examined=48, attempted=0)` says which is which.
@@ -349,10 +347,6 @@ def main(argv=None):
     subdomain = get_env("ZENDESK_SUBDOMAIN", args.subdomain)
     email = get_env("ZENDESK_EMAIL", args.email)
     api_token = get_env("ZENDESK_API_TOKEN", args.api_token)
-    # The triage channel's own webhook, the one the digest posts to — a Discord
-    # webhook is bound to the channel it was created in, so posting alongside the
-    # digest means using its secret rather than the shared DISCORD_WEBHOOK_URL.
-    #
     # Resolved up front, before anything is fetched or solved: a missing webhook
     # should stop the run rather than have it bulk-edit tickets it cannot report. A
     # dry run posts nothing, so it never needs one.
