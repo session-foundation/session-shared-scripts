@@ -492,8 +492,9 @@ class TestCrowdinGenerate(RepoTest):
         res = sync.ANDROID_RES
         root = self.generate("android", "session-android", "dev", {
             f"{res}/values/strings.xml": "old", f"{res}/values-b+sh+HR/strings.xml": "stale",
-            sync.ANDROID_CONSTANTS: "old"})
+            f"{res}/values-night/strings.xml": "night", sync.ANDROID_CONSTANTS: "old"})
         self.assertFalse(os.path.exists(os.path.join(root, res, "values-b+sh+HR/strings.xml")))
+        self.assertEqual(self.read(root, f"{res}/values-night/strings.xml"), "night")
         self.assertIn('<string name="app_name" translatable="false">Session</string>',
                       self.read(root, f"{res}/values/strings.xml"))
         german = self.read(root, f"{res}/values-b+de+DE/strings.xml")

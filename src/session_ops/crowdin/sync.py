@@ -69,11 +69,12 @@ def checkout(target, work, token):
 def generate(target, repo, parsed):
     root = repo.path
     if target == "android":
-        # Stale locales drop out: the generator writes only the ones Crowdin has.
+        # Stale locales drop out: the generator writes only the ones Crowdin has. Only its
+        # own folders, so a qualifier's strings (values-night/) are left alone.
         res = os.path.join(root, ANDROID_RES)
         for entry in os.listdir(res) if os.path.isdir(res) else []:
             strings = os.path.join(res, entry, "strings.xml")
-            if entry.startswith("values") and os.path.exists(strings):
+            if (entry == "values" or entry.startswith("values-b+")) and os.path.exists(strings):
                 os.remove(strings)
         generate_android_strings.main([parsed, res, os.path.join(root, ANDROID_CONSTANTS)])
     elif target == "ios":
