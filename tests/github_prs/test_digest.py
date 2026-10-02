@@ -105,6 +105,14 @@ class TestPartitionByState(unittest.TestCase):
         self.assertEqual([p["number"] for p in changed], [1])
         self.assertEqual((new, unchanged), ([], []))
 
+    def test_an_entry_that_is_not_an_object_counts_as_new(self):
+        item = pr(1)
+        for entry in ("x", None, 3):
+            with self.subTest(entry=entry):
+                new, _, _ = digest.partition_by_state(
+                    [item], {"version": digest.STATE_VERSION, "seen": {digest.pr_id(item): entry}})
+                self.assertEqual([p["number"] for p in new], [1])
+
     def test_a_pr_that_has_not_moved_is_dropped(self):
         item = pr(1, updated="2026-09-24T09:00:00Z")
         new, changed, unchanged = digest.partition_by_state(

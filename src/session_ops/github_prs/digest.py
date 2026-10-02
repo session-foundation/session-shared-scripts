@@ -221,7 +221,8 @@ def partition_by_state(prs, state):
     new, changed, unchanged = [], [], []
     for pr in prs:
         previous = seen.get(pr_id(pr))
-        if previous is None:
+        # Anything but an object (a hand edit) counts as unseen rather than crashing daily.
+        if not isinstance(previous, dict):
             new.append(pr)
         elif previous.get("updated_at") != activity_key(pr):
             changed.append(pr)
