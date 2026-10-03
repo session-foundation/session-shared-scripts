@@ -91,8 +91,8 @@ def export_and_download_language(language: dict, is_source: bool = False) -> str
 
     with progress_lock:
         completed_count += 1
-        print(f"\033[2K{Fore.WHITE}⏳ Downloaded {
-              completed_count}/{total_count} translations...{Style.RESET_ALL}", end='\r')
+        print(f"\033[2K{Fore.WHITE}⏳ Downloaded {completed_count}/{total_count} "
+              f"translations...{Style.RESET_ALL}", end='\r')
 
     return lang_locale
 

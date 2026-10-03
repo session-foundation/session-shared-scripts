@@ -3,7 +3,7 @@ name = "session-ops"
 version = "0.1.0"
 description = "Session Foundation's scheduled jobs and webhooks: Zendesk, GitHub, Crowdin, SOGS."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     # CLDR data: a new babel can rename a language in the generated language lists.
     "babel==2.17.0",
@@ -47,7 +47,7 @@ build-backend = "uv_build"
 
 # Pyflakes and syntax errors only: what catches a broken import or name mid-refactor.
 [tool.ruff]
-target-version = "py312"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["F", "E9"]

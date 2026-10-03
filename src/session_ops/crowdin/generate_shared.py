@@ -209,8 +209,7 @@ def setup_generation(input_directory: str):
     target_languages: List[str] = project_details['data']['targetLanguages']
     target_languages.sort(key=lambda x: x['locale'])
     num_languages = len(target_languages)
-    print_success(f"Project info processed, {
-                  num_languages} languages will be converted")
+    print_success(f"Project info processed, {num_languages} languages will be converted")
 
     rtl_languages: List[str] = [
         lang for lang in target_languages if is_rtl(lang)]

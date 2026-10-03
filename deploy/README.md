@@ -16,7 +16,7 @@ run under its `runs/` for 14 days.
 
 ## Install
 
-Needs systemd 252+, Python 3.12+ at `/usr/bin/python3`, `git`, and nginx with certbot.
+Needs systemd 252+, Python 3.11+ at `/usr/bin/python3`, `git`, and nginx with certbot.
 As root:
 
 ```bash

@@ -160,8 +160,7 @@ def find_invalid_braces(text: str) -> List[str]:
             # Check if content is a valid variable name (alphanumeric + underscore)
             if not re.match(r'^\w+$', content):
                 snippet = text[i:end+1]
-                issues.append(f"Invalid variable syntax '{
-                              snippet}' at position {i}")
+                issues.append(f"Invalid variable syntax '{snippet}' at position {i}")
 
             i = end + 1
         elif text[i] == '}':
@@ -236,8 +235,7 @@ def validate_all_translations(parsed_locales: Dict[str, Any], source_locale: str
             string_values = get_all_string_values(trans_data)
 
             for context, text in string_values:
-                full_key = f"{key}" if context == "value" else f"{
-                    key} ({context})"
+                full_key = f"{key}" if context == "value" else f"{key} ({context})"
 
                 # Check 1: Variables match source (NON-PLURALS ONLY)
                 # Plurals are skipped because different languages have different plural forms
@@ -251,15 +249,13 @@ def validate_all_translations(parsed_locales: Dict[str, Any], source_locale: str
                     if missing_vars:
                         result.add_issue(
                             locale, full_key, "missing_variable",
-                            f"Missing variables: {{{
-                                ', '.join(sorted(missing_vars))}}}"
+                            f"Missing variables: {{{', '.join(sorted(missing_vars))}}}"
                         )
 
                     if extra_vars:
                         result.add_issue(
                             locale, full_key, "extra_variable",
-                            f"Extra variables not in source: {{{
-                                ', '.join(sorted(extra_vars))}}}"
+                            f"Extra variables not in source: {{{', '.join(sorted(extra_vars))}}}"
                         )
 
                 # Check 3: Invalid curly braces (ALL strings including plurals)
@@ -297,8 +293,7 @@ def validate_all_translations(parsed_locales: Dict[str, Any], source_locale: str
                         if locale_count < source_count:
                             result.add_issue(
                                 locale, full_key, "missing_tag",
-                                f"Missing <{tag}> tags: expected {
-                                    source_count}, found {locale_count}",
+                                f"Missing <{tag}> tags: expected {source_count}, found {locale_count}",
                                 severity="warning"
                             )
 
@@ -324,11 +319,9 @@ def print_validation_summary(result: ValidationResult):
 
         type_display = issue_type.replace('_', ' ').title()
         if error_issues:
-            print(f"{Fore.RED}  {type_display}: {
-                  len(error_issues)} errors{Style.RESET_ALL}")
+            print(f"{Fore.RED}  {type_display}: {len(error_issues)} errors{Style.RESET_ALL}")
         if warning_issues:
-            print(f"{Fore.YELLOW}  {type_display}: {
-                  len(warning_issues)} warnings{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}  {type_display}: {len(warning_issues)} warnings{Style.RESET_ALL}")
 
     print(f"\n{Fore.YELLOW}Issues by locale:{Style.RESET_ALL}")
     by_locale = result.get_issues_by_locale()
@@ -350,10 +343,8 @@ def print_validation_summary(result: ValidationResult):
                 print(f"    ... and {len(issues) - 3} more")
 
     print(f"\n{Fore.YELLOW}{'='*60}{Style.RESET_ALL}")
-    total_str = f"{Fore.RED}{error_count} errors{
-        Style.RESET_ALL}" if error_count else ""
-    warning_str = f"{Fore.YELLOW}{warning_count} warnings{
-        Style.RESET_ALL}" if warning_count else ""
+    total_str = f"{Fore.RED}{error_count} errors{Style.RESET_ALL}" if error_count else ""
+    warning_str = f"{Fore.YELLOW}{warning_count} warnings{Style.RESET_ALL}" if warning_count else ""
     print(f"Total: {', '.join(filter(None, [total_str, warning_str]))}")
     print(f"{Fore.YELLOW}{'='*60}{Style.RESET_ALL}\n")
 
@@ -476,8 +467,7 @@ def parse_all_xliff_files(input_directory: str, skip_validation: bool = False) -
             raise FileNotFoundError(
                 f"Could not find '{input_file}' in raw translations directory")
 
-        print(f"\033[2K{Fore.WHITE}⏳ Parsing {
-              lang_locale}...{Style.RESET_ALL}", end='\r')
+        print(f"\033[2K{Fore.WHITE}⏳ Parsing {lang_locale}...{Style.RESET_ALL}", end='\r')
 
         try:
             result = parse_xliff_file(input_file)
@@ -491,24 +481,20 @@ def parse_all_xliff_files(input_directory: str, skip_validation: bool = False) -
             }
 
         except Exception as e:
-            raise ValueError(f"Error processing locale {
-                             lang_locale}: {str(e)}")
+            raise ValueError(f"Error processing locale {lang_locale}: {str(e)}")
 
-    print(f"\033[2K{Fore.GREEN}✅ Parsed {
-          len(parsed_locales)} locale files{Style.RESET_ALL}")
+    print(f"\033[2K{Fore.GREEN}✅ Parsed {len(parsed_locales)} locale files{Style.RESET_ALL}")
 
     # Run validation
     validation_result = ValidationResult()
     if not skip_validation:
-        print(f"{Fore.WHITE}⏳ Validating translations...{
-              Style.RESET_ALL}", end='\r')
+        print(f"{Fore.WHITE}⏳ Validating translations...{Style.RESET_ALL}", end='\r')
         source_locale = source_language['locale']
         validation_result = validate_all_translations(
             parsed_locales, source_locale)
 
         if validation_result.issues:
-            print(f"\033[2K{Fore.YELLOW}⚠️  Validation completed with issues{
-                  Style.RESET_ALL}")
+            print(f"\033[2K{Fore.YELLOW}⚠️  Validation completed with issues{Style.RESET_ALL}")
         else:
             print(f"\033[2K{Fore.GREEN}✅ Validation passed{Style.RESET_ALL}")
 
@@ -579,19 +565,16 @@ def main(argv=None):
                         or '.', exist_ok=True)
             with open(args.validation_report, 'w', encoding='utf-8') as f:
                 json.dump(report, f, ensure_ascii=False, indent=2)
-            print(f"{Fore.WHITE}Validation report saved to {
-                  args.validation_report}{Style.RESET_ALL}")
+            print(f"{Fore.WHITE}Validation report saved to {args.validation_report}{Style.RESET_ALL}")
 
         os.makedirs(os.path.dirname(args.output_file) or '.', exist_ok=True)
         with open(args.output_file, 'w', encoding='utf-8') as f:
             json.dump(parsed_data, f, ensure_ascii=False, indent=2)
 
-        print(f"{Fore.GREEN}✅ Parsed translations saved to {
-              args.output_file}{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}✅ Parsed translations saved to {args.output_file}{Style.RESET_ALL}")
 
         if args.error_on_validation_failure and validation_result.has_errors():
-            print(f"{Fore.RED}❌ Exiting with error due to validation failures{
-                  Style.RESET_ALL}")
+            print(f"{Fore.RED}❌ Exiting with error due to validation failures{Style.RESET_ALL}")
             sys.exit(f"{validation_result.get_error_count()} translation(s) failed "
                      f"validation; see the validation report")
 
@@ -599,8 +582,7 @@ def main(argv=None):
         print("\nProcess interrupted by user")
         sys.exit(0)
     except Exception as e:
-        print(f"\033[2K{Fore.RED}❌ An error occurred: {
-              str(e)}{Style.RESET_ALL}")
+        print(f"\033[2K{Fore.RED}❌ An error occurred: {str(e)}{Style.RESET_ALL}")
         sys.exit(f"Parsing the translations failed: {e}")
 
 
