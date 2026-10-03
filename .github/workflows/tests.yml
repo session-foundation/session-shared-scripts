@@ -29,9 +29,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The oldest Python the deploy targets: Debian 12's.
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
       - run: pip install uv==0.12.19
 
