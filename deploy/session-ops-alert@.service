@@ -1,0 +1,19 @@
+[Unit]
+Description=Report a failed unit to Discord, unless it already did
+Documentation=https://github.com/session-foundation/session-shared-scripts
+
+[Service]
+Type=oneshot
+User=sessionops
+Group=sessionops
+EnvironmentFile=/etc/session-ops/alerts.env
+ExecStart=/opt/session-ops/.venv/bin/session-ops-alert %i
+# Read-only access to the failed unit's journal, which is where the alert gets the
+# line it quotes. Without it journalctl exits non-zero, the excerpt is dropped and
+# the alert still sends.
+SupplementaryGroups=systemd-journal
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
