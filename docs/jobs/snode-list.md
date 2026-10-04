@@ -7,7 +7,7 @@ cannot reach the seed nodes. A change opens, or updates, a pull request from
 
 | | |
 | --- | --- |
-| Runs | `session-ops@snode-list.timer`, daily 13:00 Australia/Melbourne; the source updates at 10:00 UTC |
+| Runs | `session-ops-queue.timer`, Mon–Fri from 10:00 Australia/Melbourne, after `crowdin-sync`; the source updates at 10:00 UTC |
 | Secrets | `/etc/session-ops/publish.env` and the GitHub App key; `CROWDIN_DISCORD_WEBHOOK_URL` from `crowdin.env` for the summary |
 | Dry run | `session-ops run snode-list --dry-run` |
 | Re-run | `systemctl start session-ops@snode-list.service` |

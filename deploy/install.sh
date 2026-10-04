@@ -5,7 +5,7 @@
 # It creates the accounts, builds the venv, creates any missing env file empty, moves
 # state and env files from the layout before session-ops@ units, installs the units
 # and each job's drop-ins, and enables every job whose env files have content and no
-# other. It never edits nginx, which certbot owns; see deploy/README.md for the route.
+# other: on its own timer, or on the queue's. It never edits nginx, which certbot owns; see deploy/README.md for the route.
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -106,27 +106,50 @@ rm -f "$UNITS/crowdin-relay.service"
 
 install -m 644 "$ROOT"/deploy/*.service "$ROOT"/deploy/*.timer "$UNITS/"
 # Only the generated files go, so a drop-in added by hand survives.
-rm -f "$UNITS"/session-ops@*.service.d/job.conf "$UNITS"/session-ops@*.timer.d/schedule.conf
+rm -f "$UNITS"/session-ops@*.service.d/job.conf "$UNITS"/session-ops@*.timer.d/schedule.conf \
+    "$UNITS"/session-ops-queue.timer.d/schedule.conf
 "$OPS" units --out "$UNITS" >/dev/null
-systemctl daemon-reload
 
 READY=$("$OPS" list --ready)
-# A job removed from jobs.toml, or whose env file was emptied, stops being scheduled.
+QUEUED=$("$OPS" list --queued)
+listed() { printf '%s\n' $2 | grep -qxF "$1"; }
+# What the queue's timer starts: its ready jobs, rebuilt from scratch each install.
+WANTS="$UNITS/session-ops-queue.service.wants"
+rm -rf "$WANTS"
+for job in $QUEUED; do
+    if listed "$job" "$READY"; then
+        install -d -m 755 "$WANTS"
+        ln -s "$UNITS/session-ops@.service" "$WANTS/session-ops@$job.service"
+    fi
+done
+systemctl daemon-reload
+
+# A job removed from jobs.toml, whose env file was emptied, or now queued, loses its timer.
 for link in "$UNITS"/timers.target.wants/session-ops@*.timer; do
     [ -L "$link" ] || continue
     job=${link##*/session-ops@}
     job=${job%.timer}
-    if ! printf '%s\n' $READY | grep -qxF "$job"; then
+    if ! listed "$job" "$READY" || listed "$job" "$QUEUED"; then
         systemctl disable --now "session-ops@$job.timer" >/dev/null
-        echo "disabled session-ops@$job.timer (no longer a ready job)"
+        echo "disabled session-ops@$job.timer (no longer a ready job with a timer of its own)"
     fi
 done
 for job in $READY; do
-    systemctl enable --now "session-ops@$job.timer" >/dev/null
-    echo "enabled session-ops@$job.timer"
+    if listed "$job" "$QUEUED"; then
+        echo "queued session-ops@$job.service"
+    else
+        systemctl enable --now "session-ops@$job.timer" >/dev/null
+        echo "enabled session-ops@$job.timer"
+    fi
 done
+if [ -d "$WANTS" ]; then
+    systemctl enable --now session-ops-queue.timer >/dev/null
+    echo "enabled session-ops-queue.timer"
+else
+    systemctl disable --now session-ops-queue.timer 2>/dev/null || true
+fi
 for job in $("$OPS" list --not-ready); do
-    echo "not enabled: session-ops@$job.timer (its env file is empty)"
+    echo "not enabled: session-ops@$job (its env file is empty)"
 done
 if [ -s "$ETC/zendesk.env" ]; then
     systemctl enable zendesk-relay.service >/dev/null

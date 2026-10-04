@@ -6,7 +6,7 @@ for a plural string, is what gets exported. A slot is (string, locale, plural ca
 
 | | |
 | --- | --- |
-| Runs | `session-ops@crowdin-duplicates.timer`, daily 03:00 UTC |
+| Runs | `session-ops-queue.timer`, Mon–Fri from 10:00 Australia/Melbourne, last |
 | Secrets | `/etc/session-ops/crowdin.env`: a read-only `CROWDIN_API_TOKEN` and the channel's webhook |
 | Dry run | `session-ops run crowdin-duplicates --dry-run -- --locales de` |
 | Re-run | `systemctl start session-ops@crowdin-duplicates.service` |

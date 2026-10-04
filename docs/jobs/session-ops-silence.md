@@ -28,4 +28,4 @@ through a whole schedule: nothing fails, so nothing alerts. Each scheduled unit 
 the first check that found it missing, so a job left disabled alerts once that is older
 than its `max_age_hours`: every scheduled job is meant to run.
 
-A job in `jobs.toml` with a `schedule` is watched; the `session-ops@` template stamps it.
+A job in `jobs.toml` with a `schedule`, or in its `[queue]`, is watched; the `session-ops@` template stamps it.

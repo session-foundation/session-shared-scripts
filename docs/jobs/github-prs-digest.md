@@ -7,7 +7,7 @@ has a reason to already know about:
 
 | | |
 | --- | --- |
-| Runs | `session-ops@github-prs-digest.timer`, Mon–Fri 09:30 Australia/Melbourne |
+| Runs | `session-ops-queue.timer`, Mon–Fri from 10:00 Australia/Melbourne, first in the queue |
 | Secrets | `/etc/session-ops/github-prs.env`: `GITHUB_PRS_TOKEN` with no scopes at all, and the channel's webhook |
 | Dry run | `session-ops run github-prs-digest --dry-run`; `uv run github-prs-digest --dry-run` from a checkout |
 | Re-run | `systemctl start session-ops@github-prs-digest.service` |
@@ -30,7 +30,7 @@ much is waiting.
 
 ## Weekdays, and the state file
 
-The timer runs `Mon..Fri`, so Monday's run has to cover the weekend — hence a 72-hour
+The queue runs `Mon..Fri`, so Monday's run has to cover the weekend — hence a 72-hour
 window rather than a daily one. That window overlaps itself by two days on every run,
 and [`--state`](../../src/session_ops/github_prs/digest.py) is what stops the overlap being noise: it records
 which PRs reached Discord and what each one's `updated_at` was at the time.
