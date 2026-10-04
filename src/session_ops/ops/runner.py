@@ -233,6 +233,8 @@ def main(argv=None):
                            help="Only the names of scheduled jobs whose env files have content.")
     readiness.add_argument("--not-ready", action="store_true",
                            help="Only the names of scheduled jobs with an empty env file.")
+    readiness.add_argument("--queued", action="store_true",
+                           help="Only the names of the queued jobs, in the order they run.")
     run_parser = sub.add_parser("run", help="Run a job as its timer does.")
     run_parser.add_argument("job")
     run_parser.add_argument("--dry-run", action="store_true",
@@ -244,16 +246,21 @@ def main(argv=None):
     args = parser.parse_args(argv[:argv.index("--")] if "--" in argv else argv)
 
     if args.command == "list":
+        queue = registry.load_queue()
+        if args.queued:
+            print("\n".join(queue.jobs))
+            return
         for job in registry.load():
             if args.ready or args.not_ready:
-                if job.schedule and ready(job) == args.ready:
+                if job.scheduled and ready(job) == args.ready:
                     print(job.name)
             else:
-                print(f"{job.name:24} {job.schedule or 'on demand':38} {job.user}")
+                when = f"queue: {queue.schedule}" if job.queued else job.schedule or "on demand"
+                print(f"{job.name:24} {when:44} {job.user}")
         return
     if args.command == "units":
         from session_ops.ops import units
-        for path in units.write(registry.load(), args.out):
+        for path in units.write(registry.load(), registry.load_queue(), args.out):
             print(path)
         return
     try:

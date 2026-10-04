@@ -15,6 +15,12 @@ entry = "m:f"
 user = "u"
 env_files = ["/etc/a.env"]
 args = ["--state", "{state}/s.json"]
+max_age_hours = 80
+'''
+QUEUE = '''
+[queue]
+schedule = "Mon..Fri 10:00 Australia/Melbourne"
+jobs = ["a", "b"]
 '''
 
 
@@ -40,7 +46,25 @@ class TestRegistry(unittest.TestCase):
 
     def test_a_scheduled_job_needs_a_max_age(self):
         with self.assertRaises(ValueError):
-            load(VALID + 'schedule = "daily"\n')
+            load(VALID.replace("max_age_hours = 80\n", "") + 'schedule = "daily"\n')
+
+    def test_a_queued_job_runs_after_the_one_listed_before_it(self):
+        jobs = load(VALID + VALID.replace('"a"', '"b"') + QUEUE)
+        self.assertEqual([(job.queued, job.after) for job in jobs], [(True, ()), (True, ("a",))])
+        self.assertTrue(all(job.scheduled for job in jobs))
+        self.assertEqual(jobs[1].timer, "session-ops-queue.timer")
+
+    def test_a_queued_job_needs_a_max_age(self):
+        with self.assertRaises(ValueError):
+            load(VALID.replace("max_age_hours = 80\n", "") + QUEUE.replace(', "b"', ""))
+
+    def test_a_queued_job_with_its_own_schedule_is_refused(self):
+        with self.assertRaises(ValueError):
+            load(VALID + 'schedule = "daily"\n' + QUEUE.replace(', "b"', ""))
+
+    def test_a_queue_naming_an_unknown_job_is_refused(self):
+        with self.assertRaises(ValueError):
+            load(VALID + QUEUE)
 
     def test_a_name_listed_twice_is_refused(self):
         with self.assertRaises(ValueError):

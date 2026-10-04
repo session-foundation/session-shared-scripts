@@ -7,6 +7,7 @@ does the work: accounts, venv, env files, units, timers, and migrating an older 
 | Unit | What it is |
 | --- | --- |
 | `session-ops@<job>.timer` → `.service` | One per job; a generated drop-in sets its account, env files and schedule. |
+| `session-ops-queue.timer` → `.service` | Starts the jobs in `jobs.toml`'s `[queue]`, which then run one at a time in its order. |
 | `zendesk-relay.service` | Always on, `127.0.0.1:8080`: Zendesk's `claude:` note webhooks. |
 | `session-ops-alert@.service` | Every unit's `OnFailure=` backstop; see [session-ops-silence](../docs/jobs/session-ops-silence.md). |
 
@@ -59,8 +60,10 @@ installed from [`env/`](env/), saying what goes in it.
 ## Checking
 
 ```bash
-systemctl list-timers 'session-ops@*'
+systemctl list-timers 'session-ops*'
 systemctl start session-ops@<job>.service && journalctl -fu session-ops@<job>
+# Re-run one job by its own service: starting session-ops-queue.service again re-runs
+# every queued job that has already finished today.
 systemctl start session-ops-alert@test.service          # posts to the alerts channel
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST 127.0.0.1:8080/zendesk/notes \
   -H 'Content-Type: application/json' -d '{"ticket_id":"1"}'   # expect 401
@@ -80,7 +83,7 @@ To end it, stop the timers, then close the rehearsal pull requests:
 for link in /etc/systemd/system/timers.target.wants/session-ops@*.timer; do
   [ -L "$link" ] && systemctl disable --now "${link##*/}"
 done
-systemctl disable --now zendesk-relay.service
+systemctl disable --now session-ops-queue.timer zendesk-relay.service
 for repo in session-android session-ios session-localization; do
   gh pr list -R "session-foundation/$repo" --state open --json number,headRefName \
     -q '.[] | select(.headRefName | startswith("rehearsal/")) | .number' |

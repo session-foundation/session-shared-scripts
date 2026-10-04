@@ -9,7 +9,7 @@ from session_ops.monitor import silence
 
 HOUR = 3600
 NOW = 1_790_000_000.0
-JOB = {"name": "github-prs-digest", "max_age_hours": 80}
+JOB = {"name": "github-prs-digest", "max_age_hours": 80, "timer": "session-ops-queue.timer"}
 
 
 class TestEvaluate(unittest.TestCase):
@@ -73,7 +73,7 @@ class TestMessage(unittest.TestCase):
         self.assertIn("`box`", message)
         self.assertIn("**github-prs-digest**: silent for **4d 4h** (allowed 80h)", message)
         self.assertIn("last success 2026-09-", message)
-        self.assertIn("systemctl list-timers session-ops@github-prs-digest.timer", message)
+        self.assertIn("systemctl list-timers session-ops-queue.timer", message)
         self.assertIn("journalctl -u session-ops@github-prs-digest.service", message)
 
     def test_a_job_that_never_succeeded_says_since_when_it_was_watched(self):
@@ -85,7 +85,7 @@ class TestRegistry(unittest.TestCase):
     def test_every_scheduled_job_is_watched_and_nothing_else(self):
         from session_ops.ops import registry
         watched = {job["name"] for job in silence.load_jobs(silence.REGISTRY)}
-        self.assertEqual(watched, {job.name for job in registry.load() if job.schedule})
+        self.assertEqual(watched, {job.name for job in registry.load() if job.scheduled})
 
 
 if __name__ == "__main__":

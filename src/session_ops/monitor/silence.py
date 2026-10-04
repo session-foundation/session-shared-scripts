@@ -43,8 +43,8 @@ REMIND_SECONDS = 24 * 3600
 
 def load_jobs(path):
     """The scheduled jobs in the registry: nothing is late that has no schedule."""
-    return [{"name": job.name, "max_age_hours": job.max_age_hours}
-            for job in registry.load(path) if job.schedule]
+    return [{"name": job.name, "max_age_hours": job.max_age_hours, "timer": job.timer}
+            for job in registry.load(path) if job.scheduled]
 
 
 def stamp_time(stamps_dir, name):
@@ -121,7 +121,7 @@ def build_message(due, host, now):
                 else f"no success recorded since {utc(since)}")
         lines.append(f"• **{name}**: silent for **{duration(now - since)}** "
                      f"(allowed {job['max_age_hours']}h), {seen}.")
-        lines.append(f"  `systemctl list-timers session-ops@{name}.timer` · "
+        lines.append(f"  `systemctl list-timers {job['timer']}` · "
                      f"`journalctl -u session-ops@{name}.service -n 50 --no-pager`")
     return "\n".join(lines)
 

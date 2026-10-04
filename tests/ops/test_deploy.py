@@ -56,14 +56,26 @@ class TestDeploy(unittest.TestCase):
                 self.assertIn("OnFailure=session-ops-alert@%n.service", unit_text(name))
 
     def test_a_scheduled_job_gets_a_timer_and_an_unscheduled_one_does_not(self):
-        files = units.dropins(registry.load())
+        files = units.dropins(registry.load(), registry.load_queue())
         for job in registry.load():
             with self.subTest(job=job.name):
                 self.assertEqual(f"session-ops@{job.name}.timer.d/schedule.conf" in files,
                                  bool(job.schedule))
 
+    def test_each_queued_job_runs_after_every_one_before_it(self):
+        queue = registry.load_queue()
+        files = units.dropins(registry.load(), queue)
+        self.assertIn(f"OnCalendar={queue.schedule}\n",
+                      files["session-ops-queue.timer.d/schedule.conf"])
+        for i, job in enumerate(queue.jobs[1:], start=1):
+            with self.subTest(job=job):
+                ahead = " ".join(f"session-ops@{name}.service" for name in queue.jobs[:i])
+                self.assertIn(f"\nAfter={ahead}\n",
+                              files[f"session-ops@{job}.service.d/job.conf"])
+        self.assertNotIn("After=", files[f"session-ops@{queue.jobs[0]}.service.d/job.conf"])
+
     def test_the_generated_dropins(self):
-        files = units.dropins(registry.load())
+        files = units.dropins(registry.load(), registry.load_queue())
         text = "".join(f"==> {path} <==\n{files[path]}\n" for path in sorted(files))
         assert_golden(self, "units/dropins.txt", text)
 

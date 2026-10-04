@@ -1,0 +1,11 @@
+# The schedule comes from the drop-in (OnCalendar=), written from jobs.toml's [queue].
+[Unit]
+Description=Schedule for the queued session-ops jobs
+Documentation=https://github.com/session-foundation/session-shared-scripts
+
+[Timer]
+Persistent=yes
+RandomizedDelaySec=2min
+
+[Install]
+WantedBy=timers.target

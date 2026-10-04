@@ -4,7 +4,7 @@ Claude reviews the Zendesk tickets awaiting a reply — `new` and `open`, no app
 
 | | |
 | --- | --- |
-| Runs | `session-ops@zendesk-digest.timer`, Mon–Fri 10:00 Australia/Melbourne: `zendesk-resolve-reviews --apply`, then `zendesk-triage` |
+| Runs | `session-ops-queue.timer`, Mon–Fri from 10:00 Australia/Melbourne, after `github-prs-digest`: `zendesk-resolve-reviews --apply`, then `zendesk-triage` |
 | Secrets | `/etc/session-ops/zendesk.env`: the Zendesk API token, the triage channel's webhook, and the Claude Code CLI login of the `zendesk` account |
 | Dry run | `session-ops run zendesk-digest --dry-run`; `uv run zendesk-triage --window-hours 72 --dry-run` from a checkout |
 | Re-run | `systemctl start session-ops@zendesk-digest.service` |
@@ -162,7 +162,7 @@ If a single request ever does hit the ceiling, the JSON never closes and no `str
 
 ## Schedule
 
-Runs **Monday to Friday at 10:00 Melbourne** over a 72h window (~70 tickets) — 00:00 UTC in winter, 23:00 UTC the previous day under AEDT. The cron this replaces had to pin UTC+10 year-round and drift an hour against local time, because GitHub cron is UTC-only; `OnCalendar=` takes a named zone, which tracks daylight saving and keeps the day-of-week local as well. The timezone belongs inside the expression; there is no `Timezone=` key in a `[Timer]` and systemd ignores one silently, so check any change with `systemd-analyze calendar`. Unlike the cron, a host that was asleep at 10:00 still gets its digest once on the next boot (`Persistent=yes`).
+Runs **Monday to Friday from 10:00 Melbourne**, second in the queue, over a 72h window (~70 tickets) — 00:00 UTC in winter, 23:00 UTC the previous day under AEDT. The cron this replaces had to pin UTC+10 year-round and drift an hour against local time, because GitHub cron is UTC-only; `OnCalendar=` takes a named zone, which tracks daylight saving and keeps the day-of-week local as well. The timezone belongs inside the expression; there is no `Timezone=` key in a `[Timer]` and systemd ignores one silently, so check any change with `systemd-analyze calendar`. Unlike the cron, a host that was asleep at 10:00 still gets its digest once on the next boot (`Persistent=yes`).
 
 The window is on `updated>`, not `created>`, so a ticket the requester adds detail to days after opening it is fetched again — a created-window would never see it. 72h rather than the 24h between runs so a failed run doesn't drop a day and Monday still reaches back past the weekend. Neither the overlap nor the wider net duplicates posts, because of the dedup state above.
 

@@ -11,8 +11,17 @@
 #                  without one reports to ALERT_DISCORD_WEBHOOK_URL
 #   unit           further [Service] lines, over the template's hardening
 #
+#   max_age_hours  for a queued job, its queue's: the weekend's 72 h (73 h across
+#                  April's DST change), plus every job ahead of it running to its timeout
+#
 # Timezones go in the schedule itself: systemd has no Timezone= key and ignores one.
 # Check a schedule with `systemd-analyze calendar "<schedule>"`.
+
+# One timer starts these together and each runs once the one before it has ended,
+# whether or not it succeeded, so no two of them share the host or their APIs.
+[queue]
+schedule = "Mon..Fri 10:00 Australia/Melbourne"
+jobs = ["github-prs-digest", "zendesk-digest", "crowdin-sync", "snode-list", "crowdin-duplicates"]
 
 [[job]]
 name = "github-prs-digest"
@@ -23,9 +32,8 @@ user = "ghdigest"
 env_files = ["/etc/session-ops/github-prs.env"]
 env = ["GITHUB_PRS_TOKEN", "GITHUB_PRS_DISCORD_WEBHOOK_URL"]
 channel_env = "GITHUB_PRS_DISCORD_WEBHOOK_URL"
-# Weekdays, half an hour before the Zendesk digest. The window spans the weekend; a longer
-# gap (April's 73 h DST weekend, a missed run) reaches back through covered_until in --state.
-schedule = "Mon..Fri 09:30 Australia/Melbourne"
+# The window spans the weekend; a longer gap (April's 73 h DST weekend, a missed run)
+# reaches back through covered_until in --state.
 max_age_hours = 80
 timeout = "15min"
 
@@ -38,7 +46,6 @@ user = "zendesk"
 env_files = ["/etc/session-ops/zendesk.env"]
 env = ["ZENDESK_SUBDOMAIN", "ZENDESK_EMAIL", "ZENDESK_API_TOKEN", "ZENDESK_DISCORD_WEBHOOK_URL"]
 channel_env = "ZENDESK_DISCORD_WEBHOOK_URL"
-schedule = "Mon..Fri 10:00 Australia/Melbourne"
 max_age_hours = 80
 # A full 1000-ticket resolve is ten bulk jobs polled for up to 300 s each.
 timeout = "90min"
@@ -61,8 +68,7 @@ user = "crowdin"
 env_files = ["/etc/session-ops/crowdin.env"]
 env = ["CROWDIN_API_TOKEN", "CROWDIN_DISCORD_WEBHOOK_URL"]
 channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
-schedule = "*-*-* 03:00 UTC"
-max_age_hours = 28
+max_age_hours = 80
 # About 9 minutes; a full scan without --croql is ~110k requests, about 85 minutes.
 timeout = "2h"
 
@@ -87,8 +93,7 @@ user = "publisher"
 env_files = ["/etc/session-ops/crowdin.env", "/etc/session-ops/publish.env"]
 env = ["CROWDIN_API_TOKEN", "PUBLISH_GIT_AUTHOR"]
 channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
-schedule = "Mon 13:00 Australia/Melbourne"
-max_age_hours = 176
+max_age_hours = 80
 timeout = "1h"
 # Readable by this unit alone, at $CREDENTIALS_DIRECTORY; publishing needs it.
 unit = ["LoadCredential=github-app.pem:/etc/session-ops/github-app.pem"]
@@ -101,8 +106,7 @@ user = "publisher"
 env_files = ["/etc/session-ops/crowdin.env", "/etc/session-ops/publish.env"]
 env = ["PUBLISH_GIT_AUTHOR", "CROWDIN_DISCORD_WEBHOOK_URL"]
 channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
-schedule = "*-*-* 13:00 Australia/Melbourne"
-max_age_hours = 28
+max_age_hours = 80
 timeout = "10min"
 unit = ["LoadCredential=github-app.pem:/etc/session-ops/github-app.pem"]
 

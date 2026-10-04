@@ -1,0 +1,10 @@
+# Its timer's run of the jobs in jobs.toml's [queue]: install.sh links each ready one
+# into session-ops-queue.service.wants/, and their generated After= runs them in order.
+[Unit]
+Description=Start the queued session-ops jobs
+Documentation=https://github.com/session-foundation/session-shared-scripts
+OnFailure=session-ops-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/true
