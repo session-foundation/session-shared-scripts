@@ -62,6 +62,8 @@ installed from [`env/`](env/), saying what goes in it.
 ```bash
 systemctl list-timers 'session-ops*'
 systemctl start session-ops@<job>.service && journalctl -fu session-ops@<job>
+# Re-run one job by its own service: starting session-ops-queue.service again re-runs
+# every queued job that has already finished today.
 systemctl start session-ops-alert@test.service          # posts to the alerts channel
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST 127.0.0.1:8080/zendesk/notes \
   -H 'Content-Type: application/json' -d '{"ticket_id":"1"}'   # expect 401

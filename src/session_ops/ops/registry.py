@@ -29,7 +29,7 @@ class Job:
     timeout: str = "30min"
     unit: tuple = field(default=())
     queued: bool = False
-    after: str = None
+    after: tuple = ()
 
     @property
     def scheduled(self):
@@ -103,8 +103,10 @@ def _apply_queue(path, jobs, row):
             raise ValueError(f"{path}: {name} is queued, so it takes no schedule of its own")
     if len(set(order)) != len(order):
         raise ValueError(f"{path}: [queue] lists a job twice")
-    previous = dict(zip(order[1:], order))
-    return [replace(job, queued=True, after=previous.get(job.name)) if job.name in order else job
+    # Every job ahead, not just the previous one: install.sh links only the ready ones,
+    # and After= orders nothing against a unit that is not being started.
+    ahead = {name: tuple(order[:i]) for i, name in enumerate(order)}
+    return [replace(job, queued=True, after=ahead[job.name]) if job.name in order else job
             for job in jobs]
 
 

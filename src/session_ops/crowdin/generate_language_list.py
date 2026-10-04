@@ -117,7 +117,7 @@ def generate_languages_ts(parsed_data: Dict[str, Any], output_path: str):
     keys = locale_keys(parsed_data)
     names, english, territories, unnamed = build_language_data(keys)
 
-    # Reported rather than raised: this runs in the weekly translation job, and a language nobody
+    # Reported rather than raised: this runs in the translation job, and a language nobody
     # has named yet must not hold up everyone else's strings. The fix is an override in
     # languageList.ts, which is a decision somebody makes rather than one this script can.
     if unnamed:

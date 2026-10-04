@@ -18,10 +18,10 @@ The open slots live in `/var/lib/session-ops/crowdin-duplicates/duplicates.json`
 only what changed: slots newly holding 2+ translations, and slots that no longer do.
 Nothing changed, nothing is posted.
 
-Reconciliation judges every string of every locale once a day, so a new duplicate is
-posted within a day, well before the weekly export. A slot whose string was deleted,
-or whose locale left the project, resolves. One reconciliation runs at a time: one
-started while another holds the state's lock exits. The state is written only once
+Reconciliation judges every string of every locale each weekday, after that day's
+export, so a new duplicate is posted before the next one. A slot whose string was
+deleted, or whose locale left the project, resolves. One reconciliation runs at a time:
+one started while another holds the state's lock exits. The state is written only once
 Discord accepted every message, so a failed post is repeated in full rather than lost.
 
 Losing the state is not harmless the way a digest's dedup file is: every open slot

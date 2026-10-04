@@ -1,5 +1,5 @@
 """
-Weekly: download the approved translations from Crowdin, validate them, generate each
+Weekdays: download the approved translations from Crowdin, validate them, generate each
 platform's strings, and publish them.
 
 - session-android and session-ios get a pull request from

@@ -62,14 +62,15 @@ class TestDeploy(unittest.TestCase):
                 self.assertEqual(f"session-ops@{job.name}.timer.d/schedule.conf" in files,
                                  bool(job.schedule))
 
-    def test_each_queued_job_runs_after_the_one_before_it(self):
+    def test_each_queued_job_runs_after_every_one_before_it(self):
         queue = registry.load_queue()
         files = units.dropins(registry.load(), queue)
         self.assertIn(f"OnCalendar={queue.schedule}\n",
                       files["session-ops-queue.timer.d/schedule.conf"])
-        for before, job in zip(queue.jobs, queue.jobs[1:]):
+        for i, job in enumerate(queue.jobs[1:], start=1):
             with self.subTest(job=job):
-                self.assertIn(f"\nAfter=session-ops@{before}.service\n",
+                ahead = " ".join(f"session-ops@{name}.service" for name in queue.jobs[:i])
+                self.assertIn(f"\nAfter={ahead}\n",
                               files[f"session-ops@{job}.service.d/job.conf"])
         self.assertNotIn("After=", files[f"session-ops@{queue.jobs[0]}.service.d/job.conf"])
 

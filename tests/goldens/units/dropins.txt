@@ -9,7 +9,7 @@ OnCalendar=Mon..Fri 10:00 Australia/Melbourne
 
 [Unit]
 Description=Reconcile Crowdin duplicate translations and post what changed
-After=session-ops@snode-list.service
+After=session-ops@github-prs-digest.service session-ops@zendesk-digest.service session-ops@crowdin-sync.service session-ops@snode-list.service
 
 [Service]
 User=crowdin
@@ -22,7 +22,7 @@ TimeoutStartSec=2h
 
 [Unit]
 Description=Crowdin translations into the platform repos
-After=session-ops@zendesk-digest.service
+After=session-ops@github-prs-digest.service session-ops@zendesk-digest.service
 
 [Service]
 User=publisher
@@ -79,7 +79,7 @@ OnCalendar=hourly
 
 [Unit]
 Description=Fallback service node list into session-ios
-After=session-ops@crowdin-sync.service
+After=session-ops@github-prs-digest.service session-ops@zendesk-digest.service session-ops@crowdin-sync.service
 
 [Service]
 User=publisher

@@ -50,7 +50,7 @@ class TestRegistry(unittest.TestCase):
 
     def test_a_queued_job_runs_after_the_one_listed_before_it(self):
         jobs = load(VALID + VALID.replace('"a"', '"b"') + QUEUE)
-        self.assertEqual([(job.queued, job.after) for job in jobs], [(True, None), (True, "a")])
+        self.assertEqual([(job.queued, job.after) for job in jobs], [(True, ()), (True, ("a",))])
         self.assertTrue(all(job.scheduled for job in jobs))
         self.assertEqual(jobs[1].timer, "session-ops-queue.timer")
 
