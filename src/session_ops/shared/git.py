@@ -8,6 +8,8 @@ import base64
 import os
 import subprocess
 
+from session_ops.shared import github
+
 
 def reason(stderr):
     """git's own error line, rather than whatever a wrapper printed before it.
@@ -97,5 +99,11 @@ class Repo:
         # update-index drops skip-worktree, leaving the never-checked-out path a deletion.
         self.git("update-index", "--skip-worktree", "--", path)
 
+    def origin(self):
+        """The remote's "owner/name", from its URL."""
+        url = self.git("remote", "get-url", "origin").stdout.strip()
+        return "/".join(url.removesuffix(".git").rstrip("/").split("/")[-2:])
+
     def push(self, branch, force=False):
+        github.require_publishable(self.origin(), branch, force)
         self.git("push", *(["--force"] if force else []), "origin", f"HEAD:refs/heads/{branch}")

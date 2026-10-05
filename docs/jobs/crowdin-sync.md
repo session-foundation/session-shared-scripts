@@ -51,6 +51,11 @@ key in `/etc/session-ops/github-app.pem`, and a run missing either exits naming 
 dry run needs neither); see [publish.env.example](../../deploy/env/publish.env.example).
 Commits are authored as `PUBLISH_GIT_AUTHOR`.
 
+Whatever the App's installation allows, session-ops writes only the branches listed in
+`PUBLISHABLE` in `shared/github.py`: a push, a pull request or a branch deletion
+anywhere else is refused before it reaches GitHub, as is any API call publishing does
+not make (merging, reviewing, settings). A job writing a new branch adds it there.
+
 ### Crowdin token scopes
 
 Crowdin scopes personal access tokens per endpoint family, and each scope can be

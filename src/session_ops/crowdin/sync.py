@@ -185,7 +185,7 @@ def main(argv=None):
 
     token = None if args.dry_run else github.publish_token(
         publish.ORG, [REPOS[t] for t in args.only])
-    api = github.session(token) if token else None
+    api = github.publish_session(token) if token else None
     published, localization_ran = {}, "localization" in args.only
 
     def run_target(target):

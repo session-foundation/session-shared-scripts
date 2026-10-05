@@ -135,7 +135,7 @@ def main(argv=None):
     content = fetch(http.Session())
     token = None if args.dry_run else github.publish_token(publish.ORG,
                                                            [ASSETS, DESKTOP.repo, IOS])
-    api = github.session(token) if token else None
+    api = github.publish_session(token) if token else None
     results, published = [], {}
 
     def assets(_):

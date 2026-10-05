@@ -72,6 +72,10 @@ class GitHubFake(FakeSession):
         raise AssertionError((method, url))
 
 
+TEST_REPOS = {"app": {"bot": github.BOT, "main": github.DIRECT},
+              "module": {"main": github.DIRECT}, "client": {"bump": github.BOT}}
+
+
 class RepoTest(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp()
@@ -79,6 +83,9 @@ class RepoTest(unittest.TestCase):
         patcher = mock.patch.object(publish, "GITHUB", f"file://{self.root}")
         patcher.start()
         self.addCleanup(patcher.stop)
+        allowed = mock.patch.dict(github.PUBLISHABLE, TEST_REPOS)
+        allowed.start()
+        self.addCleanup(allowed.stop)
 
     def clone(self, name, branch, patterns):
         return Repo.sparse_clone(f"file://{self.root}/session-foundation/{name}", branch,
@@ -113,7 +120,8 @@ class TestSparseCheckout(RepoTest):
     def test_the_token_travels_in_the_environment_not_the_command_line(self):
         """Any account on the box can read another process's argv from `ps`."""
         import base64
-        with mock.patch("session_ops.shared.git.subprocess.run") as run:
+        with mock.patch("session_ops.shared.git.subprocess.run") as run, \
+                mock.patch.object(github, "require_publishable"):
             run.return_value = subprocess.CompletedProcess([], 0, "", "")
             Repo("/tmp", token="ghs_secret").push("bot", force=True)
         argv, env = run.call_args.args[0], run.call_args.kwargs["env"]
@@ -230,7 +238,7 @@ class TestDirectPush(RepoTest):
         with open(os.path.join(repo.path, "generated/english.ts"), "w") as handle:
             handle.write("b")
         with contextlib.redirect_stdout(io.StringIO()):
-            self.assertIn("pushed", publish.direct_push(repo, None, "m", "main", "T", "B",
+            self.assertIn("pushed", publish.direct_push(repo, None, "session-foundation/module", "main", "T", "B",
                                                         AUTHOR, False))
         self.assertEqual(git("show", "main:generated/english.ts",
                              cwd=os.path.join(self.root, "session-foundation", "module")), "b")
@@ -418,6 +426,67 @@ def seed_answer(nodes, height=2210944):
 
 
 NODES = [node(index) for index in range(snode_list.MIN_NODES, 0, -1)]
+
+
+class TestPublishable(RepoTest):
+    """The App writes only where PUBLISHABLE says, however its caller asks."""
+
+    def test_only_listed_branches_are_written(self):
+        github.require_publishable("session-foundation/session-desktop", "update-localization")
+        for repo, branch in (("session-foundation/session-desktop", "dev"),
+                             ("session-foundation/session-ios", "update-localization"),
+                             ("someone/session-desktop", "update-localization"),
+                             ("session-foundation/unlisted", "main")):
+            with self.subTest(repo=repo, branch=branch), self.assertRaises(PermissionError):
+                github.require_publishable(repo, branch)
+
+    def test_a_direct_branch_is_never_forced_and_never_a_bot_branch(self):
+        github.require_publishable("session-foundation/session-localization", "main")
+        with self.assertRaises(PermissionError):
+            github.require_publishable("session-foundation/session-localization", "main",
+                                       force=True)
+
+    def test_a_rehearsal_writes_only_its_own_prefixed_branches(self):
+        for branch in ("rehearsal/update-localization", "rehearsal/direct-push-to-main"):
+            github.require_publishable("session-foundation/session-desktop-dynamic-assets"
+                                       if "main" in branch else
+                                       "session-foundation/session-app", branch, force=True)
+        with self.assertRaises(PermissionError):
+            github.require_publishable("session-foundation/session-app", "rehearsal/other")
+
+    def test_a_push_is_checked_against_the_clones_own_origin(self):
+        bare_repo(self.root, "app", "dev", {"a.txt": "a"})
+        repo = self.clone("app", "dev", ["/a.txt"])
+        with self.assertRaisesRegex(PermissionError, "session-foundation/app:dev"):
+            repo.push("dev", force=True)
+        with self.assertRaisesRegex(PermissionError, "force-push"):
+            repo.push("main", force=True)
+
+    def test_the_api_refuses_every_call_publishing_does_not_make(self):
+        api = FakeSession([FakeResponse({})] * 3)
+        with mock.patch.object(github, "session", lambda token: api):
+            guarded = github.publish_session("t")
+        pulls = f"{github.API}/repos/session-foundation/session-app/pulls"
+        guarded.request("GET", pulls, params={"head": "x"})
+        guarded.request("POST", pulls, json={"head": "update-localization", "base": "main"})
+        guarded.request("PATCH", f"{pulls}/5", json={"state": "closed"})
+        for method, url, payload in (
+                ("PUT", f"{pulls}/5/merge", None),
+                ("POST", f"{pulls}/5/reviews", {"event": "APPROVE"}),
+                ("POST", pulls, {"head": "dev", "base": "main"}),
+                ("PATCH", f"{pulls}/5", {"base": "release"}),
+                ("PATCH", f"{pulls}/5", {"state": "open"}),
+                ("DELETE", f"{github.API}/repos/session-foundation/session-app/git/refs/heads/main",
+                 None),
+                ("GET", f"{github.API}/repos/session-foundation/unlisted/pulls", None),
+                ("PATCH", f"{github.API}/repos/session-foundation/session-app", {"private": True})):
+            with self.subTest(method=method, url=url), self.assertRaises(PermissionError):
+                guarded.request(method, url, json=payload)
+        self.assertEqual(len(api.calls), 3)
+
+    def test_a_token_is_never_minted_for_an_unlisted_repo(self):
+        with self.assertRaises(PermissionError):
+            github.publish_token("session-foundation", ["session-ios", "session-pro-backend"])
 
 
 class TestSnodeListFetch(unittest.TestCase):
