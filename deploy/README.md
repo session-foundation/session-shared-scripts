@@ -56,6 +56,8 @@ files and state over. Remove `/opt/zendesk`, `/etc/zendesk` and `/var/lib/zendes
 
 Each `/etc/session-ops/<name>.env` has a commented `<name>.env.example` beside it,
 installed from [`env/`](env/), saying what goes in it.
+`/etc/session-ops/expiry.toml` is not a secret: the expiry dates
+[token-expiry](../docs/jobs/token-expiry.md) cannot read from an API, from `expiry.toml.example`.
 
 ## Checking
 
