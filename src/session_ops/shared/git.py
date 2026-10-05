@@ -86,5 +86,16 @@ class Repo:
     def tree(self):
         return self.git("rev-parse", "HEAD^{tree}").stdout.strip()
 
+    def head(self):
+        return self.git("rev-parse", "HEAD").stdout.strip()
+
+    def set_gitlink(self, path, sha):
+        """Point the submodule at `path` to `sha`, without checking it out."""
+        if self.git("ls-files", "--stage", "--", path).stdout.split()[:1] != ["160000"]:
+            raise RuntimeError(f"{path} is not a submodule")
+        self.git("update-index", "--cacheinfo", f"160000,{sha},{path}")
+        # update-index drops skip-worktree, leaving the never-checked-out path a deletion.
+        self.git("update-index", "--skip-worktree", "--", path)
+
     def push(self, branch, force=False):
         self.git("push", *(["--force"] if force else []), "origin", f"HEAD:refs/heads/{branch}")
