@@ -100,7 +100,7 @@ unit = ["LoadCredential=github-app.pem:/etc/session-ops/github-app.pem"]
 
 [[job]]
 name = "snode-list"
-description = "Fallback service node list into session-ios"
+description = "Fallback service node list into dynamic-assets, Desktop and iOS"
 entry = "session_ops.platforms.snode_list:main"
 user = "publisher"
 env_files = ["/etc/session-ops/crowdin.env", "/etc/session-ops/publish.env"]

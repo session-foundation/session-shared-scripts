@@ -8,6 +8,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -18,7 +19,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from session_ops.crowdin import sync
-from session_ops.platforms import publish, snode_list
+from session_ops.platforms import publish, snode_list, submodules
 from session_ops.shared import github
 from session_ops.shared.git import Repo
 from session_ops.shared.testing import FakeResponse, FakeSession
@@ -31,8 +32,9 @@ def git(*args, cwd=None):
                           text=True).stdout.strip()
 
 
-def bare_repo(root, name, branch, files):
-    """A bare repository `name` whose `branch` holds `files`."""
+def bare_repo(root, name, branch, files, gitlinks=None):
+    """A bare repository `name` whose `branch` holds `files`, and a submodule at each
+    of `gitlinks`' paths pinned to its commit."""
     seed = os.path.join(root, f"seed-{name}")
     os.makedirs(seed)
     git("init", "-q", "-b", branch, cwd=seed)
@@ -41,6 +43,8 @@ def bare_repo(root, name, branch, files):
         with open(os.path.join(seed, path), "w", encoding="utf-8") as handle:
             handle.write(content)
     git("add", "-A", cwd=seed)
+    for path, sha in (gitlinks or {}).items():
+        git("update-index", "--add", "--cacheinfo", f"160000,{sha},{path}", cwd=seed)
     git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "seed", cwd=seed)
     bare = os.path.join(root, "session-foundation", name)
     git("clone", "-q", "--bare", seed, bare)
@@ -68,6 +72,10 @@ class GitHubFake(FakeSession):
         raise AssertionError((method, url))
 
 
+TEST_REPOS = {"app": {"bot": github.BOT, "main": github.DIRECT},
+              "module": {"main": github.DIRECT}, "client": {"bump": github.BOT}}
+
+
 class RepoTest(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp()
@@ -75,6 +83,9 @@ class RepoTest(unittest.TestCase):
         patcher = mock.patch.object(publish, "GITHUB", f"file://{self.root}")
         patcher.start()
         self.addCleanup(patcher.stop)
+        allowed = mock.patch.dict(github.PUBLISHABLE, TEST_REPOS)
+        allowed.start()
+        self.addCleanup(allowed.stop)
 
     def clone(self, name, branch, patterns):
         return Repo.sparse_clone(f"file://{self.root}/session-foundation/{name}", branch,
@@ -109,7 +120,8 @@ class TestSparseCheckout(RepoTest):
     def test_the_token_travels_in_the_environment_not_the_command_line(self):
         """Any account on the box can read another process's argv from `ps`."""
         import base64
-        with mock.patch("session_ops.shared.git.subprocess.run") as run:
+        with mock.patch("session_ops.shared.git.subprocess.run") as run, \
+                mock.patch.object(github, "require_publishable"):
             run.return_value = subprocess.CompletedProcess([], 0, "", "")
             Repo("/tmp", token="ghs_secret").push("bot", force=True)
         argv, env = run.call_args.args[0], run.call_args.kwargs["env"]
@@ -226,7 +238,7 @@ class TestDirectPush(RepoTest):
         with open(os.path.join(repo.path, "generated/english.ts"), "w") as handle:
             handle.write("b")
         with contextlib.redirect_stdout(io.StringIO()):
-            self.assertIn("pushed", publish.direct_push(repo, None, "m", "main", "T", "B",
+            self.assertIn("pushed", publish.direct_push(repo, None, "session-foundation/module", "main", "T", "B",
                                                         AUTHOR, False))
         self.assertEqual(git("show", "main:generated/english.ts",
                              cwd=os.path.join(self.root, "session-foundation", "module")), "b")
@@ -356,46 +368,206 @@ class TestAppToken(unittest.TestCase):
         self.assertIn("private key", message)
 
 
+def gitlink(bare, branch, path):
+    return git("ls-tree", branch, path, cwd=bare).split()[2]
+
+
+def tip(bare, branch):
+    return git("rev-parse", branch, cwd=bare)
+
+
+OLD_SHA = "1" * 40
+
+
+class TestSubmoduleBump(RepoTest):
+    CLIENT = submodules.Submodule("client", "dev", "lib/strings")
+
+    def setUp(self):
+        super().setUp()
+        self.bare = bare_repo(self.root, "client", "dev",
+                              {".gitmodules": "[submodule]\n", "src/App.ts": "x"},
+                              {"lib/strings": OLD_SHA})
+
+    def bump(self, sha, api):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return submodules.bump(self.CLIENT, sha, self.work, None, api, "bump", "Bump",
+                                   "body", AUTHOR, False)
+
+    def test_only_the_pointer_moves(self):
+        api = GitHubFake()
+        self.assertIn("https://github.com/pr/7", self.bump("2" * 40, api))
+        self.assertEqual(gitlink(self.bare, "bump", "lib/strings"), "2" * 40)
+        self.assertEqual(git("diff", "--name-only", "dev", "bump", cwd=self.bare),
+                         "lib/strings")
+        self.assertEqual([c[2]["json"]["title"] for c in api.calls if c[0] == "POST"],
+                         ["Bump"])
+
+    def test_a_client_already_there_gets_no_pull_request(self):
+        self.assertIn("no changes", self.bump(OLD_SHA, GitHubFake()))
+        self.assertNotIn("bump", self.branches("client"))
+
+    def test_a_path_that_is_no_submodule_is_refused(self):
+        client = submodules.Submodule("client", "dev", "src/App.ts")
+        with self.assertRaisesRegex(RuntimeError, "not a submodule"):
+            submodules.bump(client, "2" * 40, self.work, None, None, "bump", "Bump", "body",
+                            AUTHOR, True)
+
+
+def node(index, **fields):
+    return {"public_ip": f"203.0.113.{index}", "storage_port": 22100,
+            "pubkey_ed25519": f"{index:064x}", "pubkey_x25519": "cd" * 32,
+            "requested_unlock_height": 0, "storage_lmq_port": 20200,
+            "storage_server_version": [2, 11, 3], "swarm": "60ffffffffffffff", **fields}
+
+
+def seed_answer(nodes, height=2210944):
+    return FakeResponse({"result": {"service_node_states": nodes, "height": height,
+                                    "status": "OK"}})
+
+
+NODES = [node(index) for index in range(snode_list.MIN_NODES, 0, -1)]
+
+
+class TestPublishable(RepoTest):
+    """The App writes only where PUBLISHABLE says, however its caller asks."""
+
+    def test_only_listed_branches_are_written(self):
+        github.require_publishable("session-foundation/session-desktop", "update-localization")
+        for repo, branch in (("session-foundation/session-desktop", "dev"),
+                             ("session-foundation/session-ios", "update-localization"),
+                             ("someone/session-desktop", "update-localization"),
+                             ("session-foundation/unlisted", "main")):
+            with self.subTest(repo=repo, branch=branch), self.assertRaises(PermissionError):
+                github.require_publishable(repo, branch)
+
+    def test_a_direct_branch_is_never_forced_and_never_a_bot_branch(self):
+        github.require_publishable("session-foundation/session-localization", "main")
+        with self.assertRaises(PermissionError):
+            github.require_publishable("session-foundation/session-localization", "main",
+                                       force=True)
+
+    def test_a_rehearsal_writes_only_its_own_prefixed_branches(self):
+        for branch in ("rehearsal/update-localization", "rehearsal/direct-push-to-main"):
+            github.require_publishable("session-foundation/session-desktop-dynamic-assets"
+                                       if "main" in branch else
+                                       "session-foundation/session-app", branch, force=True)
+        with self.assertRaises(PermissionError):
+            github.require_publishable("session-foundation/session-app", "rehearsal/other")
+
+    def test_a_push_is_checked_against_the_clones_own_origin(self):
+        bare_repo(self.root, "app", "dev", {"a.txt": "a"})
+        repo = self.clone("app", "dev", ["/a.txt"])
+        with self.assertRaisesRegex(PermissionError, "session-foundation/app:dev"):
+            repo.push("dev", force=True)
+        with self.assertRaisesRegex(PermissionError, "force-push"):
+            repo.push("main", force=True)
+
+    def test_the_api_refuses_every_call_publishing_does_not_make(self):
+        api = FakeSession([FakeResponse({})] * 3)
+        with mock.patch.object(github, "session", lambda token: api):
+            guarded = github.publish_session("t")
+        pulls = f"{github.API}/repos/session-foundation/session-app/pulls"
+        guarded.request("GET", pulls, params={"head": "x"})
+        guarded.request("POST", pulls, json={"head": "update-localization", "base": "main"})
+        guarded.request("PATCH", f"{pulls}/5", json={"state": "closed"})
+        for method, url, payload in (
+                ("PUT", f"{pulls}/5/merge", None),
+                ("POST", f"{pulls}/5/reviews", {"event": "APPROVE"}),
+                ("POST", pulls, {"head": "dev", "base": "main"}),
+                ("PATCH", f"{pulls}/5", {"base": "release"}),
+                ("PATCH", f"{pulls}/5", {"state": "open"}),
+                ("DELETE", f"{github.API}/repos/session-foundation/session-app/git/refs/heads/main",
+                 None),
+                ("GET", f"{github.API}/repos/session-foundation/unlisted/pulls", None),
+                ("PATCH", f"{github.API}/repos/session-foundation/session-app", {"private": True})):
+            with self.subTest(method=method, url=url), self.assertRaises(PermissionError):
+                guarded.request(method, url, json=payload)
+        self.assertEqual(len(api.calls), 3)
+
+    def test_a_token_is_never_minted_for_an_unlisted_repo(self):
+        with self.assertRaises(PermissionError):
+            github.publish_token("session-foundation", ["session-ios", "session-pro-backend"])
+
+
+class TestSnodeListFetch(unittest.TestCase):
+    def test_the_list_is_sorted_by_key_with_the_clients_fields_only(self):
+        nodes = [dict(n, extra=1) for n in NODES] + [node(99, public_ip="0.0.0.0")]
+        data = json.loads(snode_list.fetch(FakeSession([seed_answer(nodes)])))
+        keys = [n["pubkey_ed25519"] for n in data["service_node_states"]]
+        self.assertEqual(keys, sorted(n["pubkey_ed25519"] for n in NODES))
+        self.assertEqual(list(data["service_node_states"][0]), list(snode_list.FIELDS))
+        self.assertEqual(data["height"], 2210944)
+
+    def test_a_seed_that_fails_is_passed_over_for_the_next(self):
+        session = FakeSession([FakeResponse({}, status_code=502), seed_answer(NODES)])
+        self.assertTrue(snode_list.fetch(session))
+        self.assertEqual([c[1] for c in session.calls], list(snode_list.SEEDS[:2]))
+
+    def test_a_short_or_malformed_list_is_never_published(self):
+        broken = dict(NODES[0])
+        del broken["pubkey_x25519"]
+        for answer in (seed_answer(NODES[:-1]), seed_answer(NODES[1:] + [broken]),
+                       FakeResponse({"error": "busy"}), seed_answer(NODES, height=None)):
+            with self.subTest(answer=answer.text[:60]), \
+                    self.assertRaisesRegex(RuntimeError, "no seed node gave a usable list"):
+                snode_list.fetch(FakeSession([answer] * len(snode_list.SEEDS)))
+
+
 class TestSnodeList(RepoTest):
-    def run_job(self, body, *argv):
-        bare_repo(self.root, "session-ios", "dev",
-                  {snode_list.PATH: '{"old": true}\n', "Other.swift": "x"})
-        fetched = FakeSession([FakeResponse(None)])
-        fetched._responses[0].text = body
-        with mock.patch.object(snode_list.http, "Session", lambda: fetched), \
-                mock.patch.dict(os.environ, {"SESSION_OPS_WORK_DIR": self.work}), \
-                contextlib.redirect_stdout(io.StringIO()) as out:
-            snode_list.main(list(argv))
-        return out.getvalue()
+    def setUp(self):
+        super().setUp()
+        self.assets = bare_repo(self.root, snode_list.ASSETS, "main",
+                                {snode_list.ASSETS_PATH: "{}", "GeoLite2-Country.mmdb": "x"})
+        self.desktop = bare_repo(self.root, "session-desktop", "dev",
+                                 {".gitmodules": "[submodule]\n"},
+                                 {"dynamic_assets": tip(self.assets, "main")})
+        self.ios = bare_repo(self.root, "session-ios", "dev",
+                             {snode_list.IOS_PATH: '{"old": true}\n', "Other.swift": "x"})
 
-    NODE = {"public_ip": "203.0.113.7", "pubkey_ed25519": "ab" * 32}
+    def run_job(self, *argv):
+        api, posted = GitHubFake(), []
+        exiting = [node(1, requested_unlock_height=2212248)] + NODES[:-1]
+        with mock.patch.object(snode_list.http, "Session",
+                               lambda: FakeSession([seed_answer(exiting)])), \
+                mock.patch.object(snode_list.github, "publish_token", lambda owner, repos: "t"), \
+                mock.patch.object(snode_list.github, "session", lambda token: api), \
+                mock.patch.object(snode_list.discord, "post_to_discord",
+                                  lambda session, url, messages: posted.extend(messages) or 1), \
+                mock.patch.dict(os.environ, {"SESSION_OPS_WORK_DIR": self.work,
+                                             "CROWDIN_DISCORD_WEBHOOK_URL": "https://hook"}), \
+                contextlib.redirect_stdout(io.StringIO()) as out, \
+                contextlib.redirect_stderr(io.StringIO()):
+            outcome = snode_list.main(list(argv))
+        return outcome, posted, out.getvalue()
 
-    def test_the_fetched_list_is_committed_byte_for_byte(self):
-        body = json.dumps({"service_node_states": [self.NODE, self.NODE], "height": 1})
-        self.assertIn("would push", self.run_job(body, "--dry-run"))
-        with open(os.path.join(self.work, "session-ios", snode_list.PATH),
-                  encoding="utf-8") as handle:
-            self.assertEqual(handle.read(), body)
+    def test_every_repo_bundling_the_list_gets_it(self):
+        outcome, posted, _ = self.run_job()
+        self.assertEqual(outcome.failures(), {})
+        published = git("show", f"main:{snode_list.ASSETS_PATH}", cwd=self.assets)
+        self.assertEqual(len(json.loads(published)["service_node_states"]), len(NODES))
+        self.assertEqual(gitlink(self.desktop, snode_list.DESKTOP_BRANCH, "dynamic_assets"),
+                         tip(self.assets, "main"))
+        self.assertEqual(git("show", f"{snode_list.IOS_BRANCH}:{snode_list.IOS_PATH}",
+                             cwd=self.ios), published)
+        message = posted[0]["content"]
+        self.assertIn(f"1 of {len(NODES)} service nodes are requesting exit at height 2210944",
+                      message)
+        self.assertIn("session-foundation/session-desktop: <https://github.com/pr/7>", message)
+        self.assertNotIn(" https://", message)
 
-    def test_the_summary_counts_the_nodes_requesting_exit(self):
-        exiting = dict(self.NODE, requested_unlock_height=2212248)
-        staying = dict(self.NODE, requested_unlock_height=0)
-        body = json.dumps({"service_node_states": [exiting, staying, self.NODE],
-                           "height": 2210944})
-        self.assertIn("1 of 3 service nodes are requesting exit at height 2210944",
-                      self.run_job(body, "--dry-run"))
+    def test_desktop_is_not_bumped_when_dynamic_assets_did_not_publish(self):
+        shutil.rmtree(self.assets)
+        outcome, posted, _ = self.run_job()
+        self.assertEqual(set(outcome.failures()), {"dynamic-assets", "desktop"})
+        self.assertIn(snode_list.IOS_BRANCH, self.branches("session-ios"))
+        self.assertIn("desktop: failed, see the alert", posted[0]["content"])
 
-    def test_a_body_that_is_not_json_is_never_published(self):
-        with self.assertRaises(RuntimeError):
-            self.run_job("<html>rate limited</html>", "--dry-run")
-
-    def test_an_empty_or_malformed_list_is_never_published(self):
-        for body in ("[]", "{}", '{"service_node_states": []}',
-                     '{"service_node_states": [{"public_ip": "203.0.113.7"}]}'):
-            response = FakeResponse(None)
-            response.text = body
-            with self.subTest(body=body), self.assertRaises(RuntimeError):
-                snode_list.fetch(FakeSession([response]))
+    def test_a_dry_run_pushes_nothing(self):
+        _, posted, out = self.run_job("--dry-run")
+        self.assertEqual(posted, [])
+        self.assertIn("would push to main", out)
+        self.assertEqual(self.branches("session-desktop"), ["dev"])
+        self.assertEqual(self.branches("session-ios"), ["dev"])
 
 
 class TestCrowdinSync(RepoTest):
@@ -409,7 +581,12 @@ class TestCrowdinSync(RepoTest):
         bare_repo(self.root, "session-ios", "dev",
                   {f"{sync.IOS_TRANSLATIONS}/Localizable.xcstrings": "old",
                    sync.IOS_CONSTANTS: "k"})
-        bare_repo(self.root, "session-localization", "main", {"generated/english.ts": "old"})
+        self.localization = bare_repo(self.root, "session-localization", "main",
+                                      {"generated/english.ts": "old"})
+        self.clients = {target: bare_repo(self.root, client.repo, client.base,
+                                          {".gitmodules": "[submodule]\n"},
+                                          {client.path: OLD_SHA})
+                        for target, client in sync.CLIENTS.items()}
 
     def fake_generate(self, target, repo, parsed):
         if target == "ios":
@@ -420,7 +597,7 @@ class TestCrowdinSync(RepoTest):
         with open(os.path.join(repo.path, path), "w", encoding="utf-8") as handle:
             handle.write(json.dumps(target))
 
-    def test_each_target_publishes_on_its_own(self):
+    def run_sync(self, *argv):
         env = {"SESSION_OPS_WORK_DIR": self.work, "CROWDIN_API_TOKEN": "t",
                "PUBLISH_GIT_AUTHOR": AUTHOR}
         api = GitHubFake()
@@ -432,15 +609,35 @@ class TestCrowdinSync(RepoTest):
                 mock.patch.dict(os.environ, env), \
                 contextlib.redirect_stdout(io.StringIO()), \
                 contextlib.redirect_stderr(io.StringIO()):
-            outcome = sync.main([])
+            return sync.main(list(argv)), api
+
+    def bumped(self, target):
+        client = sync.CLIENTS[target]
+        return gitlink(self.clients[target], sync.SUBMODULE_BRANCH, client.path)
+
+    def test_each_target_publishes_on_its_own(self):
+        outcome, api = self.run_sync()
         self.assertEqual(outcome.failures(), {"ios": "RuntimeError: catalog write failed"})
         self.assertIn(sync.BOT_BRANCH, self.branches("session-android"))
         self.assertEqual(git("show", "main:generated/english.ts",
                              cwd=os.path.join(self.root, "session-foundation",
                                               "session-localization")), '"localization"')
-        opened = [c for c in api.calls if c[0] == "POST"]
-        self.assertEqual(len(opened), 1)
-        self.assertEqual(opened[0][2]["json"]["title"], sync.TITLE)
+        for target in sync.CLIENTS:
+            self.assertEqual(self.bumped(target), tip(self.localization, "main"))
+        opened = [c[2]["json"]["title"] for c in api.calls if c[0] == "POST"]
+        self.assertEqual(opened, [sync.TITLE] + [sync.SUBMODULE_TITLE] * len(sync.CLIENTS))
+
+    def test_a_bump_alone_moves_to_localizations_tip(self):
+        outcome, _ = self.run_sync("--only", "playwright")
+        self.assertEqual(outcome.failures(), {})
+        self.assertEqual(self.bumped("playwright"), tip(self.localization, "main"))
+        self.assertEqual(self.branches("session-desktop"), ["dev"])
+
+    def test_nothing_is_bumped_when_localization_fails(self):
+        shutil.rmtree(self.localization)
+        outcome, _ = self.run_sync("--only", "localization", "desktop")
+        self.assertEqual(set(outcome.failures()), {"localization", "desktop"})
+        self.assertEqual(self.branches("session-desktop"), ["dev"])
 
 
 def crowdin_language(lang_id, locale, name):

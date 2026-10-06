@@ -10,6 +10,7 @@ Config (env vars):
     CREDENTIALS_DIRECTORY        set by systemd's LoadCredential=; holds github-app.pem
 """
 import os
+import re
 import time
 
 import jwt
@@ -20,6 +21,85 @@ API = "https://api.github.com"
 APP_KEY_CREDENTIAL = "github-app.pem"
 # Where the publishing units' LoadCredential= reads it from.
 APP_KEY_PATH = "/etc/session-ops/github-app.pem"
+
+ORG = "session-foundation"
+REHEARSAL_PREFIX = "rehearsal/"
+BOT, DIRECT = "bot", "direct"
+# Every branch the App may write, and how: a BOT branch is the job's own, rebuilt and
+# force-pushed; a DIRECT one only ever fast-forwards. Anything else is refused before it
+# reaches GitHub, whatever the App's installation would allow. A rehearsal writes the
+# same branches under rehearsal/, a direct push as rehearsal/direct-push-to-<branch>.
+PUBLISHABLE = {
+    "session-android": {"feature/update-crowdin-translations": BOT},
+    "session-ios": {"feature/update-crowdin-translations": BOT,
+                    "feature/update-static-snode-list": BOT},
+    "session-localization": {"main": DIRECT},
+    "session-desktop-dynamic-assets": {"main": DIRECT},
+    "session-desktop": {"update-dynamic-assets": BOT, "update-localization": BOT},
+    "session-app": {"update-localization": BOT},
+    "session-website": {"update-localization": BOT},
+    "session-appium": {"update-localization": BOT},
+    "session-playwright": {"update-localization": BOT},
+}
+
+
+def repo_name(repo):
+    """`repo`'s name in PUBLISHABLE, from "owner/name"; None outside the org."""
+    owner, _, name = repo.rpartition("/")
+    return name if owner.rpartition("/")[2] == ORG else None
+
+
+def require_publishable(repo, branch, force=False):
+    """Refuse to write `branch` of `repo` ("owner/name") unless PUBLISHABLE allows it."""
+    allowed = PUBLISHABLE.get(repo_name(repo), {})
+    kind = allowed.get(branch)
+    if kind is None and branch.startswith(REHEARSAL_PREFIX):
+        rehearsed = branch.removeprefix(REHEARSAL_PREFIX)
+        kind = BOT if (allowed.get(rehearsed)
+                       or allowed.get(rehearsed.removeprefix("direct-push-to-")) == DIRECT) \
+            else None
+    if kind is None or (force and kind == DIRECT):
+        how = "force-push" if force and kind else "write"
+        raise PermissionError(f"session-ops may not {how} {repo}:{branch}")
+
+
+# What publishing may ask of the API, as (method, path under /repos/<owner>/<name>).
+ENDPOINTS = (("GET", re.compile(r"/pulls")), ("POST", re.compile(r"/pulls")),
+             ("PATCH", re.compile(r"/pulls/\d+")),
+             ("DELETE", re.compile(r"/git/refs/heads/(?P<branch>.+)")))
+PULL_EDITS = {"title", "body", "state"}
+
+
+def require_endpoint(method, url, payload):
+    """Refuse any call publishing does not make: merging, reviewing, settings."""
+    match = re.fullmatch(re.escape(API) + r"/repos/([^/]+/[^/]+)(/.*)", url)
+    repo, path = match.groups() if match else (None, url)
+    if repo and repo_name(repo) in PUBLISHABLE:
+        for allowed_method, pattern in ENDPOINTS:
+            route = pattern.fullmatch(path)
+            if method != allowed_method or not route:
+                continue
+            if method == "POST":
+                require_publishable(repo, (payload or {}).get("head", ""))
+            elif method == "PATCH" and (set(payload or {}) - PULL_EDITS
+                                        or (payload or {}).get("state", "closed") != "closed"):
+                break
+            elif method == "DELETE":
+                require_publishable(repo, route["branch"])
+            return
+    raise PermissionError(f"session-ops may not call {method} {url}")
+
+
+def publish_session(token):
+    """session() for the App's installation token, refusing what require_endpoint does."""
+    api = session(token)
+    send = api.request
+
+    def request(method, url, **kwargs):
+        require_endpoint(method, url, kwargs.get("json"))
+        return send(method, url, **kwargs)
+    api.request = request
+    return api
 
 
 def session(token):
@@ -71,6 +151,9 @@ def app_private_key():
 
 def publish_token(owner, repositories):
     """An installation token for `repositories`; exits naming whatever is missing."""
+    unlisted = [name for name in repositories if name not in PUBLISHABLE]
+    if owner != ORG or unlisted:
+        raise PermissionError(f"session-ops may not publish to {owner}/{unlisted or '*'}")
     app_id, key = os.environ.get("GITHUB_APP_ID"), app_private_key()
     missing = []
     if not app_id:
@@ -93,6 +176,7 @@ def open_pull(api, repo, head):
 
 def ensure_pull(api, repo, head, base, title, body):
     """Open a pull request from `head`, or retitle the one already open. Returns its URL."""
+    require_publishable(repo, head)
     existing = open_pull(api, repo, head)
     if existing:
         check(api.request("PATCH", f"{API}/repos/{repo}/pulls/{existing['number']}",
@@ -108,6 +192,7 @@ def ensure_pull(api, repo, head, base, title, body):
 
 def retire_branch(api, repo, branch):
     """Close the pull request from `branch` and delete it: nothing is left to merge."""
+    require_publishable(repo, branch)
     existing = open_pull(api, repo, branch)
     if existing:
         check(api.request("PATCH", f"{API}/repos/{repo}/pulls/{existing['number']}",

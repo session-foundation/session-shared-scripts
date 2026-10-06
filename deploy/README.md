@@ -84,7 +84,8 @@ for link in /etc/systemd/system/timers.target.wants/session-ops@*.timer; do
   [ -L "$link" ] && systemctl disable --now "${link##*/}"
 done
 systemctl disable --now session-ops-queue.timer zendesk-relay.service
-for repo in session-android session-ios session-localization; do
+for repo in session-android session-ios session-localization session-desktop-dynamic-assets \
+    session-desktop session-app session-website session-appium session-playwright; do
   gh pr list -R "session-foundation/$repo" --state open --json number,headRefName \
     -q '.[] | select(.headRefName | startswith("rehearsal/")) | .number' |
     xargs -r -I{} gh pr close -R "session-foundation/$repo" {} --delete-branch

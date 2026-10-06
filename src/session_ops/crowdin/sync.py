@@ -5,10 +5,14 @@ platform's strings, and publish them.
 - session-android and session-ios get a pull request from
   feature/update-crowdin-translations, rebuilt from `dev` each run.
 - session-localization gets a commit straight onto `main`.
+- The clients holding session-localization as a submodule (session-desktop,
+  session-app, session-website, session-appium, session-playwright) each get a pull request from
+  update-localization moving it to that commit, or to `main`'s tip when this run
+  leaves localization out.
 
 Each platform is checked out shallow and sparse, only the paths its generator writes.
-The three are independent targets: one failing to publish does not stop the others,
-and the alert says which. Android's own CI validates its pull request, so no Gradle
+The targets are independent: one failing to publish does not stop the others, and the
+alert says which; only the submodule bumps wait on localization, when it runs. Android's own CI validates its pull request, so no Gradle
 build runs here.
 
 The run's inputs, outputs and validation report are kept under the job's
@@ -19,7 +23,7 @@ Config (env vars):
     PUBLISH_GIT_AUTHOR    "Name <email>" the commits are authored as
     plus what shared/github.py reads to publish (not needed with --dry-run)
 
-    session-ops run crowdin-sync [--dry-run] [-- --only android]
+    session-ops run crowdin-sync [--dry-run] [-- --only android desktop]
 """
 import argparse
 import os
@@ -31,7 +35,7 @@ from session_ops.crowdin import (codegen_localization, download_translations_fro
                                  generate_android_strings, generate_ios_strings,
                                  generate_language_list, parse_xliff)
 from session_ops.ops.runner import Outcome, call_target, step
-from session_ops.platforms import publish
+from session_ops.platforms import publish, submodules
 from session_ops.shared import github
 from session_ops.shared.git import Repo
 
@@ -50,9 +54,25 @@ ANDROID_CONSTANTS = "app/src/main/java/org/session/libsession/utilities/NonTrans
 IOS_TRANSLATIONS = "Session/Meta/Translations"
 IOS_CONSTANTS = "SessionUIKit/Style Guide/Constants.swift"
 
-TARGETS = ("android", "ios", "localization")
+SUBMODULE_BRANCH = "update-localization"
+SUBMODULE_TITLE = "chore: Update localization submodule"
+SUBMODULE_BODY = """[Automated]
+Moves the `session-localization` submodule to the latest translations from Crowdin.
+"""
+CLIENTS = {
+    "desktop": submodules.Submodule("session-desktop", "dev", "ts/localization"),
+    "app": submodules.Submodule("session-app", "main",
+                                "packages/localization/src/localization-src"),
+    "website": submodules.Submodule("session-website", "main", "lib/app_localization"),
+    "appium": submodules.Submodule("session-appium", "main", "run/localizer/lib"),
+    "playwright": submodules.Submodule("session-playwright", "main",
+                                       "tests/localization/lib"),
+}
+
+TARGETS = ("android", "ios", "localization", *CLIENTS)
 REPOS = {"android": "session-android", "ios": "session-ios",
-         "localization": "session-localization"}
+         "localization": "session-localization",
+         **{target: client.repo for target, client in CLIENTS.items()}}
 
 
 def checkout(target, work, token):
@@ -94,13 +114,31 @@ def publish_target(target, repo, api, author, dry_run):
                                 dry_run)
 
 
-def sync_target(target, work, parsed, token, api, author, dry_run):
+def sync_target(target, work, parsed, token, api, author, dry_run, published):
     step(f"{target}: checkout")
     repo = checkout(target, work, token)
     step(f"{target}: generate")
     generate(target, repo, parsed)
     step(f"{target}: publish")
     print(publish_target(target, repo, api, author, dry_run))
+    published[target] = repo.head()
+
+
+def localization_tip(work, token):
+    url = f"{publish.GITHUB}/{publish.ORG}/{REPOS['localization']}"
+    listed = Repo(work, token).git("ls-remote", url, "refs/heads/main").stdout.split()
+    if not listed:
+        raise RuntimeError(f"{url} has no main branch")
+    return listed[0]
+
+
+def bump_target(target, work, token, api, author, dry_run, published, localization_ran):
+    step(f"{target}: publish")
+    if localization_ran and "localization" not in published:
+        raise RuntimeError("localization did not publish, so there is nothing to bump to")
+    sha = published.get("localization") or localization_tip(work, token)
+    print(submodules.bump(CLIENTS[target], sha, work, token, api, SUBMODULE_BRANCH,
+                          SUBMODULE_TITLE, SUBMODULE_BODY, author, dry_run))
 
 
 def keep(work, runs_dir, names):
@@ -147,8 +185,17 @@ def main(argv=None):
 
     token = None if args.dry_run else github.publish_token(
         publish.ORG, [REPOS[t] for t in args.only])
-    api = github.session(token) if token else None
-    results = {target: call_target(lambda _, target=target: sync_target(
-                   target, work, parsed, token, api, author, args.dry_run), [])
-               for target in args.only}
+    api = github.publish_session(token) if token else None
+    published, localization_ran = {}, "localization" in args.only
+
+    def run_target(target):
+        if target in CLIENTS:
+            bump_target(target, work, token, api, author, args.dry_run, published,
+                        localization_ran)
+        else:
+            sync_target(target, work, parsed, token, api, author, args.dry_run, published)
+
+    # TARGETS' order, whatever --only's: the bumps follow localization.
+    results = {target: call_target(lambda _, target=target: run_target(target), [])
+               for target in TARGETS if target in args.only}
     return Outcome(targets=results)

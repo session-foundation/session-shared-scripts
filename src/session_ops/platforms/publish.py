@@ -10,8 +10,8 @@ from session_ops.shared import github
 from session_ops.shared.env import rehearsing
 
 GITHUB = "https://github.com"
-ORG = "session-foundation"
-REHEARSAL_PREFIX = "rehearsal/"
+ORG = github.ORG
+REHEARSAL_PREFIX = github.REHEARSAL_PREFIX
 REHEARSAL_NOTE = ("**Rehearsal of session-ops: do not merge.** Close it and delete the branch "
                   "once reviewed; production publishes to the branch without the "
                   f"`{REHEARSAL_PREFIX}` prefix.\n\n")
@@ -21,6 +21,8 @@ def pull_request(repo, api, name, base, branch, title, body, author, dry_run):
     """Publish `repo`'s uncommitted changes to `branch`. Returns a one-line result."""
     if rehearsing():
         branch, title, body = REHEARSAL_PREFIX + branch, f"[Rehearsal] {title}", REHEARSAL_NOTE + body
+    # Before anything else, so a dry run catches a branch the App may not write.
+    github.require_publishable(name, branch, force=True)
     if not repo.changed():
         if not dry_run:
             github.retire_branch(api, name, branch)
@@ -42,6 +44,7 @@ def direct_push(repo, api, name, branch, message, body, author, dry_run):
     if rehearsing():
         return pull_request(repo, api, name, branch, f"direct-push-to-{branch}", message, body,
                             author, dry_run)
+    github.require_publishable(name, branch)
     if not repo.changed():
         return f"{name}: no changes on {branch}"
     repo.commit(message, author)
