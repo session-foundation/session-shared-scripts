@@ -19,6 +19,10 @@ from session_ops.shared.discord import clip
 
 STATE_VERSION = 1
 OPEN_COLOR, RESOLVED_COLOR = 0xE67E22, 0x2ECC71
+# A locale's slots listed one by one; past this, a count and the locale's editor. A burst
+# (a bulk import, a whole locale reviewed at once) then stays a message, not a flood that
+# outruns Discord's per-channel rate limit.
+LISTED_PER_LOCALE = 10
 
 
 def user_label(u):
@@ -79,9 +83,12 @@ class Project:
                             for lang in details["targetLanguages"]}
         self.locales = details["targetLanguageIds"]
 
-    def editor_url(self, lang, sid):
+    def locale_url(self, lang):
         return (f"https://crowdin.com/editor/{self.slug}/all/"
-                f"{self.source_code}-{self.editor_code.get(lang, lang)}#{sid}")
+                f"{self.source_code}-{self.editor_code.get(lang, lang)}")
+
+    def editor_url(self, lang, sid):
+        return f"{self.locale_url(lang)}#{sid}"
 
 
 # ---- State -------------------------------------------------------------------
@@ -178,7 +185,7 @@ def slot_line(slot, project, suffix):
 
 
 def section_embeds(slots, project, title, color, suffix):
-    """One embed per locale, split when a locale outgrows a description."""
+    """One embed per locale: up to LISTED_PER_LOCALE slots, then how many more."""
     embeds = []
     by_locale = collections.defaultdict(list)
     for slot in slots:
@@ -186,17 +193,13 @@ def section_embeds(slots, project, title, color, suffix):
     for lang in sorted(by_locale, key=lambda lang: (-len(by_locale[lang]), lang)):
         items = sorted(by_locale[lang], key=lambda s: (s["identifier"] or "",
                                                        str(s["pluralCategory"])))
-        lines, used, first = [], 0, True
-        for slot in items:
-            line = slot_line(slot, project, suffix)
-            if lines and used + discord.text_len(line) + 1 > discord.MAX_EMBED_DESCRIPTION_CHARS:
-                embeds.append({"title": title(lang, len(items)) if first else f"{lang} (cont.)",
-                               "description": "\n".join(lines), "color": color})
-                lines, used, first = [], 0, False
-            lines.append(line)
-            used += discord.text_len(line) + 1
-        embeds.append({"title": title(lang, len(items)) if first else f"{lang} (cont.)",
-                       "description": "\n".join(lines), "color": color})
+        listed = items if len(items) <= LISTED_PER_LOCALE else items[:LISTED_PER_LOCALE - 1]
+        lines = [slot_line(slot, project, suffix) for slot in listed]
+        if len(listed) < len(items):
+            lines.append(f"…and **{len(items) - len(listed)}** more: "
+                         f"[open {lang} in the editor]({project.locale_url(lang)})")
+        embeds.append({"title": title(lang, len(items)), "description": "\n".join(lines),
+                       "color": color})
     return embeds
 
 

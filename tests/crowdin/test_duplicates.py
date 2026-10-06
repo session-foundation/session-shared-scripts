@@ -72,16 +72,35 @@ class TestMessages(unittest.TestCase):
                       embeds[1]["description"])
         self.assertEqual(embeds[2]["title"], "de — 1 resolved")
 
-    def test_a_long_locale_splits_across_embeds_and_messages(self):
-        opened = [finding(i, identifier="x" * 80) for i in range(400)]
-        messages = duplicates.build_messages(opened, [], 400, PROJECT)
-        embeds = [e for m in messages for e in m["embeds"]]
-        self.assertTrue(all(len(e["description"]) <= discord.MAX_EMBED_DESCRIPTION_CHARS
-                            for e in embeds if "description" in e))
+    def test_a_burst_in_one_locale_is_one_embed_with_a_count(self):
+        opened = [finding(i, identifier="x" * 80) for i in range(462)]
+        messages = duplicates.build_messages(opened, [], 462, PROJECT)
+        self.assertEqual(len(messages), 1)
+        locale = messages[0]["embeds"][1]
+        self.assertEqual(locale["title"], "de — 462 new")
+        lines = locale["description"].split("\n")
+        self.assertEqual(len(lines), duplicates.LISTED_PER_LOCALE)
+        self.assertEqual(lines[-1], f"…and **{462 - duplicates.LISTED_PER_LOCALE + 1}** more: "
+                                    "[open de in the editor](https://crowdin.com/editor/p/all/en-de)")
+
+    def test_a_locale_at_the_limit_is_listed_in_full(self):
+        opened = [finding(i) for i in range(duplicates.LISTED_PER_LOCALE)]
+        description = duplicates.build_messages(opened, [], 9, PROJECT)[0]["embeds"][1]["description"]
+        self.assertEqual(description.count("• "), duplicates.LISTED_PER_LOCALE)
+        self.assertNotIn("more", description)
+
+    def test_a_burst_across_every_locale_stays_within_discords_limits(self):
+        langs = [f"l{n}" for n in range(80)]
+        project = duplicates.Project({
+            "identifier": "p", "sourceLanguage": {"id": "en"}, "targetLanguageIds": langs,
+            "targetLanguages": [{"id": lang} for lang in langs]})
+        opened = [finding(i, lang=lang, identifier="x" * 90) for lang in langs
+                  for i in range(50)]
+        messages = duplicates.build_messages(opened, [], len(opened), project)
         self.assertTrue(all(sum(discord.embed_len(e) for e in m["embeds"])
                             <= discord.MAX_EMBEDS_TEXT_CHARS for m in messages))
         self.assertTrue(all(len(m["embeds"]) <= discord.MAX_EMBEDS_PER_MESSAGE for m in messages))
-        self.assertEqual(sum(e["description"].count("\n• ") + 1 for e in embeds[1:]), 400)
+        self.assertEqual(len([e for m in messages for e in m["embeds"]]), 81)
 
 
 def recording(changes=None):
