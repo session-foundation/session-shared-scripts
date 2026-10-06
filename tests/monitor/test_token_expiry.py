@@ -163,16 +163,20 @@ class TestEvaluate(unittest.TestCase):
         self.assertIsNone(self.level_at(timedelta(days=365), state))
         self.assertEqual(state, {})
 
-    def test_missing_and_rejected_alert_once(self):
+    def test_a_missing_date_alerts_on_every_run_and_rejected_once(self):
         state = {}
-        due = token_expiry.evaluate({"CLAUDE_CODE_OAUTH_TOKEN": "missing",
-                                     "GITHUB_PRS_TOKEN": "rejected"}, state, NOW)
+        expiries = {"CROWDIN_API_TOKEN": "missing", "GITHUB_PRS_TOKEN": "rejected"}
+        due = token_expiry.evaluate(expiries, state, NOW)
         self.assertEqual([d[2] for d in due], ["missing", "rejected"])
         for name, expiry, current in due:
             state[name] = token_expiry.record(expiry, current)
-        self.assertEqual(token_expiry.evaluate({"CLAUDE_CODE_OAUTH_TOKEN": "missing",
-                                                "GITHUB_PRS_TOKEN": "rejected"}, state, NOW),
-                         [])
+        self.assertEqual(token_expiry.evaluate(expiries, state, NOW + timedelta(days=1)),
+                         [("CROWDIN_API_TOKEN", "missing", "missing")])
+
+    def test_a_date_recorded_later_stops_the_missing_alert(self):
+        state = {"CROWDIN_API_TOKEN": token_expiry.record("missing", "missing")}
+        self.assertEqual(token_expiry.evaluate({"CROWDIN_API_TOKEN": "never"}, state, NOW), [])
+        self.assertEqual(state, {})
 
     def test_never_is_quiet(self):
         self.assertEqual(token_expiry.evaluate({"CROWDIN_API_TOKEN": "never"}, {}, NOW), [])

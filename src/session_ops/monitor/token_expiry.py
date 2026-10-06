@@ -10,7 +10,7 @@ Each token's expiry comes from one of three places:
   job existed gets its real issue date from [issued] in the expiry file, which applies
   only while that same token is in place.
 - CROWDIN_API_TOKEN: exposes its expiry to no API, so it is recorded by hand, and
-  reported until it is.
+  reported on every run until it is.
 
 /etc/session-ops/expiry.toml:
 
@@ -171,15 +171,15 @@ def level(expiry, now):
 
 
 def evaluate(expiries, state, now):
-    """The tokens due an alert, as (name, expiry, level). `state` drops every token
-    that needs no alert, so a renewed one starts over; recording an alert is left to
-    a delivered post."""
+    """The tokens due an alert, as (name, expiry, level): each window once, a missing
+    date on every run. `state` drops every token that needs no alert, so a renewed one
+    starts over; recording an alert is left to a delivered post."""
     due = []
     for name, expiry in expiries.items():
         current = level(expiry, now)
         if current is None:
             state.pop(name, None)
-        elif state.get(name) != record(expiry, current):
+        elif current == "missing" or state.get(name) != record(expiry, current):
             due.append((name, expiry, current))
     for name in [name for name in state if name not in expiries]:
         del state[name]

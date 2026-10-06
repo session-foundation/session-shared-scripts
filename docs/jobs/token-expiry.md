@@ -18,7 +18,8 @@ as Crowdin's, counts from 00:00 UTC that day.
 | `CROWDIN_API_TOKEN` | `expiry.toml`: the Expires column at https://crowdin.com/settings#api-key |
 | `CLAUDE_CODE_OAUTH_TOKEN` | A year after the job first saw it, by fingerprint; nothing to update on rotation |
 
-`CROWDIN_API_TOKEN` is reported until `expiry.toml` has a date or `"never"` for it.
+`CROWDIN_API_TOKEN` is reported on every daily run until `expiry.toml` has a date or
+`"never"` for it.
 
 The Claude Code token's first sighting lives in `/var/lib/session-ops/token-expiry/state.json`.
 For a token installed before the job first ran, or if that file is lost, add its real
