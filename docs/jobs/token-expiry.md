@@ -1,7 +1,8 @@
 # Token Expiry Alerts
 
-Posts to the alerts channel 14, 7 and 1 days before a token the jobs use expires, and
-once when it has. Quiet otherwise.
+Posts to the alerts channel 14 days, 7 days and 24 hours before a token the jobs use
+expires, and once when it has. Quiet otherwise. Times are UTC; a date without one, such
+as Crowdin's, counts from 00:00 UTC that day.
 
 | | |
 | --- | --- |

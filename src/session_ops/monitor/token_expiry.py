@@ -23,8 +23,10 @@ Each token's expiry comes from one of three places:
     fingerprint = "3f2a9c01b4de"
     date = 2025-11-20
 
-Posts once as each token comes within 14, 7 and 1 days of expiring, and once more
-when it has expired; a new expiry date starts it over. Success is quiet.
+Posts once as each token comes within 14 days, 7 days and 24 hours of expiring, and
+once more when it has expired; a new expiry date starts it over. Times are UTC, and a
+date without one counts from its start, so a run on any timezone's morning errs early.
+Success is quiet.
 
 Config:
     ALERT_DISCORD_WEBHOOK_URL   where the alert goes (not needed with --dry-run)
@@ -83,6 +85,10 @@ class Config:
     issued: dict
 
 
+def start_of(day):
+    return datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+
+
 def as_date(value):
     return value.date() if isinstance(value, datetime) else value
 
@@ -133,15 +139,16 @@ def issued_on(name, value, issued, seen, today):
 
 
 def parse_github_expiry(value):
-    """The date in GitHub's expiry header, "2027-10-02 03:00:00 UTC"."""
+    """The time in GitHub's expiry header, "2027-10-02 03:00:00 UTC"."""
     try:
-        return date.fromisoformat(value[:10])
+        return datetime.strptime(value.removesuffix(" UTC")[:19], "%Y-%m-%d %H:%M:%S") \
+            .replace(tzinfo=timezone.utc)
     except ValueError:
         raise ValueError(f"unreadable {GITHUB_EXPIRY_HEADER}: {value!r}") from None
 
 
 def probe_github(session, token):
-    """The token's expiry date, NEVER, or "rejected" when GitHub refuses it."""
+    """The token's expiry time, NEVER, or "rejected" when GitHub refuses it."""
     resp = session.request("GET", GITHUB_RATE_LIMIT,
                            headers={"Authorization": f"Bearer {token}"})
     if resp.status_code == 401:
@@ -151,25 +158,25 @@ def probe_github(session, token):
     return parse_github_expiry(header) if header else NEVER
 
 
-def level(expiry, today):
+def level(expiry, now):
     """What an alert about `expiry` would say, or None while it needs none."""
     if expiry in ("missing", "rejected"):
         return expiry
     if expiry == NEVER:
         return None
-    days = (expiry - today).days
-    if days < 0:
+    left = expiry - now
+    if left <= timedelta(0):
         return "expired"
-    return next((f"{t}d" for t in THRESHOLDS if days <= t), None)
+    return next((f"{t}d" for t in THRESHOLDS if left <= timedelta(days=t)), None)
 
 
-def evaluate(expiries, state, today):
+def evaluate(expiries, state, now):
     """The tokens due an alert, as (name, expiry, level). `state` drops every token
     that needs no alert, so a renewed one starts over; recording an alert is left to
     a delivered post."""
     due = []
     for name, expiry in expiries.items():
-        current = level(expiry, today)
+        current = level(expiry, now)
         if current is None:
             state.pop(name, None)
         elif state.get(name) != record(expiry, current):
@@ -180,26 +187,31 @@ def evaluate(expiries, state, today):
 
 
 def record(expiry, current):
-    return {"level": current, "expires": expiry.isoformat() if isinstance(expiry, date) else None}
+    return {"level": current, "expires": shown(expiry) if isinstance(expiry, datetime) else None}
 
 
-def describe(expiry, current, today, expiry_file):
+def shown(when):
+    return when.strftime("%Y-%m-%d %H:%M UTC")
+
+
+WITHIN = {"1d": "in less than 24h", "7d": "in less than 7 days", "14d": "in less than 14 days"}
+
+
+def describe(expiry, current, expiry_file):
     if current == "missing":
         return f"no expiry date in `{expiry_file}`"
     if current == "rejected":
         return "GitHub rejects it (401)"
-    days = (expiry - today).days
-    if days < 0:
-        return f"**expired** on {expiry.isoformat()}"
-    when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
-    return f"expires **{expiry.isoformat()}**, {when}"
+    if current == "expired":
+        return f"**expired** at {shown(expiry)}"
+    return f"expires **{shown(expiry)}**, {WITHIN[current]}"
 
 
-def build_message(due, host, today, expiry_file):
+def build_message(due, host, expiry_file):
     lines = [f"🔑 **Token expiry** on `{host}`"]
     for name, expiry, current in due:
         token = TOKENS[name]
-        lines.append(f"• **{name}**: {describe(expiry, current, today, expiry_file)}.")
+        lines.append(f"• **{name}**: {describe(expiry, current, expiry_file)}.")
         if current == "missing":
             continue
         then = f", then its date in `{expiry_file}`" if token.source == RECORDED else ""
@@ -207,8 +219,8 @@ def build_message(due, host, today, expiry_file):
     return "\n".join(lines)
 
 
-def utc_today():
-    return datetime.now(timezone.utc).date()
+def utc_now():
+    return datetime.now(timezone.utc)
 
 
 def load_state(path):
@@ -232,21 +244,22 @@ def save_state(path, state):
     os.replace(temporary, path)
 
 
-def collect(config, environ, seen, session, today):
+def collect(config, environ, seen, session, now):
     """{name: expiry} for every token in use. A token set nowhere is left out, and so
     is its fingerprint."""
     expiries = {}
     for name, token in TOKENS.items():
         value = environ.get(name)
         if token.source == RECORDED:
-            expiries[name] = config.expires.get(name, "missing")
+            expiry = config.expires.get(name, "missing")
+            expiries[name] = start_of(expiry) if isinstance(expiry, date) else expiry
         elif not value:
             seen.pop(name, None)
         elif token.source == GITHUB:
             expiries[name] = probe_github(session, value)
         else:
-            since = issued_on(name, value, config.issued, seen, today)
-            expiries[name] = since + timedelta(days=token.lifetime_days)
+            since = issued_on(name, value, config.issued, seen, now.date())
+            expiries[name] = start_of(since + timedelta(days=token.lifetime_days))
     return expiries
 
 
@@ -261,13 +274,13 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     webhook = get_env("ALERT_DISCORD_WEBHOOK_URL", args.webhook, required=not args.dry_run)
-    now = utc_today()
+    now = utc_now()
     state = load_state(args.state)
     expiries = collect(load_config(args.expiry_file), os.environ, state["seen"],
                        http.Session(), now)
     for name in TOKENS:
         expiry = expiries.get(name, "not set")
-        line = f"{name}: {expiry.isoformat() if isinstance(expiry, date) else expiry}"
+        line = f"{name}: {shown(expiry) if isinstance(expiry, datetime) else expiry}"
         seen = state["seen"].get(name)
         if seen:
             line += f" (fingerprint {seen['fingerprint']}, issued {seen['since']})"
@@ -281,7 +294,7 @@ def main(argv=None):
             save_state(args.state, state)
         return
 
-    message = build_message(due, socket.gethostname(), now, args.expiry_file)
+    message = build_message(due, socket.gethostname(), args.expiry_file)
     if args.dry_run:
         print(message)
         return
