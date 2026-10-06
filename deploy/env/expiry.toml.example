@@ -1,0 +1,14 @@
+# /etc/session-ops/expiry.toml: what token-expiry cannot learn by itself. Not a
+# secret: mode 644.
+
+[expires]
+# Crowdin → Account Settings → API → Personal Access Tokens, the Expires column.
+# A date, or "never" when it does not expire or this host does not use it.
+#CROWDIN_API_TOKEN = "never"
+
+# Only for a Claude Code token installed before token-expiry first ran: it otherwise
+# dates a token from the day it first saw it. Ignored once that token is replaced.
+# The fingerprint is printed by `session-ops run token-expiry --dry-run`.
+#[issued.CLAUDE_CODE_OAUTH_TOKEN]
+#fingerprint = "3f2a9c01b4de"
+#date = 2025-11-20

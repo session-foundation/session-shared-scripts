@@ -85,6 +85,22 @@ max_age_hours = 3
 timeout = "5min"
 
 [[job]]
+name = "token-expiry"
+description = "Alert before a token the jobs use expires"
+entry = "session_ops.monitor.token_expiry:main"
+args = ["--state", "{state}/state.json"]
+user = "sessionops"
+# For the GitHub token it probes and the Claude Code token it fingerprints, which brings
+# the rest of zendesk.env's secrets into this unit. expiry.toml holds none.
+env_files = ["/etc/session-ops/alerts.env", "/etc/session-ops/github-prs.env",
+             "/etc/session-ops/zendesk.env"]
+env = ["ALERT_DISCORD_WEBHOOK_URL"]
+schedule = "*-*-* 09:00 Australia/Melbourne"
+# A day, plus the hour a DST change adds and slack for the run.
+max_age_hours = 27
+timeout = "5min"
+
+[[job]]
 name = "crowdin-sync"
 description = "Crowdin translations into the platform repos"
 entry = "session_ops.crowdin.sync:main"

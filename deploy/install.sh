@@ -73,7 +73,7 @@ for name in zendesk github-prs crowdin publish alerts; do
 done
 # What each file takes, commented; the env files stay empty until filled, since a job
 # is enabled once its env files have content.
-install -m 644 "$ROOT"/deploy/env/*.env.example "$ETC/"
+install -m 644 "$ROOT"/deploy/env/*.example "$ETC/"
 # The publishing units load this as a credential, and a missing file would stop them
 # starting; left empty, their runs exit naming the key.
 [ -e "$ETC/github-app.pem" ] || install -m 600 /dev/null "$ETC/github-app.pem"
