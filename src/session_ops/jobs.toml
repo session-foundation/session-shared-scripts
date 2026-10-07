@@ -128,7 +128,7 @@ unit = ["LoadCredential=github-app.pem:/etc/session-ops/github-app.pem"]
 
 [[job]]
 name = "release-stats"
-description = "Download counts of the latest Desktop and Android releases"
+description = "Download counts of the latest releases and the latest Desktop release per platform"
 entry = "session_ops.platforms.release_stats:main"
 args = ["--out", "{state}/runs"]
 user = "sessionops"
