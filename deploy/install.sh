@@ -68,7 +68,7 @@ move /etc/github-prs/env "$ETC/github-prs.env" 600 root
 move "$ETC/env" "$ETC/alerts.env" 600 root
 # systemd reads EnvironmentFile= as root before dropping privileges, so these need
 # no group: a job's account cannot read another job's secrets.
-for name in zendesk github-prs crowdin publish alerts; do
+for name in zendesk github-prs crowdin publish alerts mau; do
     [ -e "$ETC/$name.env" ] || install -m 600 /dev/null "$ETC/$name.env"
 done
 # What each file takes, commented; the env files stay empty until filled, since a job
@@ -92,6 +92,12 @@ if [ -e "$NEW_HOUSE" ] && grep -qx "ZENDESK_HOUSE_ANSWERS=$OLD_HOUSE" "$ETC/zend
     echo "pointed ZENDESK_HOUSE_ANSWERS in $ETC/zendesk.env at $NEW_HOUSE"
 fi
 
+# A watched job's inbox: root drops files in, and the job's account moves them out.
+"$OPS" list --watched | while read -r job user dir; do
+    install -d -o "$user" -g "$user" -m 711 "$STATE/$job"
+    install -d -o "$user" -g "$user" -m 700 "$dir"
+done
+
 install -m 644 "$ROOT/deploy/session-ops.tmpfiles" /etc/tmpfiles.d/session-ops.conf
 systemd-tmpfiles --create session-ops.conf
 
@@ -104,14 +110,15 @@ rm -f "$UNITS/zendesk-alert@.service" "$UNITS/github-prs-alert@.service"
 systemctl disable --now crowdin-relay.service 2>/dev/null || true
 rm -f "$UNITS/crowdin-relay.service"
 
-install -m 644 "$ROOT"/deploy/*.service "$ROOT"/deploy/*.timer "$UNITS/"
+install -m 644 "$ROOT"/deploy/*.service "$ROOT"/deploy/*.timer "$ROOT"/deploy/*.path "$UNITS/"
 # Only the generated files go, so a drop-in added by hand survives.
 rm -f "$UNITS"/session-ops@*.service.d/job.conf "$UNITS"/session-ops@*.timer.d/schedule.conf \
-    "$UNITS"/session-ops-queue.timer.d/schedule.conf
+    "$UNITS"/session-ops@*.path.d/watch.conf "$UNITS"/session-ops-queue.timer.d/schedule.conf
 "$OPS" units --out "$UNITS" >/dev/null
 
 READY=$("$OPS" list --ready)
 QUEUED=$("$OPS" list --queued)
+WATCHED=$("$OPS" list --watched | cut -d' ' -f1)
 listed() { printf '%s\n' $2 | grep -qxF "$1"; }
 # What the queue's timer starts: its ready jobs, rebuilt from scratch each install.
 WANTS="$UNITS/session-ops-queue.service.wants"
@@ -140,6 +147,21 @@ for job in $READY; do
     else
         systemctl enable --now "session-ops@$job.timer" >/dev/null
         echo "enabled session-ops@$job.timer"
+    fi
+done
+for link in "$UNITS"/paths.target.wants/session-ops@*.path; do
+    [ -L "$link" ] || continue
+    job=${link##*/session-ops@}
+    job=${job%.path}
+    if ! listed "$job" "$READY" || ! listed "$job" "$WATCHED"; then
+        systemctl disable --now "session-ops@$job.path" >/dev/null
+        echo "disabled session-ops@$job.path (no longer a ready job with a watch)"
+    fi
+done
+for job in $WATCHED; do
+    if listed "$job" "$READY"; then
+        systemctl enable --now "session-ops@$job.path" >/dev/null
+        echo "enabled session-ops@$job.path"
     fi
 done
 if [ -d "$WANTS" ]; then

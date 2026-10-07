@@ -30,6 +30,7 @@ class Job:
     unit: tuple = field(default=())
     queued: bool = False
     after: tuple = ()
+    watch: str = None
 
     @property
     def scheduled(self):
@@ -42,6 +43,10 @@ class Job:
     @property
     def state_dir(self):
         return os.path.join(STATE_ROOT, self.name)
+
+    @property
+    def watch_glob(self):
+        return os.path.join(self.state_dir, self.watch) if self.watch else None
 
     def argv(self, dry_run=False, state_dir=None):
         """The job's arguments, with {state} standing for its state directory."""
@@ -84,6 +89,8 @@ def load(path=REGISTRY):
                            for k, v in row.items()}))
     jobs = _apply_queue(path, jobs, data.get("queue"))
     for job in jobs:
+        if job.watch and (os.path.isabs(job.watch) or ".." in job.watch.split("/")):
+            raise ValueError(f"{path}: {job.name}'s watch must stay inside its state directory")
         if job.scheduled and not isinstance(job.max_age_hours, (int, float)):
             raise ValueError(f"{path}: scheduled job {job.name} needs a numeric max_age_hours")
     return jobs

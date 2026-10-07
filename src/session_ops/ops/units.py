@@ -25,6 +25,10 @@ def timer_dropin(schedule):
     return "\n".join([HEADER, "[Timer]", f"OnCalendar={schedule}"]) + "\n"
 
 
+def path_dropin(pattern):
+    return "\n".join([HEADER, "[Path]", f"PathExistsGlob={pattern}"]) + "\n"
+
+
 def dropins(jobs, queue):
     """{relative path: content} for every job, and the queue's schedule.
 
@@ -38,6 +42,8 @@ def dropins(jobs, queue):
         files[f"session-ops@{job.name}.service.d/job.conf"] = service_dropin(job)
         if job.schedule:
             files[f"session-ops@{job.name}.timer.d/schedule.conf"] = timer_dropin(job.schedule)
+        if job.watch:
+            files[f"session-ops@{job.name}.path.d/watch.conf"] = path_dropin(job.watch_glob)
     return files
 
 

@@ -10,6 +10,8 @@
 #   channel_env    where it posts, and where its own failures are reported; a job
 #                  without one reports to ALERT_DISCORD_WEBHOOK_URL
 #   unit           further [Service] lines, over the template's hardening
+#   watch          a glob under {state}: a file matching it starts the job, which must
+#                  move it out, or the path unit starts it again
 #
 #   max_age_hours  for a queued job, its queue's: the weekend's 72 h (73 h across
 #                  April's DST change), plus every job ahead of it running to its timeout
@@ -133,4 +135,19 @@ entry = "session_ops.platforms.release_stats:main"
 args = ["--out", "{state}/runs"]
 user = "sessionops"
 env_files = ["/etc/session-ops/alerts.env"]
+timeout = "5min"
+
+[[job]]
+name = "mau"
+description = "Monthly active users, posted once a month"
+entry = "session_ops.platforms.mau:main"
+args = ["--state", "{state}"]
+user = "sessionops"
+env_files = ["/etc/session-ops/mau.env"]
+env = ["MAU_DISCORD_WEBHOOK_URL"]
+channel_env = "MAU_DISCORD_WEBHOOK_URL"
+schedule = "*-*-10 10:00 Australia/Melbourne"
+watch = "inbox/*.csv"
+# The longest month, plus the hour a DST change adds and slack for the run.
+max_age_hours = 750
 timeout = "5min"

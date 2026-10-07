@@ -235,6 +235,8 @@ def main(argv=None):
                            help="Only the names of scheduled jobs with an empty env file.")
     readiness.add_argument("--queued", action="store_true",
                            help="Only the names of the queued jobs, in the order they run.")
+    readiness.add_argument("--watched", action="store_true",
+                           help="Name, account and watched directory of each job with a watch.")
     run_parser = sub.add_parser("run", help="Run a job as its timer does.")
     run_parser.add_argument("job")
     run_parser.add_argument("--dry-run", action="store_true",
@@ -249,6 +251,11 @@ def main(argv=None):
         queue = registry.load_queue()
         if args.queued:
             print("\n".join(queue.jobs))
+            return
+        if args.watched:
+            for job in registry.load():
+                if job.watch:
+                    print(job.name, job.user, os.path.dirname(job.watch_glob))
             return
         for job in registry.load():
             if args.ready or args.not_ready:

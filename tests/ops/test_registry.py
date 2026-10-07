@@ -40,6 +40,16 @@ class TestRegistry(unittest.TestCase):
         self.assertEqual(job.argv(dry_run=True, state_dir="/x"),
                          ["--state", "/x/s.json", "--dry-run"])
 
+    def test_a_watch_is_a_glob_under_the_state_directory(self):
+        job = load(VALID + 'watch = "inbox/*.csv"\n')[0]
+        self.assertEqual(job.watch_glob, "/var/lib/session-ops/a/inbox/*.csv")
+        self.assertIsNone(load(VALID)[0].watch_glob)
+
+    def test_a_watch_outside_the_state_directory_is_refused(self):
+        for watch in ("/tmp/*.csv", "../b/*.csv"):
+            with self.subTest(watch=watch), self.assertRaises(ValueError):
+                load(VALID + f'watch = "{watch}"\n')
+
     def test_a_missing_field_is_refused(self):
         with self.assertRaises(ValueError):
             load(VALID.replace('user = "u"\n', ""))

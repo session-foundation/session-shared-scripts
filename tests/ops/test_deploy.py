@@ -62,6 +62,16 @@ class TestDeploy(unittest.TestCase):
                 self.assertEqual(f"session-ops@{job.name}.timer.d/schedule.conf" in files,
                                  bool(job.schedule))
 
+    def test_a_watched_job_gets_a_path_unit_and_moves_its_files_out_of_the_watch(self):
+        files = units.dropins(registry.load(), registry.load_queue())
+        for job in registry.load():
+            with self.subTest(job=job.name):
+                watch = files.get(f"session-ops@{job.name}.path.d/watch.conf")
+                self.assertEqual(watch is not None, bool(job.watch))
+                if job.watch:
+                    self.assertIn(f"\nPathExistsGlob={job.watch_glob}\n", watch)
+        self.assertIn("Unit=session-ops@%i.service\n", unit_text("session-ops@.path"))
+
     def test_each_queued_job_runs_after_every_one_before_it(self):
         queue = registry.load_queue()
         files = units.dropins(registry.load(), queue)

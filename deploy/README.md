@@ -7,6 +7,7 @@ does the work: accounts, venv, env files, units, timers, and migrating an older 
 | Unit | What it is |
 | --- | --- |
 | `session-ops@<job>.timer` → `.service` | One per job; a generated drop-in sets its account, env files and schedule. |
+| `session-ops@<job>.path` → `.service` | For a job with a `watch`: starts it when a matching file lands in its state directory. |
 | `session-ops-queue.timer` → `.service` | Starts the jobs in `jobs.toml`'s `[queue]`, which then run one at a time in its order. |
 | `zendesk-relay.service` | Always on, `127.0.0.1:8080`: Zendesk's `claude:` note webhooks. |
 | `session-ops-alert@.service` | Every unit's `OnFailure=` backstop; see [session-ops-silence](../docs/jobs/session-ops-silence.md). |
@@ -83,6 +84,9 @@ To end it, stop the timers, then close the rehearsal pull requests:
 
 ```bash
 for link in /etc/systemd/system/timers.target.wants/session-ops@*.timer; do
+  [ -L "$link" ] && systemctl disable --now "${link##*/}"
+done
+for link in /etc/systemd/system/paths.target.wants/session-ops@*.path; do
   [ -L "$link" ] && systemctl disable --now "${link##*/}"
 done
 systemctl disable --now session-ops-queue.timer zendesk-relay.service
