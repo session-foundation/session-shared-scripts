@@ -1,12 +1,17 @@
 # Monthly Active Users
 
-Posts last month's Android monthly active users once a month, with the change on the
-month before. Google has no API for Play's MAU, so the figures come from the Play
-Console export someone drops in the job's inbox.
+Posts last month's monthly active users once a month, per platform and in total.
+
+- Android: Play's MAU on the month's last day, with the change on the month before.
+  Google has no API for it, so the figures come from the Play Console export someone
+  drops in the job's inbox.
+- Desktop, which has no active-user count: the latest stable release's downloads per
+  platform, as in [release-stats](release-stats.md), read when the post goes out.
+- The total adds the two.
 
 | | |
 | --- | --- |
-| Runs | `session-ops@mau.timer` on the 10th at 10:00 Melbourne, and `session-ops@mau.path` whenever a `.csv` lands in the inbox |
+| Runs | `session-ops@mau.timer` on the 10th at 11:00 Melbourne, and `session-ops@mau.path` whenever a `.csv` lands in the inbox |
 | Secrets | `/etc/session-ops/mau.env`: `MAU_DISCORD_WEBHOOK_URL`, and `MAU_INBOX_HOST` for the reminder's `rsync` |
 | Inbox | `/var/lib/session-ops/mau/inbox/` |
 | Dry run | `session-ops run mau --dry-run` prints what it would post, and moves and writes nothing |

@@ -1,6 +1,7 @@
 """
 Monthly active users, posted once a month: Android's from the Play Console exports
-dropped into the job's inbox.
+dropped into the job's inbox, and the latest Desktop release's downloads, which Desktop
+has in place of active users.
 
     session-ops run mau [--dry-run]
     rsync "All countries _ regions.csv" root@<host>:/var/lib/session-ops/mau/inbox/
@@ -20,6 +21,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from session_ops.ops.runner import step
+from session_ops.platforms import release_stats
 from session_ops.shared import discord, http
 
 MAU_COLUMN = ("Monthly Active Users (MAU) (Unique users, Per interval, Daily): "
@@ -126,18 +128,37 @@ def figure(value):
     return f"{value:,}"
 
 
-def report_message(month_end, android, revisions):
+def desktop_downloads(session):
+    """(latest Desktop release, its downloads per platform)."""
+    release = release_stats.latest(release_stats.fetch(session, "session-desktop"))
+    flathub = release_stats.flathub_installs_since(
+        release_stats.get_json(session, release_stats.FLATHUB), release_stats.release_day(release))
+    return release, release_stats.platform_totals(release, flathub)
+
+
+def report_message(month_end, android, revisions, desktop):
     month = month_end.strftime("%B %Y")
     current = android[month_end.isoformat()]
+    release, downloads = desktop
+    desktop_total = downloads["linux"] + downloads["macos"] + downloads["windows"]
     line = f"Android: **{figure(current)}**"
     before = android.get(previous_month_end(month_end).isoformat())
     if before:
         change = current - before
         line += (f" ({'+' if change >= 0 else '−'}{figure(abs(change))}, "
                  f"{change / before:+.1%} on {previous_month_end(month_end):%B})")
-    lines = [f"📊 **Monthly active users, {month}**", line,
-             f"-# Play Console MAU on {month_end:%-d %B}: users who opened Session in the "
-             "28 days before."]
+    lines = [
+        f"📊 **Monthly active users, {month}**",
+        line,
+        f"Desktop: **{figure(desktop_total)}** (Linux {figure(downloads['linux'])} · "
+        f"macOS {figure(downloads['macos'])} · Windows {figure(downloads['windows'])})",
+        f"**Total: {figure(current + desktop_total)}**",
+        f"-# Android: Play Console MAU on {month_end:%-d %B}, users who opened Session in the "
+        "28 days before.",
+        f"-# Desktop: downloads of {release['tag_name']} since its release on "
+        f"{date.fromisoformat(release_stats.release_day(release)):%-d %B}, updates included; "
+        "Desktop has no active-user count.",
+    ]
     if revisions:
         lines.append("-# The latest export revised " + ", ".join(
             f"{date.fromisoformat(day):%-d %b} {figure(old)} → {figure(new)}"
@@ -186,7 +207,11 @@ def main(argv=None):
     if month in history["posted"]:
         print(f"{month} already posted.")
     elif month_end.isoformat() in history["android"]:
-        message = report_message(month_end, history["android"], revisions)
+        step("reading Desktop downloads")
+        session = http.Session()
+        session.headers.update({"Accept": "application/vnd.github.v3+json"})
+        message = report_message(month_end, history["android"], revisions,
+                                 desktop_downloads(session))
     elif today.day >= REMIND_DAY:
         message = reminder_message(month_end, inbox)
     else:

@@ -12,6 +12,7 @@ from unittest import mock
 
 from session_ops.platforms import mau
 from session_ops.shared.testing import FakeResponse, FakeSession
+from tests.test_release_stats import DESKTOP, FLATHUB, LATEST
 
 HEADER = f'Date,"{mau.MAU_COLUMN}",Notes\n'
 
@@ -20,6 +21,9 @@ def export(*rows):
     return HEADER + "".join(f'"{day}","{value}",{note}\n' for day, value, note in rows)
 
 
+# LATEST's downloads with FLATHUB's 15 installs since its release: 30 + 34 + 100.
+DOWNLOADS = (LATEST, {"linux": 30, "macos": 34, "windows": 100, "linux_github": 15,
+                      "linux_flathub": 15})
 SEPTEMBER = export(("Aug 31, 2026", "100,000", ""),
                    ("Sep 29, 2026", "104,500", "Rollout of release: 1.32.1 at 5%."),
                    ("Sep 30, 2026", "105,000", ""))
@@ -75,18 +79,25 @@ class MergeTest(unittest.TestCase):
 class MessageTest(unittest.TestCase):
     def test_the_report_gives_the_month_end_and_the_change_on_the_month_before(self):
         android = {"2026-08-31": 100000, "2026-09-30": 105000}
-        message = mau.report_message(date(2026, 9, 30), android, [])
+        message = mau.report_message(date(2026, 9, 30), android, [], DOWNLOADS)
         self.assertIn("**Monthly active users, September 2026**", message)
         self.assertIn("Android: **105,000** (+5,000, +5.0% on August)", message)
 
+    def test_desktop_downloads_are_listed_per_platform_and_counted_in_the_total(self):
+        message = mau.report_message(date(2026, 9, 30), {"2026-09-30": 105000}, [], DOWNLOADS)
+        self.assertIn("Desktop: **164** (Linux 30 · macOS 34 · Windows 100)", message)
+        self.assertIn("**Total: 105,164**", message)
+        self.assertIn("downloads of v1.18.1 since its release on 10 July", message)
+
     def test_a_drop_is_signed(self):
         message = mau.report_message(date(2026, 9, 30),
-                                     {"2026-08-31": 107000, "2026-09-30": 105000}, [])
+                                     {"2026-08-31": 107000, "2026-09-30": 105000}, [],
+                                     DOWNLOADS)
         self.assertIn("(−2,000, -1.9% on August)", message)
 
     def test_revisions_are_listed(self):
         message = mau.report_message(date(2026, 9, 30), {"2026-09-30": 105000},
-                                     [("2026-09-28", 104200, 104300)])
+                                     [("2026-09-28", 104200, 104300)], DOWNLOADS)
         self.assertIn("revised 28 Sep 104,200 → 104,300", message)
 
     def test_the_reminder_names_the_day_and_where_to_copy_the_export(self):
@@ -110,7 +121,8 @@ class RunTest(unittest.TestCase):
         with open(os.path.join(self.state, "inbox", name), "w", encoding="utf-8") as handle:
             handle.write(text)
 
-    def run_on(self, day, *args, responses=(FakeResponse({}),)):
+    def run_on(self, day, *args, responses=(FakeResponse(DESKTOP), FakeResponse(FLATHUB),
+                                            FakeResponse({}))):
         session = FakeSession(list(responses))
         now = datetime(*day, 12, tzinfo=mau.ZONE)
         with mock.patch.object(mau, "datetime", wraps=datetime) as clock, \
@@ -121,7 +133,8 @@ class RunTest(unittest.TestCase):
         return session, out.getvalue()
 
     def posted(self, session):
-        return [kwargs["json"]["content"] for _, _, kwargs in session.calls]
+        return [kwargs["json"]["content"] for method, _, kwargs in session.calls
+                if method == "POST"]
 
     def history(self):
         with open(os.path.join(self.state, mau.HISTORY), encoding="utf-8") as handle:
@@ -149,7 +162,7 @@ class RunTest(unittest.TestCase):
         self.assertEqual(session.calls, [])
         self.assertIn("Waiting for 2026-09-30", out)
 
-        session, _ = self.run_on((2026, 10, 10))
+        session, _ = self.run_on((2026, 10, 10), responses=[FakeResponse({})])
         self.assertIn("is missing", self.posted(session)[0])
         self.assertEqual(self.history()["posted"], [])
         self.assertEqual(self.history()["android"], {"2026-09-29": 104500})
@@ -172,14 +185,15 @@ class RunTest(unittest.TestCase):
     def test_a_refused_post_is_not_recorded_and_fails_the_run(self):
         self.drop("a.csv", SEPTEMBER)
         with self.assertRaisesRegex(RuntimeError, "Discord did not accept"):
-            self.run_on((2026, 10, 9), responses=[FakeResponse({}, status_code=400)])
+            self.run_on((2026, 10, 9), responses=[FakeResponse(DESKTOP), FakeResponse(FLATHUB),
+                                                  FakeResponse({}, status_code=400)])
         self.assertEqual(self.history()["posted"], [])
         self.assertIn("2026-09-30", self.history()["android"])
 
     def test_a_dry_run_moves_and_writes_nothing(self):
         self.drop("a.csv", SEPTEMBER)
         session, out = self.run_on((2026, 10, 9), "--dry-run")
-        self.assertEqual(session.calls, [])
+        self.assertEqual(self.posted(session), [])
         self.assertIn("Android: **105,000**", out)
         self.assertEqual(self.listing("inbox"), ["a.csv"])
         self.assertFalse(os.path.exists(os.path.join(self.state, mau.HISTORY)))

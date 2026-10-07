@@ -139,14 +139,15 @@ timeout = "5min"
 
 [[job]]
 name = "mau"
-description = "Monthly active users, posted once a month"
+description = "Monthly active users per platform, posted once a month"
 entry = "session_ops.platforms.mau:main"
 args = ["--state", "{state}"]
 user = "sessionops"
 env_files = ["/etc/session-ops/mau.env"]
 env = ["MAU_DISCORD_WEBHOOK_URL"]
 channel_env = "MAU_DISCORD_WEBHOOK_URL"
-schedule = "*-*-10 10:00 Australia/Melbourne"
+# An hour clear of the queue's posts at 10:00.
+schedule = "*-*-10 11:00 Australia/Melbourne"
 watch = "inbox/*.csv"
 # The longest month, plus the hour a DST change adds and slack for the run.
 max_age_hours = 750
