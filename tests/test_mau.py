@@ -12,9 +12,43 @@ from unittest import mock
 
 from session_ops.platforms import mau
 from session_ops.shared.testing import FakeResponse, FakeSession
-from tests.test_release_stats import DESKTOP, FLATHUB, LATEST
 
 HEADER = f'Date,"{mau.MAU_COLUMN}",Notes\n'
+
+
+def asset(name, count):
+    return {"name": name, "download_count": count}
+
+
+def release(tag, *assets, published="2026-07-10", prerelease=False):
+    return {"tag_name": tag, "published_at": f"{published}T00:00:00Z", "draft": False,
+            "prerelease": prerelease, "assets": list(assets)}
+
+
+LATEST = release(
+    "v1.18.1",
+    asset("session-desktop-linux-amd64-1.18.1.deb", 5),
+    asset("session-desktop-linux-x86_64-1.18.1.AppImage", 7),
+    asset("session-desktop-linux-x86_64-1.18.1.rpm", 1),
+    asset("session-desktop-linux-x64-1.18.1.freebsd", 2),
+    asset("session-desktop-mac-arm64-1.18.1.dmg", 30),
+    asset("session-desktop-mac-arm64-1.18.1.dmg.blockmap", 900),
+    asset("session-desktop-mac-x64-1.18.1.zip", 4),
+    asset("session-desktop-win-x64-1.18.1.exe", 100),
+    asset("session-desktop-win-x64-1.18.1.exe.blockmap", 900),
+    asset("latest.yml", 900),
+    asset("latest-linux.yml", 900),
+    asset("signature.asc", 900))
+
+DESKTOP = [
+    release("v1.19.0", asset("session-desktop-win-x64-1.19.0.exe", 9),
+            published="2026-10-01", prerelease=True),
+    LATEST,
+    release("v1.18.0", asset("session-desktop-win-x64-1.18.0.exe", 50),
+            published="2026-04-09"),
+]
+
+FLATHUB = {"installs_per_day": {"2026-07-11": 10, "2026-07-09": 1000, "2026-07-10": 5}}
 
 
 def export(*rows):
@@ -22,8 +56,7 @@ def export(*rows):
 
 
 # LATEST's downloads with FLATHUB's 15 installs since its release: 30 + 34 + 100.
-DOWNLOADS = (LATEST, {"linux": 30, "macos": 34, "windows": 100, "linux_github": 15,
-                      "linux_flathub": 15})
+DOWNLOADS = (LATEST, {"linux": 30, "macos": 34, "windows": 100})
 SEPTEMBER = export(("Aug 31, 2026", "100,000", ""),
                    ("Sep 29, 2026", "104,500", "Rollout of release: 1.32.1 at 5%."),
                    ("Sep 30, 2026", "105,000", ""))
@@ -65,6 +98,27 @@ class ParseTest(unittest.TestCase):
     def test_a_non_figure_is_refused(self):
         with self.assertRaisesRegex(mau.Rejected, "for a figure"):
             self.parse(export(("Sep 30, 2026", "n/a", "")))
+
+
+class DesktopTest(unittest.TestCase):
+    def test_latest_skips_prereleases(self):
+        self.assertIs(mau.latest(DESKTOP), LATEST)
+
+    def test_counts_installers_only_and_adds_flathub_to_linux(self):
+        self.assertEqual(mau.platform_totals(LATEST, 15),
+                         {"linux": 30, "macos": 34, "windows": 100})
+
+    def test_flathub_counts_from_the_release_day_on(self):
+        self.assertEqual(mau.flathub_installs_since(FLATHUB, "2026-07-10"), 15)
+
+    def test_flathub_refuses_a_release_older_than_its_window(self):
+        with self.assertRaisesRegex(RuntimeError, "from 2026-07-09 only"):
+            mau.flathub_installs_since(FLATHUB, "2026-07-01")
+
+    def test_an_error_status_fails(self):
+        session = FakeSession([FakeResponse({"message": "nope"}, status_code=404)])
+        with self.assertRaisesRegex(RuntimeError, "HTTP 404"):
+            mau.desktop_downloads(session)
 
 
 class MergeTest(unittest.TestCase):

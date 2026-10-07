@@ -6,7 +6,7 @@ Posts last month's monthly active users once a month, per platform and in total.
   Google has no API for it, so the figures come from the Play Console export someone
   drops in the job's inbox.
 - Desktop, which has no active-user count: the latest stable release's downloads per
-  platform, as in [release-stats](release-stats.md), read when the post goes out.
+  platform since its release, read from GitHub and Flathub when the post goes out.
 - The total adds the two.
 
 | | |
@@ -48,3 +48,19 @@ and the job only reads `*.csv`.
 
 `history.json` cannot be rebuilt by a re-run: an unreadable one stops the job. If it is
 lost, drop an export covering the last 365 days.
+
+## Desktop downloads
+
+The latest Desktop release that is neither a draft nor a pre-release. Updates count
+where the updater fetches an installer.
+
+| Platform | Counted |
+| --- | --- |
+| Linux | `.deb`, `.AppImage`, `.rpm`, `.freebsd`, and Flathub's installs of `network.loki.Session` since the release day |
+| macOS | `.dmg`, `.zip` |
+| Windows | `.exe` |
+
+`.blockmap`, `latest*.yml` and `signature.asc` are left out. Flathub builds from the
+GitHub `.deb` once, so its installs are not in GitHub's counts; Homebrew's `session`
+cask downloads the GitHub `.dmg`, so it already is. Flathub keeps 180 days of daily
+installs, so the run fails on a release older than that rather than undercount.

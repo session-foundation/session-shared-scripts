@@ -15,7 +15,6 @@ share for translations. One package, `session_ops`, deployed to one self-hosted 
 | `crowdin-sync` | Weekday: Crowdin translations into iOS, Android and the localization module, and its submodule bumped in each client | [crowdin-sync](docs/jobs/crowdin-sync.md) |
 | `snode-list` | Weekday: the fallback service node list from the seed nodes into dynamic-assets, Desktop and iOS | [snode-list](docs/jobs/snode-list.md) |
 | `mau` | Monthly: active users per platform and in total, Android's from the Play Console export dropped in its inbox | [mau](docs/jobs/mau.md) |
-| `release-stats` | On demand: download counts of the latest releases and the latest Desktop release per platform | [release-stats](docs/jobs/release-stats.md) |
 | `session-ops-silence` | Discord alerts for a job that failed, or stopped running | [session-ops-silence](docs/jobs/session-ops-silence.md) |
 | `token-expiry` | Discord alerts 14 days, 7 days and 24 hours before a token expires | [token-expiry](docs/jobs/token-expiry.md) |
 

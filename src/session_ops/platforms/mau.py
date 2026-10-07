@@ -21,7 +21,6 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from session_ops.ops.runner import step
-from session_ops.platforms import release_stats
 from session_ops.shared import discord, http
 
 MAU_COLUMN = ("Monthly Active Users (MAU) (Unique users, Per interval, Daily): "
@@ -32,6 +31,14 @@ REMIND_DAY = 10
 ZONE = ZoneInfo("Australia/Melbourne")
 VERSION = 1
 HISTORY = "history.json"
+
+DESKTOP_RELEASES = "https://api.github.com/repos/session-foundation/session-desktop/releases"
+FLATHUB = "https://flathub.org/api/v2/stats/network.loki.Session"
+PLATFORM_EXTENSIONS = {
+    "linux": (".deb", ".AppImage", ".rpm", ".freebsd"),
+    "macos": (".dmg", ".zip"),
+    "windows": (".exe",),
+}
 
 
 class Rejected(ValueError):
@@ -128,12 +135,44 @@ def figure(value):
     return f"{value:,}"
 
 
+def get_json(session, url):
+    resp = session.request("GET", url)
+    if resp.status_code != 200:
+        raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+    return resp.json()
+
+
+def latest(releases):
+    return next(r for r in releases if not r["draft"] and not r["prerelease"])
+
+
+def release_day(release):
+    return release["published_at"].split("T")[0]
+
+
+def flathub_installs_since(stats, day):
+    """Flathub installs from `day` on. Flathub builds from the GitHub .deb once, on its
+    own servers, so these are not already in the GitHub counts."""
+    per_day = stats["installs_per_day"]
+    if day < min(per_day):
+        raise RuntimeError(f"Flathub keeps daily installs from {min(per_day)} only, "
+                           f"after the release on {day}")
+    return sum(count for d, count in per_day.items() if d >= day)
+
+
+def platform_totals(release, flathub_installs):
+    totals = {platform: sum(a["download_count"] for a in release["assets"]
+                            if a["name"].endswith(extensions))
+              for platform, extensions in PLATFORM_EXTENSIONS.items()}
+    totals["linux"] += flathub_installs
+    return totals
+
+
 def desktop_downloads(session):
-    """(latest Desktop release, its downloads per platform)."""
-    release = release_stats.latest(release_stats.fetch(session, "session-desktop"))
-    flathub = release_stats.flathub_installs_since(
-        release_stats.get_json(session, release_stats.FLATHUB), release_stats.release_day(release))
-    return release, release_stats.platform_totals(release, flathub)
+    """(latest stable Desktop release, its downloads per platform)."""
+    release = latest(get_json(session, DESKTOP_RELEASES))
+    flathub = flathub_installs_since(get_json(session, FLATHUB), release_day(release))
+    return release, platform_totals(release, flathub)
 
 
 def report_message(month_end, android, revisions, desktop):
@@ -156,7 +195,7 @@ def report_message(month_end, android, revisions, desktop):
         f"-# Android: Play Console MAU on {month_end:%-d %B}, users who opened Session in the "
         "28 days before.",
         f"-# Desktop: downloads of {release['tag_name']} since its release on "
-        f"{date.fromisoformat(release_stats.release_day(release)):%-d %B}, updates included; "
+        f"{date.fromisoformat(release_day(release)):%-d %B}, updates included; "
         "Desktop has no active-user count.",
     ]
     if revisions:
