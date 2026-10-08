@@ -20,8 +20,9 @@ options chosen.
 A request is refused unless Discord signed it in the last five minutes, it comes from
 `DISCORD_GUILD_ID`, and its author is in `ALLOWED_USER_IDS` or holds a role in
 `ALLOWED_ROLE_IDS`. Both lists empty refuses everybody. The commands are registered
-hidden from everyone, and the server's Integrations settings show them to the right
-role; that only hides them, and these checks are what refuse everyone else.
+hidden from everyone but server administrators, and the server's Integrations settings
+show them to the right role; that only hides them, and these checks are what refuse
+everyone else, administrators included.
 
 The relay runs as `opsbot`. The polkit rule `install.sh` writes from `jobs.toml` lets that
 account start the `discord = true` jobs and nothing else, and the mau inbox is the one

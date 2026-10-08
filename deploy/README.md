@@ -79,8 +79,9 @@ What `/run` and `/mau-upload` do, and who may run them:
    /opt/session-ops/.venv/bin/session-ops discord-register
    ```
 
-6. The commands start hidden from everyone. In Server Settings → Integrations, allow
-   them for the role or channel that runs jobs.
+6. The commands start hidden from everyone but server administrators. In Server
+   Settings → Integrations, allow them for the role or channel that runs jobs. Seeing
+   them is not running them: the relay's allowlist still decides.
 
 Register again after changing which jobs have `discord = true`.
 

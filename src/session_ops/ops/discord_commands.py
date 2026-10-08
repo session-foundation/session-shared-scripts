@@ -3,9 +3,10 @@
     session-ops discord-register     # with discord.env's variables in the environment
 
 Registered on one guild rather than globally: a guild's commands update at once, and
-nobody outside that server can see or run them. They start hidden from every member;
-the server's Integrations settings grant them to a role or channel. That only hides
-them, and the relay's allowlist is what refuses everyone else.
+nobody outside that server can see or run them. They start hidden from every member
+but server administrators; the server's Integrations settings grant them to a role or
+channel. That only hides them, and the relay's allowlist is what refuses everyone else,
+administrators included.
 """
 import os
 import sys
