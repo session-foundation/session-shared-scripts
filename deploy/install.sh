@@ -92,11 +92,15 @@ if [ -e "$NEW_HOUSE" ] && grep -qx "ZENDESK_HOUSE_ANSWERS=$OLD_HOUSE" "$ETC/zend
     echo "pointed ZENDESK_HOUSE_ANSWERS in $ETC/zendesk.env at $NEW_HOUSE"
 fi
 
-# A watched job's inbox: root and the Discord relay drop files in, and the job's account
-# moves them out.
+# A watched job's inbox: root drops files in, and the job's account moves them out.
+# mau's also takes /mau-upload's, from the Discord relay's account.
 "$OPS" list --watched | while read -r job user dir; do
     install -d -o "$user" -g "$user" -m 711 "$STATE/$job"
-    install -d -o "$user" -g opsbot -m 770 "$dir"
+    if [ "$job" = mau ]; then
+        install -d -o "$user" -g opsbot -m 770 "$dir"
+    else
+        install -d -o "$user" -g "$user" -m 700 "$dir"
+    fi
 done
 
 install -m 644 "$ROOT/deploy/session-ops.tmpfiles" /etc/tmpfiles.d/session-ops.conf

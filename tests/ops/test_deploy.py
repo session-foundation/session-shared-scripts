@@ -14,7 +14,7 @@ import tempfile
 import tomllib
 import unittest
 
-from session_ops.ops import registry, units
+from session_ops.ops import discord_commands, registry, units
 from tests.golden import assert_golden
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -95,6 +95,16 @@ class TestDeploy(unittest.TestCase):
     def test_the_polkit_rule_names_the_account_the_discord_relay_runs_as(self):
         self.assertIn(f"\nUser={units.RELAY_USER}\n", unit_text("session-ops-discord.service"))
         self.assertIn(f'subject.user == "{units.RELAY_USER}"', units.polkit_rule([]))
+
+    def test_the_discord_relay_can_write_mau_s_inbox_and_nothing_else(self):
+        inbox = os.path.dirname(registry.get(discord_commands.MAU_JOB).watch_glob)
+        writable = re.findall(r"^ReadWritePaths=-?(.*)$",
+                              unit_text("session-ops-discord.service"), re.MULTILINE)
+        self.assertEqual(writable, [inbox])
+        with open(os.path.join(ROOT, "deploy", "install.sh"), encoding="utf-8") as handle:
+            self.assertIn(f'if [ "$job" = {discord_commands.MAU_JOB} ]; then\n'
+                          f'        install -d -o "$user" -g {units.RELAY_USER} -m 770',
+                          handle.read())
 
 
 class TestInstallScript(unittest.TestCase):
