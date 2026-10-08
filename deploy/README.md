@@ -64,9 +64,14 @@ What `/run` and `/mau-upload` do, and who may run them:
    then run `install.sh` again.
 2. Invite it with the `applications.commands` scope only:
    `https://discord.com/oauth2/authorize?client_id=<app id>&scope=applications.commands`.
-3. Set its Interactions Endpoint URL to `https://webhooks.session.codes/discord/interactions`.
+3. Copy the `location = /discord/interactions` block from
+   [`nginx-webhooks.conf`](nginx-webhooks.conf) into the live
+   `/etc/nginx/sites-available/webhooks.session.codes`, which certbot owns, then
+   `nginx -t && systemctl reload nginx`. Until then the route is a 404 and Discord will
+   not save the URL.
+4. Set its Interactions Endpoint URL to `https://webhooks.session.codes/discord/interactions`.
    Discord checks it with a signed PING before saving.
-4. Register the commands, with the bot token from the Bot page, typed in rather than kept:
+5. Register the commands, with the bot token from the Bot page, typed in rather than kept:
 
    ```bash
    read -rs DISCORD_BOT_TOKEN && export DISCORD_BOT_TOKEN
@@ -74,7 +79,7 @@ What `/run` and `/mau-upload` do, and who may run them:
    /opt/session-ops/.venv/bin/session-ops discord-register
    ```
 
-5. The commands start hidden from everyone. In Server Settings → Integrations, allow
+6. The commands start hidden from everyone. In Server Settings → Integrations, allow
    them for the role or channel that runs jobs.
 
 Register again after changing which jobs have `discord = true`.
