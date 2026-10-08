@@ -21,6 +21,7 @@ Usage:
 import json
 import os
 import subprocess
+import threading
 import time
 from urllib.parse import urlsplit
 
@@ -44,6 +45,7 @@ MAX_UPLOAD_BYTES = 1 << 20
 ATTACHMENT_HOSTS = frozenset({"cdn.discordapp.com", "media.discordapp.net"})
 SYSTEMCTL_TIMEOUT_SECONDS = 10
 RUNNING_STATES = frozenset({"active", "activating", "deactivating", "reloading"})
+USEC_INFINITY = 2**64 - 1
 
 INTERACTION_PING = 1
 INTERACTION_COMMAND = 2
@@ -54,6 +56,8 @@ EPHEMERAL = 64
 NO_PINGS = {"parse": []}
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+# Held across the check and the start: two /run a moment apart would both pass the check.
+_starting = threading.Lock()
 
 
 def env(name, default=None):
@@ -147,6 +151,35 @@ def busy(job):
     return None
 
 
+def next_queue_run():
+    """The queue timer's next run as a Unix time, or None while it has none.
+
+    From list-timers' JSON, in microseconds: systemd 252 prints this property as local
+    time under `show`, --timestamp=unix or not.
+    """
+    timers = json.loads(systemctl("list-timers", "--all", "--output=json",
+                                  registry.QUEUE_TIMER).stdout or "[]")
+    next_us = timers[0].get("next") if timers else None
+    return next_us / 1e6 if next_us and next_us != USEC_INFINITY else None
+
+
+def hold_off(job):
+    """Why `job` cannot start now, or None."""
+    blocking = busy(job)
+    if blocking:
+        return f"⏳ `{blocking}` is running or waiting to; try again once it has finished."
+    queue_at = next_queue_run()
+    # A run is killed at its timeout, so the queue starting later cannot overlap it.
+    if queue_at is None or queue_at >= time.time() + job.timeout_seconds:
+        return None
+    at = f"<t:{int(queue_at)}:t> (<t:{int(queue_at)}:R>)"
+    if job.queued:
+        return (f"⏳ The queue runs **{job.name}** at {at}, sooner than a run started now "
+                f"would be sure to end.")
+    return (f"⏳ The queue starts at {at}, sooner than **{job.name}** would be sure to end; "
+            f"try again once it has run.")
+
+
 def handle_run(interaction):
     name = option(interaction, "job")
     job = next((job for job in registry.load() if job.discord and job.name == name), None)
@@ -154,14 +187,15 @@ def handle_run(interaction):
         return reply(f"❌ `{name}` is not a job /run can start.")
     unit = unit_name(job.name)
     try:
-        blocking = busy(job)
-        started = None if blocking else systemctl("start", "--no-block", unit)
-    except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+        with _starting:
+            held = hold_off(job)
+            started = None if held else systemctl("start", "--no-block", unit)
+    except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as exc:
         print(f"/run {job.name}: {exc!r}", flush=True)
         return reply("❌ Could not ask systemd on the host; see "
                      "`journalctl -u session-ops-discord`.")
-    if blocking:
-        return reply(f"⏳ `{blocking}` is running or waiting to; try again once it has finished.")
+    if held:
+        return reply(held)
     if started.returncode != 0:
         error = started.stderr.strip()
         print(f"/run {job.name} by {user_id(interaction)}: {error}", flush=True)

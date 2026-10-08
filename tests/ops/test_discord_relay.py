@@ -32,9 +32,10 @@ CDN_URL = "https://cdn.discordapp.com/attachments/1/2/All%20countries.csv?ex=1"
 
 
 class FakeSystemd:
-    def __init__(self, running=(), waiting=(), start_error=None):
+    def __init__(self, running=(), waiting=(), start_error=None, queue_at=None):
         self.running, self.waiting, self.start_error = set(running), set(waiting), start_error
-        self.started = []
+        self.queue_at = queue_at
+        self.started, self.locked = [], []
 
     def __call__(self, *args):
         out, code, err = "", 0, ""
@@ -43,8 +44,12 @@ class FakeSystemd:
         elif args[0] == "is-active":
             out = "".join(("active" if u in self.running else "inactive") + "\n"
                           for u in args[1:])
+        elif args[0] == "list-timers":
+            out = json.dumps([] if self.queue_at is None else [
+                {"next": int(self.queue_at * 1e6), "unit": args[-1]}])
         elif args[0] == "start":
             self.started.append(args[-1])
+            self.locked.append(relay._starting.locked())
             code, err = (1, self.start_error) if self.start_error else (0, "")
         return subprocess.CompletedProcess(["systemctl", *args], code, out, err)
 
@@ -155,6 +160,30 @@ class TestRun(RelayCase):
                 self.assertIn("running or waiting", self.content(
                     post(command("run", [("job", "crowdin-sync")]))))
                 self.assertEqual(systemd.started, [])
+
+    def test_the_check_and_the_start_happen_under_one_lock(self):
+        post(command("run", [("job", "crowdin-sync")]))
+        self.assertEqual(self.systemd.locked, [True])
+        self.assertFalse(relay._starting.locked())
+
+    def test_a_run_that_could_still_be_going_when_the_queue_starts_is_refused(self):
+        timeout = registry.get("crowdin-sync").timeout_seconds
+        systemd = FakeSystemd(queue_at=time.time() + timeout - 60)
+        with Patched(relay, systemctl=systemd):
+            text = self.content(post(command("run", [("job", "crowdin-sync")])))
+        self.assertIn(f"The queue runs **crowdin-sync** at <t:{int(systemd.queue_at)}:t>", text)
+        self.assertEqual(systemd.started, [])
+
+    def test_a_run_sure_to_end_before_the_queue_starts_goes_ahead(self):
+        timeout = registry.get("crowdin-duplicates").timeout_seconds
+        systemd = FakeSystemd(queue_at=time.time() + timeout + 60)
+        with Patched(relay, systemctl=systemd):
+            post(command("run", [("job", "crowdin-duplicates")]))
+        self.assertEqual(systemd.started, ["session-ops@crowdin-duplicates.service"])
+
+    def test_a_disabled_queue_timer_holds_nothing_off(self):
+        post(command("run", [("job", "crowdin-sync")]))
+        self.assertEqual(self.systemd.started, ["session-ops@crowdin-sync.service"])
 
     def test_a_refusal_from_systemd_is_passed_on(self):
         systemd = FakeSystemd(start_error="Failed to start: Access denied")

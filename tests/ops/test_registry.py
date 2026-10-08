@@ -94,6 +94,16 @@ class TestRegistry(unittest.TestCase):
         with self.assertRaises(ValueError):
             load(many)
 
+    def test_a_timeout_is_read_as_a_systemd_time_span(self):
+        self.assertEqual(load(VALID)[0].timeout_seconds, 1800)
+        self.assertEqual(load(VALID + 'timeout = "1h 30min"\n')[0].timeout_seconds, 5400)
+        self.assertEqual(registry.span_seconds("90"), 90)
+
+    def test_a_timeout_systemd_would_not_read_is_refused(self):
+        for timeout in ("soon", "2x", "1h later", ""):
+            with self.subTest(timeout=timeout), self.assertRaises(ValueError):
+                load(VALID + f'timeout = "{timeout}"\n')
+
     def test_the_shipped_registry_loads(self):
         names = [job.name for job in registry.load()]
         self.assertIn("zendesk-digest", names)
