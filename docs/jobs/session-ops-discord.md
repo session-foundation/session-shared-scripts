@@ -9,7 +9,7 @@
 
 | Command | Does |
 | --- | --- |
-| `/run job:<job>` | Starts `session-ops@<job>.service` for a job `jobs.toml` marks `discord = true`. Refused while that job or any queued job is running or waiting to. The job posts its outcome in its own channel. |
+| `/run job:<job>` | Starts `session-ops@<job>.service` for a job `jobs.toml` marks `discord = true`. Refused while that job or any queued job is running or waiting to, or when the queue's next run is sooner than the job's timeout from now. The job posts its outcome in its own channel. |
 | `/mau-upload file:<csv>` | Downloads the attachment, checks it parses as the Play Console export, and moves it into [mau](mau.md)'s inbox, whose path unit runs the job. A file it would reject is refused in Discord and never reaches the inbox. |
 
 The app has no gateway connection and only the `applications.commands` scope, so Discord

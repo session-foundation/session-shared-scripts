@@ -56,7 +56,7 @@ EPHEMERAL = 64
 NO_PINGS = {"parse": []}
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-# Held across the check and the start: two /run a moment apart would both pass the check.
+# Across the check and the start, so two /run a moment apart cannot both pass; one process only.
 _starting = threading.Lock()
 
 
