@@ -25,7 +25,8 @@ In Play Console, Statistics, a report saved once:
 - All countries / regions, no breakdown
 - A date range ending today, such as Last 30 days, with the Console in English
 
-Export report → CSV, then:
+Export report → CSV, then run `/mau-upload` in Discord with the file, which says at once
+if it is not the export the job reads. Or:
 
 ```sh
 rsync "All countries _ regions.csv" root@<host>:/var/lib/session-ops/mau/inbox/

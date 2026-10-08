@@ -11,6 +11,8 @@ REGISTRY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
                         "jobs.toml")
 STATE_ROOT = "/var/lib/session-ops"
 QUEUE_TIMER = "session-ops-queue.timer"
+# Discord's cap on a string option's choices, which `/run` offers these jobs as.
+MAX_DISCORD_JOBS = 25
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,7 @@ class Job:
     queued: bool = False
     after: tuple = ()
     watch: str = None
+    discord: bool = False
 
     @property
     def scheduled(self):
@@ -93,6 +96,10 @@ def load(path=REGISTRY):
             raise ValueError(f"{path}: {job.name}'s watch must stay inside its state directory")
         if job.scheduled and not isinstance(job.max_age_hours, (int, float)):
             raise ValueError(f"{path}: scheduled job {job.name} needs a numeric max_age_hours")
+        if not isinstance(job.discord, bool):
+            raise ValueError(f"{path}: {job.name}'s discord must be true or false")
+    if sum(job.discord for job in jobs) > MAX_DISCORD_JOBS:
+        raise ValueError(f"{path}: Discord offers at most {MAX_DISCORD_JOBS} jobs to /run")
     return jobs
 
 

@@ -37,7 +37,7 @@ account() {
     id -u "$1" >/dev/null 2>&1 ||
         useradd --system --no-create-home --home /nonexistent --shell /usr/sbin/nologin "$1"
 }
-for user in ghdigest crowdin publisher sessionops; do account "$user"; done
+for user in ghdigest crowdin publisher sessionops opsbot; do account "$user"; done
 # The Claude Code CLI keeps its binary, login and cache under this account's $HOME.
 if ! id -u zendesk >/dev/null 2>&1; then
     useradd --system --home /home/zendesk --shell /usr/sbin/nologin zendesk
@@ -68,7 +68,7 @@ move /etc/github-prs/env "$ETC/github-prs.env" 600 root
 move "$ETC/env" "$ETC/alerts.env" 600 root
 # systemd reads EnvironmentFile= as root before dropping privileges, so these need
 # no group: a job's account cannot read another job's secrets.
-for name in zendesk github-prs crowdin publish alerts mau; do
+for name in zendesk github-prs crowdin publish alerts mau discord; do
     [ -e "$ETC/$name.env" ] || install -m 600 /dev/null "$ETC/$name.env"
 done
 # What each file takes, commented; the env files stay empty until filled, since a job
@@ -92,10 +92,11 @@ if [ -e "$NEW_HOUSE" ] && grep -qx "ZENDESK_HOUSE_ANSWERS=$OLD_HOUSE" "$ETC/zend
     echo "pointed ZENDESK_HOUSE_ANSWERS in $ETC/zendesk.env at $NEW_HOUSE"
 fi
 
-# A watched job's inbox: root drops files in, and the job's account moves them out.
+# A watched job's inbox: root and the Discord relay drop files in, and the job's account
+# moves them out.
 "$OPS" list --watched | while read -r job user dir; do
     install -d -o "$user" -g "$user" -m 711 "$STATE/$job"
-    install -d -o "$user" -g "$user" -m 700 "$dir"
+    install -d -o "$user" -g opsbot -m 770 "$dir"
 done
 
 install -m 644 "$ROOT/deploy/session-ops.tmpfiles" /etc/tmpfiles.d/session-ops.conf
@@ -115,6 +116,12 @@ install -m 644 "$ROOT"/deploy/*.service "$ROOT"/deploy/*.timer "$ROOT"/deploy/*.
 rm -f "$UNITS"/session-ops@*.service.d/job.conf "$UNITS"/session-ops@*.timer.d/schedule.conf \
     "$UNITS"/session-ops@*.path.d/watch.conf "$UNITS"/session-ops-queue.timer.d/schedule.conf
 "$OPS" units --out "$UNITS" >/dev/null
+# polkit reloads its rules when this changes.
+if [ -d /etc/polkit-1/rules.d ]; then
+    "$OPS" polkit --out /etc/polkit-1/rules.d/50-session-ops-discord.rules >/dev/null
+else
+    echo "polkit is missing, so /run in Discord can start no job" >&2
+fi
 
 READY=$("$OPS" list --ready)
 QUEUED=$("$OPS" list --queued)
@@ -173,16 +180,21 @@ fi
 for job in $("$OPS" list --not-ready); do
     echo "not enabled: session-ops@$job (its env file is empty)"
 done
-if [ -s "$ETC/zendesk.env" ]; then
-    systemctl enable zendesk-relay.service >/dev/null
-    # A relay that hit its start limit refuses `start` until the limit is cleared.
-    systemctl reset-failed zendesk-relay.service 2>/dev/null || true
-    systemctl try-restart zendesk-relay.service
-    systemctl start zendesk-relay.service
-    echo "running zendesk-relay.service"
-else
-    echo "not enabled: zendesk-relay.service ($ETC/zendesk.env is empty)"
-fi
+# An always-on service, enabled once its env file has content.
+relay() {
+    if [ -s "$ETC/$2.env" ]; then
+        systemctl enable "$1.service" >/dev/null
+        # A relay that hit its start limit refuses `start` until the limit is cleared.
+        systemctl reset-failed "$1.service" 2>/dev/null || true
+        systemctl try-restart "$1.service"
+        systemctl start "$1.service"
+        echo "running $1.service"
+    else
+        echo "not enabled: $1.service ($ETC/$2.env is empty)"
+    fi
+}
+relay zendesk-relay zendesk
+relay session-ops-discord discord
 
 if [ ! -s "$ETC/alerts.env" ]; then
     cat >&2 <<EOF

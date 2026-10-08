@@ -89,6 +89,13 @@ class TestDeploy(unittest.TestCase):
         text = "".join(f"==> {path} <==\n{files[path]}\n" for path in sorted(files))
         assert_golden(self, "units/dropins.txt", text)
 
+    def test_the_generated_polkit_rule(self):
+        assert_golden(self, "units/polkit.rules", units.polkit_rule(registry.load()))
+
+    def test_the_polkit_rule_names_the_account_the_discord_relay_runs_as(self):
+        self.assertIn(f"\nUser={units.RELAY_USER}\n", unit_text("session-ops-discord.service"))
+        self.assertIn(f'subject.user == "{units.RELAY_USER}"', units.polkit_rule([]))
+
 
 class TestInstallScript(unittest.TestCase):
     @unittest.skipIf(ROOT == "/opt/session-ops", "this checkout is the one it installs from")

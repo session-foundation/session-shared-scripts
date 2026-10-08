@@ -5,6 +5,7 @@ has in place of active users.
 
     session-ops run mau [--dry-run]
     rsync "All countries _ regions.csv" root@<host>:/var/lib/session-ops/mau/inbox/
+    /mau-upload file:<export>.csv        # in Discord, through session-ops-discord
 
 Every export's daily figures merge into history.json, so an export may cover any range
 and overlap the previous one. A month is posted once its last day is in the history;
@@ -209,8 +210,8 @@ def reminder_message(month_end, inbox):
     return "\n".join([
         f"⏰ **Android MAU for {month_end:%B %Y} is missing.**",
         "In Play Console, open Statistics → Saved reports → the MAU report, check it covers "
-        f"{month_end:%-d %B}, and Export report → CSV. Then copy it to the inbox, and the "
-        "figures post as soon as it lands:",
+        f"{month_end:%-d %B}, and Export report → CSV. Then hand it over with `/mau-upload` "
+        "here, or copy it to the inbox, and the figures post as soon as it lands:",
         f'`rsync "<export>.csv" {os.environ.get("MAU_INBOX_HOST") or socket.getfqdn()}:{inbox}/`',
     ])
 

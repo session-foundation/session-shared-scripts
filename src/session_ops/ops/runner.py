@@ -3,6 +3,8 @@
     session-ops list
     session-ops run github-prs-digest [--dry-run] [-- further job arguments]
     session-ops units --out /etc/systemd/system
+    session-ops polkit --out /etc/polkit-1/rules.d/50-session-ops-discord.rules
+    session-ops discord-register
 
 A run owns what every job would otherwise repeat: checking the environment it needs,
 a scratch directory, and telling Discord when it fails. The alert names the job, the
@@ -243,6 +245,11 @@ def main(argv=None):
                             help="The job's own dry run; an alert is printed, not posted.")
     units_parser = sub.add_parser("units", help="Write each job's systemd drop-ins.")
     units_parser.add_argument("--out", required=True, metavar="DIR")
+    polkit_parser = sub.add_parser("polkit", help="Write the rule letting the Discord relay "
+                                                  "start the jobs offered to /run.")
+    polkit_parser.add_argument("--out", required=True, metavar="FILE")
+    sub.add_parser("discord-register", help="Register the Discord slash commands, from "
+                                            "discord.env's variables.")
     argv = sys.argv[1:] if argv is None else list(argv)
     extra = argv[argv.index("--") + 1:] if "--" in argv else []
     args = parser.parse_args(argv[:argv.index("--")] if "--" in argv else argv)
@@ -269,6 +276,16 @@ def main(argv=None):
         from session_ops.ops import units
         for path in units.write(registry.load(), registry.load_queue(), args.out):
             print(path)
+        return
+    if args.command == "polkit":
+        from session_ops.ops import units
+        with open(args.out, "w", encoding="utf-8") as handle:
+            handle.write(units.polkit_rule(registry.load()))
+        print(args.out)
+        return
+    if args.command == "discord-register":
+        from session_ops.ops import discord_commands
+        discord_commands.main()
         return
     try:
         job = registry.get(args.job)

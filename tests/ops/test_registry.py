@@ -80,6 +80,20 @@ class TestRegistry(unittest.TestCase):
         with self.assertRaises(ValueError):
             load(VALID + VALID)
 
+    def test_a_job_is_offered_to_discord_only_when_it_says_so(self):
+        self.assertFalse(load(VALID)[0].discord)
+        self.assertTrue(load(VALID + "discord = true\n")[0].discord)
+
+    def test_a_discord_flag_that_is_not_a_boolean_is_refused(self):
+        with self.assertRaises(ValueError):
+            load(VALID + 'discord = "yes"\n')
+
+    def test_more_jobs_than_discord_offers_choices_for_is_refused(self):
+        many = "".join(VALID.replace('"a"', f'"j{i}"') + "discord = true\n"
+                       for i in range(registry.MAX_DISCORD_JOBS + 1))
+        with self.assertRaises(ValueError):
+            load(many)
+
     def test_the_shipped_registry_loads(self):
         names = [job.name for job in registry.load()]
         self.assertIn("zendesk-digest", names)
