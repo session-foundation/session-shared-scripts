@@ -10,6 +10,7 @@
 #   channel_env    where it posts, and where its own failures are reported; a job
 #                  without one reports to ALERT_DISCORD_WEBHOOK_URL
 #   unit           further [Service] lines, over the template's hardening
+#   discord        offered to `/run` in Discord, and startable by the relay's account
 #   watch          a glob under {state}: a file matching it starts the job, which must
 #                  move it out, or the path unit starts it again
 #
@@ -73,6 +74,7 @@ channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
 max_age_hours = 80
 # About 9 minutes; a full scan without --croql is ~110k requests, about 85 minutes.
 timeout = "2h"
+discord = true
 
 [[job]]
 name = "session-ops-silence"
@@ -113,6 +115,7 @@ env = ["CROWDIN_API_TOKEN", "PUBLISH_GIT_AUTHOR"]
 channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
 max_age_hours = 80
 timeout = "1h"
+discord = true
 # Readable by this unit alone, at $CREDENTIALS_DIRECTORY; publishing needs it.
 unit = ["LoadCredential=github-app.pem:/etc/session-ops/github-app.pem"]
 

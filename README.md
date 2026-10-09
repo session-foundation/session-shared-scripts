@@ -10,6 +10,7 @@ share for translations. One package, `session_ops`, deployed to one self-hosted 
 | --- | --- | --- |
 | `zendesk-digest` | Weekday Discord digest of the Zendesk tickets awaiting a reply, after closing positive app-store reviews | [zendesk-digest](docs/jobs/zendesk-digest.md) |
 | `zendesk-relay` | Drafts and sends Zendesk replies from `claude:` private notes | [zendesk-relay](docs/jobs/zendesk-relay.md) |
+| `session-ops-discord` | `/run` a job and `/mau-upload` an export from Discord | [session-ops-discord](docs/jobs/session-ops-discord.md) |
 | `github-prs-digest` | Weekday Discord digest of open pull requests from outside contributors | [github-prs-digest](docs/jobs/github-prs-digest.md) |
 | `crowdin-duplicates` | Crowdin string slots holding more than one translation, as they open and close | [crowdin-duplicates](docs/jobs/crowdin-duplicates.md) |
 | `crowdin-sync` | Weekday: Crowdin translations into iOS, Android and the localization module, and its submodule bumped in each client | [crowdin-sync](docs/jobs/crowdin-sync.md) |

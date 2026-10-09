@@ -1,0 +1,40 @@
+[Unit]
+Description=Discord slash commands for session-ops jobs
+Documentation=https://github.com/session-foundation/session-shared-scripts
+After=network-online.target
+Wants=network-online.target
+OnFailure=session-ops-alert@%n.service
+StartLimitIntervalSec=5min
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=opsbot
+Group=opsbot
+EnvironmentFile=/etc/session-ops/discord.env
+# Loopback only: nginx terminates TLS, and the signature check should not be the only barrier.
+ExecStart=/opt/session-ops/.venv/bin/uvicorn session_ops.ops.discord_relay:app --host 127.0.0.1 --port 8081 \
+    --no-access-log --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=always
+RestartSec=2
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+# AF_UNIX for systemctl, which asks systemd and polkit over D-Bus.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# `-`: a host without the inbox yet still answers /run.
+ReadWritePaths=-/var/lib/session-ops/mau/inbox
+
+[Install]
+WantedBy=multi-user.target

@@ -18,7 +18,7 @@ Posts last month's monthly active users once a month, per platform and in total.
 | | |
 | --- | --- |
 | Runs | `session-ops@mau.timer` on the 10th at 11:00 Melbourne, and `session-ops@mau.path` whenever a `.csv` lands in the inbox |
-| Secrets | `/etc/session-ops/mau.env`: `MAU_DISCORD_WEBHOOK_URL`, `MAU_INBOX_HOST` for the reminder's `rsync`, `ASC_ISSUER_ID` and `ASC_KEY_ID`; `/etc/session-ops/asc-key.p8`, an App Store Connect team key with the Sales and Reports role |
+| Secrets | `/etc/session-ops/mau.env`: `MAU_DISCORD_WEBHOOK_URL`, `ASC_ISSUER_ID` and `ASC_KEY_ID`; `/etc/session-ops/asc-key.p8`, an App Store Connect team key with the Sales and Reports role |
 | Inbox | `/var/lib/session-ops/mau/inbox/` |
 | Dry run | `session-ops run mau --dry-run` prints what it would post, and moves and writes nothing |
 | Logs | `journalctl -u session-ops@mau -n 50 --no-pager` |
@@ -33,7 +33,9 @@ set to English:
 | Android | Play Console → Statistics, a saved report | Monthly active users (MAU), Unique users, Per interval, Daily; all countries, no breakdown; Export report → CSV |
 | iOS | App Store Connect → Analytics → Session → Metrics | Active in Last 30 Days, daily, no breakdown; Export |
 
-The job tells them apart by their columns, so both go in the same inbox:
+Hand each to `/mau-upload` in Discord, which says at once if it is not an export the
+job reads. The job tells the two apart by their columns, so both go in the same inbox.
+From a shell instead:
 
 ```sh
 rsync "All countries _ regions.csv" session_private_messenger-active_last_30_days-*.csv \

@@ -265,17 +265,15 @@ class MessageTest(unittest.TestCase):
         message = self.report(revisions=[("ios", "2026-09-28", 41200, 41300)])
         self.assertIn("revised iOS 28 Sep 41,200 → 41,300", message)
 
-    def test_the_reminder_names_each_missing_platform_and_where_to_copy_the_export(self):
-        with mock.patch.dict(os.environ, {"MAU_INBOX_HOST": "root@ops.example.org"}):
-            message = mau.reminder_message(date(2026, 9, 30), ["android", "ios"],
-                                           "/var/lib/session-ops/mau/inbox")
+    def test_the_reminder_names_each_missing_platform_and_the_upload_command(self):
+        message = mau.reminder_message(date(2026, 9, 30), ["android", "ios"])
         self.assertIn("Android and iOS active users for September 2026 are missing", message)
         self.assertIn("- iOS: App Store Connect → Analytics", message)
         self.assertIn("covering 30 September", message)
-        self.assertIn("root@ops.example.org:/var/lib/session-ops/mau/inbox/", message)
+        self.assertIn("`/mau-upload`", message)
 
     def test_the_reminder_for_one_platform_is_singular(self):
-        message = mau.reminder_message(date(2026, 9, 30), ["ios"], "/inbox")
+        message = mau.reminder_message(date(2026, 9, 30), ["ios"])
         self.assertIn("iOS active users for September 2026 is missing", message)
         self.assertNotIn("Android", message)
 

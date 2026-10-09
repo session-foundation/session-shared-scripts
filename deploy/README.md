@@ -10,6 +10,7 @@ does the work: accounts, venv, env files, units, timers, and migrating an older 
 | `session-ops@<job>.path` → `.service` | For a job with a `watch`: starts it when a matching file lands in its state directory. |
 | `session-ops-queue.timer` → `.service` | Starts the jobs in `jobs.toml`'s `[queue]`, which then run one at a time in its order. |
 | `zendesk-relay.service` | Always on, `127.0.0.1:8080`: Zendesk's `claude:` note webhooks. |
+| `session-ops-discord.service` | Always on, `127.0.0.1:8081`: the `/run` and `/mau-upload` slash commands. See [Discord commands](#discord-commands). |
 | `session-ops-alert@.service` | Every unit's `OnFailure=` backstop; see [session-ops-silence](../docs/jobs/session-ops-silence.md). |
 
 `session-ops list` shows the jobs; `session-ops run <job> [--dry-run] [-- job arguments]`
@@ -53,6 +54,37 @@ From a host that ran the digests out of `/opt/zendesk`, `install.sh` copies thei
 files and state over. Remove `/opt/zendesk`, `/etc/zendesk` and `/var/lib/zendesk`
 (and the `github-prs` equivalents) once both digests have run from the new units.
 
+## Discord commands
+
+What `/run` and `/mau-upload` do, and who may run them:
+[session-ops-discord](../docs/jobs/session-ops-discord.md). To set them up:
+
+1. In the Developer Portal, create an application. Put its public key, its application
+   id, the server's id and who may run the commands in `/etc/session-ops/discord.env`,
+   then run `install.sh` again.
+2. Invite it with the `applications.commands` scope only:
+   `https://discord.com/oauth2/authorize?client_id=<app id>&scope=applications.commands`.
+3. Copy the `location = /discord/interactions` block from
+   [`nginx-webhooks.conf`](nginx-webhooks.conf) into the live
+   `/etc/nginx/sites-available/webhooks.session.codes`, which certbot owns, then
+   `nginx -t && systemctl reload nginx`. Until then the route is a 404 and Discord will
+   not save the URL.
+4. Set its Interactions Endpoint URL to `https://webhooks.session.codes/discord/interactions`.
+   Discord checks it with a signed PING before saving.
+5. Register the commands, with the bot token from the Bot page, typed in rather than kept:
+
+   ```bash
+   read -rs DISCORD_BOT_TOKEN && export DISCORD_BOT_TOKEN
+   set -a && . /etc/session-ops/discord.env && set +a
+   /opt/session-ops/.venv/bin/session-ops discord-register
+   ```
+
+6. The commands start hidden from everyone but server administrators. In Server
+   Settings → Integrations, allow them for the role or channel that runs jobs. Seeing
+   them is not running them: the relay's allowlist still decides.
+
+Register again after changing which jobs have `discord = true`.
+
 ## Secrets
 
 Each `/etc/session-ops/<name>.env` has a commented `<name>.env.example` beside it,
@@ -70,6 +102,8 @@ systemctl start session-ops@<job>.service && journalctl -fu session-ops@<job>
 systemctl start session-ops-alert@test.service          # posts to the alerts channel
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST 127.0.0.1:8080/zendesk/notes \
   -H 'Content-Type: application/json' -d '{"ticket_id":"1"}'   # expect 401
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST 127.0.0.1:8081/discord/interactions -d '{}'   # expect 401
+runuser -u opsbot -- systemctl --no-ask-password start session-ops@token-expiry.service   # expect Access denied
 ```
 
 ## Rehearsing on a spare host
@@ -89,7 +123,7 @@ done
 for link in /etc/systemd/system/paths.target.wants/session-ops@*.path; do
   [ -L "$link" ] && systemctl disable --now "${link##*/}"
 done
-systemctl disable --now session-ops-queue.timer zendesk-relay.service
+systemctl disable --now session-ops-queue.timer zendesk-relay.service session-ops-discord.service
 for repo in session-android session-ios session-localization session-desktop-dynamic-assets \
     session-desktop session-app session-website session-appium session-playwright; do
   gh pr list -R "session-foundation/$repo" --state open --json number,headRefName \

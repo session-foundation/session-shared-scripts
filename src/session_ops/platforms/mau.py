@@ -5,6 +5,7 @@ Connect API, the latest Android APKs' and Desktop release's downloads from GitHu
 an F-Droid estimate.
 
     session-ops run mau [--dry-run]
+    /mau-upload file:<export>.csv        # in Discord, through session-ops-discord
     rsync <export>.csv root@<host>:/var/lib/session-ops/mau/inbox/
 
 Every export's daily figures merge into history.json, so an export may cover any range
@@ -18,7 +19,6 @@ import gzip
 import io
 import json
 import os
-import socket
 import time
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -361,15 +361,15 @@ def report_message(month_end, history, revisions, sources):
     return "\n".join(lines)
 
 
-def reminder_message(month_end, missing, inbox):
+def reminder_message(month_end, missing):
     names = " and ".join(LABELS[p] for p in missing)
     day = f"{month_end:%-d %B}"
     return "\n".join([
         f"⏰ **{names} active users for {month_end:%B %Y} {'are' if len(missing) > 1 else 'is'} "
         "missing.** Export:",
         *(f"- {LABELS[p]}: " + HOW_TO_EXPORT[p].format(day=day) for p in missing),
-        "Then copy each to the inbox, and the figures post as soon as the last one lands:",
-        f'`rsync <export>.csv {os.environ.get("MAU_INBOX_HOST") or socket.getfqdn()}:{inbox}/`',
+        "Then hand each to `/mau-upload` here, and the figures post as soon as the last one "
+        "lands.",
     ])
 
 
@@ -428,7 +428,7 @@ def main(argv=None):
     elif not missing:
         message = report_message(month_end, history, revisions, read_sources(args, month_end))
     elif today.day >= REMIND_DAY:
-        message = reminder_message(month_end, missing, inbox)
+        message = reminder_message(month_end, missing)
     else:
         print(f"Waiting for {month_end} from {', '.join(missing)}; "
               f"reminders start on the {REMIND_DAY}th.")
