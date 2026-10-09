@@ -1,14 +1,14 @@
 """
-Monthly active users, posted once a month: Android's from the Play Console exports
+Monthly active users, posted once a month: Android's and iOS's from the store exports
 dropped into the job's inbox, and the latest Desktop release's downloads, which Desktop
 has in place of active users.
 
     session-ops run mau [--dry-run]
-    rsync "All countries _ regions.csv" root@<host>:/var/lib/session-ops/mau/inbox/
+    rsync <export>.csv root@<host>:/var/lib/session-ops/mau/inbox/
 
 Every export's daily figures merge into history.json, so an export may cover any range
-and overlap the previous one. A month is posted once its last day is in the history;
-until then, from the REMIND_DAY on, each run posts a reminder instead.
+and overlap the previous one. A month is posted once its last day is in the history for
+every platform; until then, from the REMIND_DAY on, each run posts a reminder instead.
 """
 import argparse
 import csv
@@ -23,9 +23,12 @@ from zoneinfo import ZoneInfo
 from session_ops.ops.runner import step
 from session_ops.shared import discord, http
 
-MAU_COLUMN = ("Monthly Active Users (MAU) (Unique users, Per interval, Daily): "
-              "All countries / regions")
-EXPORT_DATE = "%b %d, %Y"
+PLAY_COLUMN = ("Monthly Active Users (MAU) (Unique users, Per interval, Daily): "
+               "All countries / regions")
+PLAY_DATE = "%b %d, %Y"
+APPLE_COLUMN = "Active Last 30 Days"
+APPLE_DATE = "%m/%d/%y"
+PLATFORMS = ("android", "ios")
 # Play's daily figures trail by about eight days, so a month's last day lands around the 9th.
 REMIND_DAY = 10
 ZONE = ZoneInfo("Australia/Melbourne")
@@ -45,23 +48,34 @@ class Rejected(ValueError):
     pass
 
 
-def parse_export(path):
-    """{ISO date: MAU} from a Play Console export of the saved MAU report."""
+def read_rows(path):
     try:
         with open(path, encoding="utf-8-sig", newline="") as handle:
             # strict: a quoted figure cut off at the end of the file is an error, not a smaller figure.
-            rows = list(csv.reader(handle, strict=True))
+            return list(csv.reader(handle, strict=True))
     except (UnicodeDecodeError, csv.Error) as exc:
         raise Rejected(f"not a CSV export ({exc})") from None
-    if not rows or not rows[0] or rows[0][0] != "Date" or MAU_COLUMN not in rows[0]:
-        raise Rejected(f"no Date and “{MAU_COLUMN}” columns: export the saved MAU report "
-                       "(unique users, per interval, daily, all countries) from a Console "
-                       "set to English")
-    column = rows[0].index(MAU_COLUMN)
+
+
+def parse_export(path):
+    """(platform, {ISO date: figure}) from a Play Console MAU export or an App Store
+    Connect Active in Last 30 Days export."""
+    rows = read_rows(path)
+    first = rows[0] if rows and rows[0] else [""]
+    if first[0] == "Date" and PLAY_COLUMN in first:
+        return "android", parse_play(rows)
+    if first[0] == "Name":
+        return "ios", parse_apple(rows)
+    raise Rejected("neither a Play Console MAU export nor an App Store Connect Active in "
+                   "Last 30 Days one")
+
+
+def parse_play(rows):
+    column = rows[0].index(PLAY_COLUMN)
     days = {}
     for line, row in enumerate(rows[1:], start=2):
         try:
-            day = datetime.strptime(row[0], EXPORT_DATE).date().isoformat()
+            day = datetime.strptime(row[0], PLAY_DATE).date().isoformat()
             figure = row[column].replace(",", "")
         except (IndexError, ValueError):
             raise Rejected(f"line {line} is not a date and a figure: {row[:column + 1]}") from None
@@ -70,35 +84,63 @@ def parse_export(path):
         if not figure.isdigit():
             raise Rejected(f"line {line} has {row[column]!r} for a figure")
         days[day] = int(figure)
+    return non_empty(days)
+
+
+def parse_apple(rows):
+    """The table below App Store Connect's Name, Start Date and End Date lines."""
+    try:
+        header = next(i for i, row in enumerate(rows) if row[:1] == ["Date"])
+    except StopIteration:
+        raise Rejected("an App Store Connect export with no Date column") from None
+    if rows[header] != ["Date", APPLE_COLUMN]:
+        raise Rejected(f"an App Store Connect export of {', '.join(rows[header][1:])}: "
+                       f"export {APPLE_COLUMN} instead, daily")
+    days = {}
+    for line, row in enumerate(rows[header + 1:], start=header + 2):
+        try:
+            day = datetime.strptime(row[0], APPLE_DATE).date().isoformat()
+            # A day Apple is still counting comes as a fraction; a later export revises it.
+            value = round(float(row[1]))
+        except (IndexError, ValueError, OverflowError):
+            raise Rejected(f"line {line} is not a date and a figure: {row[:2]}") from None
+        if value < 0:
+            raise Rejected(f"line {line} has {row[1]!r} for a figure")
+        days[day] = value
+    return non_empty(days)
+
+
+def non_empty(days):
     if not days:
         raise Rejected("no figures in it")
     return days
 
 
 def read_inbox(inbox):
-    """(path, days) for each export, oldest first, and (path, reason) for each rejected one.
+    """(path, platform, days) for each export, oldest first, and (path, reason) for each
+    rejected one.
 
     glob skips dotfiles, so rsync's temporary file is never read half-written.
     """
     exports, rejected = [], []
     for path in sorted(glob.glob(os.path.join(inbox, "*.csv")), key=os.path.getmtime):
         try:
-            exports.append((path, parse_export(path)))
+            exports.append((path, *parse_export(path)))
         except Rejected as exc:
             rejected.append((path, str(exc)))
     return exports, rejected
 
 
 def merge(history, exports):
-    """Merge each export into `history`, the later export winning; returns the revisions,
-    (day, old, new), for the figures a later export changed."""
+    """Merge each export into its platform's history, the later export winning; returns
+    the revisions, (platform, day, old, new), for the figures a later export changed."""
     revisions = []
-    for _, days in exports:
+    for _, platform, days in exports:
         for day, figure in sorted(days.items()):
-            old = history.get(day)
+            old = history[platform].get(day)
             if old is not None and old != figure:
-                revisions.append((day, old, figure))
-            history[day] = figure
+                revisions.append((platform, day, old, figure))
+            history[platform][day] = figure
     return revisions
 
 
@@ -112,7 +154,7 @@ def load_history(path):
     """The history at `path`, empty if there is none yet. Unlike a digest's dedup cache it
     cannot be rebuilt from a re-run, so an unreadable one stops the run rather than reset."""
     if not os.path.exists(path):
-        return {"version": VERSION, "android": {}, "posted": []}
+        return {"version": VERSION, "android": {}, "ios": {}, "posted": []}
     with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
     if data.get("version") != VERSION:
@@ -175,43 +217,64 @@ def desktop_downloads(session):
     return release, platform_totals(release, flathub)
 
 
-def report_message(month_end, android, revisions, desktop):
-    month = month_end.strftime("%B %Y")
-    current = android[month_end.isoformat()]
-    release, downloads = desktop
-    desktop_total = downloads["linux"] + downloads["macos"] + downloads["windows"]
-    line = f"Android: **{figure(current)}**"
-    before = android.get(previous_month_end(month_end).isoformat())
+LABELS = {"android": "Android", "ios": "iOS"}
+FOOTNOTES = {
+    "android": "Play Console MAU on {day}, users who opened Session in the 28 days before.",
+    "ios": "App Store Connect's devices active in the 30 days to {day}, counting only those "
+           "that share analytics with developers.",
+}
+HOW_TO_EXPORT = {
+    "android": "Play Console → Statistics → Saved reports → the MAU report, covering {day} → "
+               "Export report → CSV",
+    "ios": "App Store Connect → Analytics → Session → Metrics → Active in Last 30 Days, daily, "
+           "covering {day} → Export",
+}
+
+
+def with_change(history, month_end):
+    current = history[month_end.isoformat()]
+    text = f"**{figure(current)}**"
+    before = history.get(previous_month_end(month_end).isoformat())
     if before:
         change = current - before
-        line += (f" ({'+' if change >= 0 else '−'}{figure(abs(change))}, "
+        text += (f" ({'+' if change >= 0 else '−'}{figure(abs(change))}, "
                  f"{change / before:+.1%} on {previous_month_end(month_end):%B})")
-    lines = [
-        f"📊 **Monthly active users, {month}**",
-        line,
+    return text
+
+
+def report_message(month_end, history, revisions, desktop):
+    day = month_end.isoformat()
+    release, downloads = desktop
+    desktop_total = downloads["linux"] + downloads["macos"] + downloads["windows"]
+    total = sum(history[p][day] for p in PLATFORMS) + desktop_total
+    lines = [f"📊 **Monthly active users, {month_end:%B %Y}**"]
+    lines += [f"{LABELS[p]}: {with_change(history[p], month_end)}" for p in PLATFORMS]
+    lines += [
         f"Desktop: **{figure(desktop_total)}** (Linux {figure(downloads['linux'])} · "
         f"macOS {figure(downloads['macos'])} · Windows {figure(downloads['windows'])})",
-        f"**Total: {figure(current + desktop_total)}**",
-        f"-# Android: Play Console MAU on {month_end:%-d %B}, users who opened Session in the "
-        "28 days before.",
-        f"-# Desktop: downloads of {release['tag_name']} since its release on "
-        f"{date.fromisoformat(release_day(release)):%-d %B}, updates included; "
-        "Desktop has no active-user count.",
+        f"**Total: {figure(total)}**",
     ]
+    lines += [f"-# {LABELS[p]}: " + FOOTNOTES[p].format(day=f"{month_end:%-d %B}")
+              for p in PLATFORMS]
+    lines.append(f"-# Desktop: downloads of {release['tag_name']} since its release on "
+                 f"{date.fromisoformat(release_day(release)):%-d %B}, updates included; "
+                 "Desktop has no active-user count.")
     if revisions:
-        lines.append("-# The latest export revised " + ", ".join(
-            f"{date.fromisoformat(day):%-d %b} {figure(old)} → {figure(new)}"
-            for day, old, new in revisions))
+        lines.append("-# The latest exports revised " + ", ".join(
+            f"{LABELS[p]} {date.fromisoformat(d):%-d %b} {figure(old)} → {figure(new)}"
+            for p, d, old, new in revisions))
     return "\n".join(lines)
 
 
-def reminder_message(month_end, inbox):
+def reminder_message(month_end, missing, inbox):
+    names = " and ".join(LABELS[p] for p in missing)
+    day = f"{month_end:%-d %B}"
     return "\n".join([
-        f"⏰ **Android MAU for {month_end:%B %Y} is missing.**",
-        "In Play Console, open Statistics → Saved reports → the MAU report, check it covers "
-        f"{month_end:%-d %B}, and Export report → CSV. Then copy it to the inbox, and the "
-        "figures post as soon as it lands:",
-        f'`rsync "<export>.csv" {os.environ.get("MAU_INBOX_HOST") or socket.getfqdn()}:{inbox}/`',
+        f"⏰ **{names} active users for {month_end:%B %Y} {'are' if len(missing) > 1 else 'is'} "
+        "missing.** Export:",
+        *(f"- {LABELS[p]}: " + HOW_TO_EXPORT[p].format(day=day) for p in missing),
+        "Then copy each to the inbox, and the figures post as soon as the last one lands:",
+        f'`rsync <export>.csv {os.environ.get("MAU_INBOX_HOST") or socket.getfqdn()}:{inbox}/`',
     ])
 
 
@@ -228,13 +291,13 @@ def main(argv=None):
     step("reading the inbox")
     history = load_history(history_path)
     exports, rejected = read_inbox(inbox)
-    revisions = merge(history["android"], exports)
-    for day, old, new in revisions:
-        print(f"{day}: {old} revised to {new}")
+    revisions = merge(history, exports)
+    for platform, day, old, new in revisions:
+        print(f"{platform} {day}: {old} revised to {new}")
     if not args.dry_run:
         # Saved before the files move: a run stopped in between reads them again, harmlessly.
         save_history(history_path, history)
-        for path, _ in exports:
+        for path, _, _ in exports:
             file_away(path, os.path.join(args.state, "done"))
         for path, _ in rejected:
             file_away(path, os.path.join(args.state, "rejected"))
@@ -242,19 +305,20 @@ def main(argv=None):
     today = datetime.now(ZONE).date()
     month_end = previous_month_end(today)
     month = month_end.strftime("%Y-%m")
+    missing = [p for p in PLATFORMS if month_end.isoformat() not in history[p]]
     message = None
     if month in history["posted"]:
         print(f"{month} already posted.")
-    elif month_end.isoformat() in history["android"]:
+    elif not missing:
         step("reading Desktop downloads")
         session = http.Session()
         session.headers.update({"Accept": "application/vnd.github.v3+json"})
-        message = report_message(month_end, history["android"], revisions,
-                                 desktop_downloads(session))
+        message = report_message(month_end, history, revisions, desktop_downloads(session))
     elif today.day >= REMIND_DAY:
-        message = reminder_message(month_end, inbox)
+        message = reminder_message(month_end, missing, inbox)
     else:
-        print(f"Waiting for {month_end}; reminders start on the {REMIND_DAY}th.")
+        print(f"Waiting for {month_end} from {', '.join(missing)}; "
+              f"reminders start on the {REMIND_DAY}th.")
 
     if message:
         step("posting to Discord")
@@ -265,7 +329,7 @@ def main(argv=None):
             if not discord.post_to_discord(http.Session(), os.environ["MAU_DISCORD_WEBHOOK_URL"],
                                            [payload]):
                 raise RuntimeError("Discord did not accept the message")
-            if month_end.isoformat() in history["android"]:
+            if not missing:
                 history["posted"].append(month)
                 save_history(history_path, history)
     if rejected:

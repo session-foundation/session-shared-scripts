@@ -2,12 +2,15 @@
 
 Posts last month's monthly active users once a month, per platform and in total.
 
-- Android: Play's MAU on the month's last day, with the change on the month before.
-  Google has no API for it, so the figures come from the Play Console export someone
-  drops in the job's inbox.
+- Android: Play's MAU on the month's last day: users who opened Session in the 28 days
+  before.
+- iOS: App Store Connect's Active in Last 30 Days on the month's last day: devices,
+  counting only those that share analytics with developers.
+- Neither store has an API for these figures, so they come from the exports someone
+  drops in the job's inbox. Each comes with the change on the month before.
 - Desktop, which has no active-user count: the latest stable release's downloads per
   platform since its release, read from GitHub and Flathub when the post goes out.
-- The total adds the two.
+- The total adds all three.
 
 | | |
 | --- | --- |
@@ -17,33 +20,39 @@ Posts last month's monthly active users once a month, per platform and in total.
 | Dry run | `session-ops run mau --dry-run` prints what it would post, and moves and writes nothing |
 | Logs | `journalctl -u session-ops@mau -n 50 --no-pager` |
 
-## The export
+## The exports
 
-In Play Console, Statistics, a report saved once:
+One file per platform, each a daily series covering the month's last day, from a store
+set to English:
 
-- Metric: Monthly active users (MAU), Unique users, Per interval, Daily
-- All countries / regions, no breakdown
-- A date range ending today, such as Last 30 days, with the Console in English
+| | Where | What |
+| --- | --- | --- |
+| Android | Play Console → Statistics, a saved report | Monthly active users (MAU), Unique users, Per interval, Daily; all countries, no breakdown; Export report → CSV |
+| iOS | App Store Connect → Analytics → Session → Metrics | Active in Last 30 Days, daily, no breakdown; Export |
 
-Export report → CSV, then:
+The job tells them apart by their columns, so both go in the same inbox:
 
 ```sh
-rsync "All countries _ regions.csv" root@<host>:/var/lib/session-ops/mau/inbox/
+rsync "All countries _ regions.csv" session_private_messenger-active_last_30_days-*.csv \
+    root@<host>:/var/lib/session-ops/mau/inbox/
 ```
 
 `rsync`, not `scp`: it writes to a hidden temporary name and renames it once complete,
-and the job only reads `*.csv`.
+and the job only reads `*.csv`. App Store Connect's Active Devices export is refused:
+it counts each day apart, and the App Store Connect API's App Sessions report is no
+substitute, since summing its rows counts a device once per app version, OS and
+territory it used in the month, 5% to 20% too many.
 
 ## What a run does
 
-1. Merges every export in `inbox/` into `history.json`, one figure per day, then moves
-   it to `done/`. An export may cover any range; where two give a day different
+1. Merges every export in `inbox/` into `history.json`, one figure per platform and day,
+   then moves it to `done/`. An export may cover any range; where two give a day different
    figures, the later one wins and the post lists the revision.
 2. Moves a file it cannot read to `rejected/` and fails the run naming it, after the
    rest of the run.
-3. Posts last month once `history.json` holds its last day. Play's figures trail by
-   about eight days, so that is around the 9th. Until then, from the 10th, each run
-   posts a reminder instead.
+3. Posts last month once `history.json` holds its last day for both platforms. Play's
+   figures trail by about eight days, so that is around the 9th. Until then, from the
+   10th, each run posts a reminder naming the platforms still missing.
 4. Records the month as posted, so neither the timer nor a later export posts it again.
 
 `history.json` cannot be rebuilt by a re-run: an unreadable one stops the job. If it is
