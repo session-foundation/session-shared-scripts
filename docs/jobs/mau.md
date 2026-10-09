@@ -4,18 +4,21 @@ Posts last month's monthly active users once a month, per platform and in total.
 
 - Android: Play's MAU on the month's last day: users who opened Session in the 28 days
   before.
-- iOS: App Store Connect's Active in Last 30 Days on the month's last day: devices,
-  counting only those that share analytics with developers.
-- Neither store has an API for these figures, so they come from the exports someone
+- Android outside Play: the latest stable release's GitHub APK downloads, and an F-Droid
+  estimate of 10% of every other figure, since F-Droid publishes no counts.
+- iOS: App Store Connect's Active in Last 30 Days on the month's last day, which counts
+  only devices sharing analytics with developers, divided by the month's opt-in rate
+  from Apple's App Opt In report, the share of first-time downloaders who opt in.
+- Neither store has an API for the active users, so they come from the exports someone
   drops in the job's inbox. Each comes with the change on the month before.
 - Desktop, which has no active-user count: the latest stable release's downloads per
   platform since its release, read from GitHub and Flathub when the post goes out.
-- The total adds all three.
+- The total adds them all. The post names every estimate and how it was made.
 
 | | |
 | --- | --- |
 | Runs | `session-ops@mau.timer` on the 10th at 11:00 Melbourne, and `session-ops@mau.path` whenever a `.csv` lands in the inbox |
-| Secrets | `/etc/session-ops/mau.env`: `MAU_DISCORD_WEBHOOK_URL`, and `MAU_INBOX_HOST` for the reminder's `rsync` |
+| Secrets | `/etc/session-ops/mau.env`: `MAU_DISCORD_WEBHOOK_URL`, `MAU_INBOX_HOST` for the reminder's `rsync`, `ASC_ISSUER_ID` and `ASC_KEY_ID`; `/etc/session-ops/asc-key.p8`, an App Store Connect team key with the Sales and Reports role |
 | Inbox | `/var/lib/session-ops/mau/inbox/` |
 | Dry run | `session-ops run mau --dry-run` prints what it would post, and moves and writes nothing |
 | Logs | `journalctl -u session-ops@mau -n 50 --no-pager` |
@@ -73,3 +76,17 @@ where the updater fetches an installer.
 GitHub `.deb` once, so its installs are not in GitHub's counts; Homebrew's `session`
 cask downloads the GitHub `.dmg`, so it already is. Flathub keeps 180 days of daily
 installs, so the run fails on a release older than that rather than undercount.
+
+## Apple's opt-in rate
+
+The job reads the App Opt In report from every analytics report request on Session's
+App Store Connect app: the one-time snapshot for history, and the ongoing one for each
+new day. A Sales and Reports key may read them but not create them; if Apple stops the
+ongoing request for inactivity, the run fails saying so, and an Admin key has to
+create a new one (`POST /v1/analyticsReportRequests`, `accessType: ONGOING`).
+
+## Android outside Play
+
+The `.apk` files of the latest Android release on GitHub that is neither a draft nor a
+pre-release, since its release, updates included. F-Droid builds its own APK and
+publishes no download counts, so its figure is 10% of every other figure in the post.

@@ -2,6 +2,7 @@
     uv run python -m unittest tests.test_mau
 """
 import contextlib
+import gzip
 import io
 import json
 import os
@@ -12,6 +13,16 @@ from unittest import mock
 
 from session_ops.platforms import mau
 from session_ops.shared.testing import FakeResponse, FakeSession
+
+
+class GzipResponse(FakeResponse):
+    def __init__(self, text):
+        super().__init__({})
+        self._content = gzip.compress(text.encode())
+
+    @property
+    def content(self):
+        return self._content
 
 PLAY_HEADER = f'Date,"{mau.PLAY_COLUMN}",Notes\n'
 
@@ -48,6 +59,13 @@ DESKTOP = [
             published="2026-04-09"),
 ]
 
+ANDROID = [release("1.33.6", asset("session-1.33.6-arm64-v8a-play-release.apk", 9),
+                   prerelease=True),
+           release("1.33.5", asset("app-play-release.aab", 500),
+                   asset("session-1.33.5-arm64-v8a-play-release.apk", 60),
+                   asset("session-1.33.5-universal-huawei-release.apk", 4),
+                   asset("signature.asc", 500), published="2026-07-13")]
+
 FLATHUB = {"installs_per_day": {"2026-07-11": 10, "2026-07-09": 1000, "2026-07-10": 5}}
 
 
@@ -68,6 +86,10 @@ ANDROID_SEPTEMBER = play(("Aug 31, 2026", "100,000", ""),
 IOS_SEPTEMBER = apple(("8/31/26", "40000.0"), ("9/29/26", "41500.0"), ("9/30/26", "42000.0"))
 HISTORY = {"android": {"2026-08-31": 100000, "2026-09-30": 105000},
            "ios": {"2026-08-31": 40000, "2026-09-30": 42000}}
+# iOS: 42,000 opted in at 1 in 4 is 168,000; August's 40,000 at 1 in 5 is 200,000.
+# F-Droid: 10% of 105,000 + 168,000 + 64 + 164.
+SOURCES = {"desktop": DOWNLOADS, "apks": (ANDROID[1], 64),
+           "opt_in": ((400, 100), (500, 100))}
 
 
 class ParseTest(unittest.TestCase):
@@ -142,6 +164,55 @@ class DesktopTest(unittest.TestCase):
             mau.desktop_downloads(session)
 
 
+class AppleTest(unittest.TestCase):
+    def request(self, rid, access, stopped=False):
+        return {"id": rid, "attributes": {"accessType": access,
+                                          "stoppedDueToInactivity": stopped}}
+
+    def instance(self, iid, processed):
+        return {"id": iid, "attributes": {"granularity": "DAILY", "processingDate": processed}}
+
+    def page(self, *data):
+        return FakeResponse({"data": list(data), "links": {}})
+
+    def segment(self, *rows):
+        return GzipResponse("Date\tApp Name\tApp Apple Identifier\tDownloading Users\t"
+                            "Users Opting-In\n" + "".join(f"{d}\tSession\t1\t{n}\t{o}\n"
+                                                         for d, n, o in rows))
+
+    def test_the_latest_processed_instance_wins_and_older_ones_are_skipped(self):
+        asc = FakeSession([
+            self.page(self.request("snap", "ONE_TIME_SNAPSHOT"), self.request("on", "ONGOING")),
+            self.page({"id": "r-snap"}),
+            self.page(self.instance("old", "2026-07-01"), self.instance("s", "2026-10-06")),
+            self.page({"id": "r-on"}),
+            self.page(self.instance("o", "2026-10-07")),
+            self.page({"attributes": {"url": "https://s3/s"}}),
+            self.page({"attributes": {"url": "https://s3/o"}}),
+        ])
+        downloads = FakeSession([self.segment(("2026-09-30", 100, 25), ("2026-10-05", 10, 1)),
+                                 self.segment(("2026-10-05", 12, 3), ("2026-10-06", 8, 2))])
+        days = mau.opt_in_days(asc, downloads, since="2026-08-01")
+        self.assertEqual(days, {"2026-09-30": (100, 25), "2026-10-05": (12, 3),
+                                "2026-10-06": (8, 2)})
+        self.assertEqual([url for _, url, _ in downloads.calls], ["https://s3/s", "https://s3/o"])
+
+    def test_a_stopped_ongoing_request_fails(self):
+        asc = FakeSession([self.page(self.request("on", "ONGOING", stopped=True))])
+        with self.assertRaisesRegex(RuntimeError, "stopped .* for inactivity"):
+            mau.opt_in_days(asc, FakeSession([]), since="2026-08-01")
+
+    def test_the_rate_sums_the_month_only(self):
+        days = {"2026-08-31": (1000, 1000), "2026-09-01": (300, 60), "2026-09-30": (100, 40)}
+        self.assertEqual(mau.opt_in(days, date(2026, 9, 30)), (400, 100))
+        self.assertIsNone(mau.opt_in(days, date(2026, 7, 31)))
+        self.assertEqual(mau.ios_estimate(42000, (400, 100)), 168000)
+
+    def test_apks_of_the_latest_stable_android_release_only(self):
+        session = FakeSession([FakeResponse(ANDROID)])
+        self.assertEqual(mau.apk_downloads(session), (ANDROID[1], 64))
+
+
 class MergeTest(unittest.TestCase):
     def test_a_later_export_wins_per_platform_and_its_changes_are_returned(self):
         history = {"android": {"2026-09-29": 104000}, "ios": {"2026-09-29": 7}}
@@ -154,21 +225,37 @@ class MergeTest(unittest.TestCase):
 
 
 class MessageTest(unittest.TestCase):
-    def report(self, history=HISTORY, revisions=()):
-        return mau.report_message(date(2026, 9, 30), history, list(revisions), DOWNLOADS)
+    def report(self, history=HISTORY, revisions=(), sources=SOURCES):
+        return mau.report_message(date(2026, 9, 30), history, list(revisions), sources)
 
-    def test_each_platform_gives_its_month_end_and_the_change_on_the_month_before(self):
+    def test_each_store_gives_its_month_end_and_the_change_on_the_month_before(self):
         message = self.report()
         self.assertIn("**Monthly active users, September 2026**", message)
-        self.assertIn("Android: **105,000** (+5,000, +5.0% on August)", message)
-        self.assertIn("iOS: **42,000** (+2,000, +5.0% on August)", message)
+        self.assertIn("Android, Play: **105,000** (+5,000, +5.0% on August)", message)
+        self.assertIn("iOS: **168,000** (−32,000, -16.0% on August), estimated", message)
 
-    def test_the_total_adds_android_ios_and_desktop_downloads(self):
+    def test_ios_names_the_opt_in_report_and_its_counts(self):
+        self.assertIn("42,000 active in the 30 days to 30 September, scaled by September's "
+                      "opt-in rate from Apple's App Opt In report: 25.0%, 100 of 400 "
+                      "first-time downloaders", self.report())
+
+    def test_apks_and_the_fdroid_estimate_share_a_line_and_everything_adds_up(self):
         message = self.report()
+        self.assertIn("Android, outside Play: **27,387** (GitHub APKs 64 · F-Droid 27,323, "
+                      "estimated)", message)
         self.assertIn("Desktop: **164** (Linux 30 · macOS 34 · Windows 100)", message)
-        self.assertIn("**Total: 147,164**", message)
-        self.assertIn("devices active in the 30 days to 30 September", message)
+        self.assertIn("**Total: 300,551**", message)
+        self.assertIn("estimated as 10% of the other figures", message)
+        self.assertIn("downloads of 1.33.5's APKs since its release on 13 July", message)
         self.assertIn("downloads of v1.18.1 since its release on 10 July", message)
+
+    def test_no_change_without_the_month_befores_rate(self):
+        message = self.report(sources={**SOURCES, "opt_in": ((400, 100), None)})
+        self.assertIn("iOS: **168,000**, estimated", message)
+
+    def test_no_opt_in_rate_fails_rather_than_guess(self):
+        with self.assertRaisesRegex(RuntimeError, "no opt-in rate for September 2026"):
+            self.report(sources={**SOURCES, "opt_in": (None, None)})
 
     def test_a_drop_is_signed(self):
         history = {**HISTORY, "android": {"2026-08-31": 107000, "2026-09-30": 105000}}
@@ -206,12 +293,12 @@ class RunTest(unittest.TestCase):
         with open(os.path.join(self.state, "inbox", name), "w", encoding="utf-8") as handle:
             handle.write(text)
 
-    def run_on(self, day, *args, responses=(FakeResponse(DESKTOP), FakeResponse(FLATHUB),
-                                            FakeResponse({}))):
+    def run_on(self, day, *args, responses=(FakeResponse({}),)):
         session = FakeSession(list(responses))
         now = datetime(*day, 12, tzinfo=mau.ZONE)
         with mock.patch.object(mau, "datetime", wraps=datetime) as clock, \
                 mock.patch.object(mau.http, "Session", return_value=session), \
+                mock.patch.object(mau, "read_sources", return_value=SOURCES), \
                 contextlib.redirect_stdout(io.StringIO()) as out:
             clock.now.return_value = now
             mau.main(["--state", self.state, *args])
@@ -236,8 +323,8 @@ class RunTest(unittest.TestCase):
         self.drop_both()
         session, _ = self.run_on((2026, 10, 9))
         (message,) = self.posted(session)
-        self.assertIn("Android: **105,000**", message)
-        self.assertIn("iOS: **42,000**", message)
+        self.assertIn("Android, Play: **105,000**", message)
+        self.assertIn("iOS: **168,000**", message)
         self.assertEqual(self.listing("inbox"), [])
         self.assertEqual(len(self.listing("done")), 2)
         self.assertEqual(self.history()["posted"], ["2026-09"])
@@ -252,20 +339,20 @@ class RunTest(unittest.TestCase):
         self.assertEqual(session.calls, [])
         self.assertIn("Waiting for 2026-09-30 from ios", out)
 
-        session, _ = self.run_on((2026, 10, 10), responses=[FakeResponse({})])
+        session, _ = self.run_on((2026, 10, 10))
         (message,) = self.posted(session)
         self.assertIn("iOS active users for September 2026 is missing", message)
         self.assertEqual(self.history()["posted"], [])
 
         self.drop("i.csv", IOS_SEPTEMBER)
         session, _ = self.run_on((2026, 10, 11))
-        self.assertIn("iOS: **42,000**", self.posted(session)[0])
+        self.assertIn("iOS: **168,000**", self.posted(session)[0])
         self.assertEqual(self.history()["posted"], ["2026-09"])
 
     def test_an_export_without_the_month_end_is_kept_but_not_posted(self):
         self.drop("early.csv", play(("Sep 29, 2026", "104,500", "")))
         self.drop("i.csv", IOS_SEPTEMBER)
-        session, _ = self.run_on((2026, 10, 10), responses=[FakeResponse({})])
+        session, _ = self.run_on((2026, 10, 10))
         self.assertIn("Android active users for September 2026 is missing", self.posted(session)[0])
         self.assertEqual(self.history()["android"], {"2026-09-29": 104500})
 
@@ -287,8 +374,7 @@ class RunTest(unittest.TestCase):
     def test_a_refused_post_is_not_recorded_and_fails_the_run(self):
         self.drop_both()
         with self.assertRaisesRegex(RuntimeError, "Discord did not accept"):
-            self.run_on((2026, 10, 9), responses=[FakeResponse(DESKTOP), FakeResponse(FLATHUB),
-                                                  FakeResponse({}, status_code=400)])
+            self.run_on((2026, 10, 9), responses=[FakeResponse({}, status_code=400)])
         self.assertEqual(self.history()["posted"], [])
         self.assertIn("2026-09-30", self.history()["ios"])
 
@@ -296,7 +382,7 @@ class RunTest(unittest.TestCase):
         self.drop_both()
         session, out = self.run_on((2026, 10, 9), "--dry-run")
         self.assertEqual(self.posted(session), [])
-        self.assertIn("iOS: **42,000**", out)
+        self.assertIn("iOS: **168,000**", out)
         self.assertEqual(len(self.listing("inbox")), 2)
         self.assertFalse(os.path.exists(os.path.join(self.state, mau.HISTORY)))
 

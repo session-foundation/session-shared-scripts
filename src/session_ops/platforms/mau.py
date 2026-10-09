@@ -1,7 +1,8 @@
 """
 Monthly active users, posted once a month: Android's and iOS's from the store exports
-dropped into the job's inbox, and the latest Desktop release's downloads, which Desktop
-has in place of active users.
+dropped into the job's inbox, iOS's scaled up by Apple's opt-in rate from the App Store
+Connect API, the latest Android APKs' and Desktop release's downloads from GitHub, and
+an F-Droid estimate.
 
     session-ops run mau [--dry-run]
     rsync <export>.csv root@<host>:/var/lib/session-ops/mau/inbox/
@@ -13,12 +14,16 @@ every platform; until then, from the REMIND_DAY on, each run posts a reminder in
 import argparse
 import csv
 import glob
+import gzip
+import io
 import json
 import os
 import socket
 import time
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
+
+import jwt
 
 from session_ops.ops.runner import step
 from session_ops.shared import discord, http
@@ -35,6 +40,7 @@ ZONE = ZoneInfo("Australia/Melbourne")
 VERSION = 1
 HISTORY = "history.json"
 
+ANDROID_RELEASES = "https://api.github.com/repos/session-foundation/session-android/releases"
 DESKTOP_RELEASES = "https://api.github.com/repos/session-foundation/session-desktop/releases"
 FLATHUB = "https://flathub.org/api/v2/stats/network.loki.Session"
 PLATFORM_EXTENSIONS = {
@@ -42,6 +48,12 @@ PLATFORM_EXTENSIONS = {
     "macos": (".dmg", ".zip"),
     "windows": (".exe",),
 }
+# No store publishes F-Droid's downloads: this share of every other figure stands in for them.
+FDROID_SHARE = 0.10
+
+ASC_API = "https://api.appstoreconnect.apple.com"
+IOS_APP_ID = "1470168868"
+ASC_KEY_CREDENTIAL = "asc-key.p8"
 
 
 class Rejected(ValueError):
@@ -217,12 +229,73 @@ def desktop_downloads(session):
     return release, platform_totals(release, flathub)
 
 
+def apk_downloads(session):
+    """(latest stable Android release, its APKs' downloads)."""
+    release = latest(get_json(session, ANDROID_RELEASES))
+    return release, sum(a["download_count"] for a in release["assets"]
+                        if a["name"].endswith(".apk"))
+
+
+def asc_token(issuer, key_id, private_key):
+    now = int(time.time())
+    return jwt.encode({"iss": issuer, "iat": now, "exp": now + 1200, "aud": "appstoreconnect-v1"},
+                      private_key, algorithm="ES256", headers={"kid": key_id, "typ": "JWT"})
+
+
+def asc_list(session, path):
+    url = ASC_API + path
+    while url:
+        page = get_json(session, url)
+        yield from page["data"]
+        url = page.get("links", {}).get("next")
+
+
+def opt_in_days(asc, downloads, since):
+    """{ISO date: (first-time downloaders, those opting in)} from the App Opt In report of
+    every analytics request on the app, processed on or after `since`; where instances
+    overlap, the latest processed wins, since a later one carries late events.
+
+    `downloads` fetches the segments: their URLs are pre-signed, so take no API token.
+    """
+    requests = list(asc_list(asc, f"/v1/apps/{IOS_APP_ID}/analyticsReportRequests"))
+    stopped = [r["id"] for r in requests if r["attributes"]["accessType"] == "ONGOING"
+               and r["attributes"]["stoppedDueToInactivity"]]
+    if stopped:
+        raise RuntimeError(f"Apple stopped the ongoing analytics request {stopped[0]} for "
+                           "inactivity; an Admin key must create a new one")
+    instances = []
+    for request in requests:
+        for report in asc_list(asc, f"/v1/analyticsReportRequests/{request['id']}/reports"
+                                    "?filter[name]=App%20Opt%20In"):
+            instances += [i for i in asc_list(asc, f"/v1/analyticsReports/{report['id']}/instances"
+                                                   "?filter[granularity]=DAILY&limit=200")
+                          if i["attributes"]["processingDate"] >= since]
+    days = {}
+    for instance in sorted(instances, key=lambda i: i["attributes"]["processingDate"]):
+        for segment in asc_list(asc, f"/v1/analyticsReportInstances/{instance['id']}/segments"):
+            resp = downloads.request("GET", segment["attributes"]["url"])
+            if resp.status_code != 200:
+                raise RuntimeError(f"HTTP {resp.status_code} for an App Opt In segment")
+            text = gzip.decompress(resp.content).decode("utf-8")
+            for row in csv.DictReader(io.StringIO(text), delimiter="\t"):
+                days[row["Date"]] = (int(row["Downloading Users"] or 0),
+                                     int(row["Users Opting-In"] or 0))
+    return days
+
+
+def opt_in(days, month_end):
+    """(first-time downloaders, those opting in) over the month, or None without any."""
+    month = [v for d, v in days.items() if d[:7] == month_end.isoformat()[:7]]
+    downloading = sum(v[0] for v in month)
+    return (downloading, sum(v[1] for v in month)) if downloading else None
+
+
+def ios_estimate(opted_in, opt_in_counts):
+    downloading, opting_in = opt_in_counts
+    return round(opted_in * downloading / opting_in)
+
+
 LABELS = {"android": "Android", "ios": "iOS"}
-FOOTNOTES = {
-    "android": "Play Console MAU on {day}, users who opened Session in the 28 days before.",
-    "ios": "App Store Connect's devices active in the 30 days to {day}, counting only those "
-           "that share analytics with developers.",
-}
 HOW_TO_EXPORT = {
     "android": "Play Console → Statistics → Saved reports → the MAU report, covering {day} → "
                "Export report → CSV",
@@ -231,10 +304,8 @@ HOW_TO_EXPORT = {
 }
 
 
-def with_change(history, month_end):
-    current = history[month_end.isoformat()]
+def with_change(current, before, month_end):
     text = f"**{figure(current)}**"
-    before = history.get(previous_month_end(month_end).isoformat())
     if before:
         change = current - before
         text += (f" ({'+' if change >= 0 else '−'}{figure(abs(change))}, "
@@ -242,23 +313,47 @@ def with_change(history, month_end):
     return text
 
 
-def report_message(month_end, history, revisions, desktop):
-    day = month_end.isoformat()
-    release, downloads = desktop
-    desktop_total = downloads["linux"] + downloads["macos"] + downloads["windows"]
-    total = sum(history[p][day] for p in PLATFORMS) + desktop_total
-    lines = [f"📊 **Monthly active users, {month_end:%B %Y}**"]
-    lines += [f"{LABELS[p]}: {with_change(history[p], month_end)}" for p in PLATFORMS]
-    lines += [
-        f"Desktop: **{figure(desktop_total)}** (Linux {figure(downloads['linux'])} · "
+def report_message(month_end, history, revisions, sources):
+    """`sources`: the desktop and APK (release, downloads) pairs, and Apple's opt-in
+    counts for this month and the one before, None where it has no first-time downloader."""
+    day, before_day = month_end.isoformat(), previous_month_end(month_end).isoformat()
+    desktop_release, downloads = sources["desktop"]
+    apk_release, apks = sources["apks"]
+    counts, before_counts = sources["opt_in"]
+    if not counts or not counts[1]:
+        raise RuntimeError(f"Apple has no opt-in rate for {month_end:%B %Y}")
+    play = history["android"][day]
+    opted_in = history["ios"][day]
+    ios = ios_estimate(opted_in, counts)
+    ios_before = (ios_estimate(history["ios"][before_day], before_counts)
+                  if before_counts and before_counts[1] and before_day in history["ios"]
+                  else None)
+    desktop = downloads["linux"] + downloads["macos"] + downloads["windows"]
+    fdroid = round(FDROID_SHARE * (play + ios + apks + desktop))
+    total = play + ios + apks + fdroid + desktop
+    on = f"{month_end:%-d %B}"
+    lines = [
+        f"📊 **Monthly active users, {month_end:%B %Y}**",
+        f"Android, Play: {with_change(play, history['android'].get(before_day), month_end)}",
+        f"Android, outside Play: **{figure(apks + fdroid)}** "
+        f"(GitHub APKs {figure(apks)} · F-Droid {figure(fdroid)}, estimated)",
+        f"iOS: {with_change(ios, ios_before, month_end)}, estimated",
+        f"Desktop: **{figure(desktop)}** (Linux {figure(downloads['linux'])} · "
         f"macOS {figure(downloads['macos'])} · Windows {figure(downloads['windows'])})",
         f"**Total: {figure(total)}**",
+        f"-# Android, Play: Play Console MAU on {on}, users who opened Session in the 28 days "
+        "before.",
+        f"-# GitHub APKs: downloads of {apk_release['tag_name']}'s APKs since its release on "
+        f"{date.fromisoformat(release_day(apk_release)):%-d %B}, updates included.",
+        f"-# F-Droid publishes no counts: estimated as {FDROID_SHARE:.0%} of the other figures.",
+        f"-# iOS: Apple counts only devices that share analytics, {figure(opted_in)} active in "
+        f"the 30 days to {on}, scaled by {month_end:%B}'s opt-in rate from Apple's App Opt In "
+        f"report: {counts[1] / counts[0]:.1%}, {figure(counts[1])} of {figure(counts[0])} "
+        "first-time downloaders.",
+        f"-# Desktop: downloads of {desktop_release['tag_name']} since its release on "
+        f"{date.fromisoformat(release_day(desktop_release)):%-d %B}, updates included; "
+        "Desktop has no active-user count.",
     ]
-    lines += [f"-# {LABELS[p]}: " + FOOTNOTES[p].format(day=f"{month_end:%-d %B}")
-              for p in PLATFORMS]
-    lines.append(f"-# Desktop: downloads of {release['tag_name']} since its release on "
-                 f"{date.fromisoformat(release_day(release)):%-d %B}, updates included; "
-                 "Desktop has no active-user count.")
     if revisions:
         lines.append("-# The latest exports revised " + ", ".join(
             f"{LABELS[p]} {date.fromisoformat(d):%-d %b} {figure(old)} → {figure(new)}"
@@ -278,12 +373,33 @@ def reminder_message(month_end, missing, inbox):
     ])
 
 
+def read_sources(args, month_end):
+    step("reading GitHub and Flathub downloads")
+    github = http.Session()
+    github.headers.update({"Accept": "application/vnd.github.v3+json"})
+    sources = {"desktop": desktop_downloads(github), "apks": apk_downloads(github)}
+
+    step("reading Apple's opt-in rate")
+    with open(args.asc_key, encoding="utf-8") as handle:
+        token = asc_token(os.environ["ASC_ISSUER_ID"], os.environ["ASC_KEY_ID"], handle.read())
+    asc = http.Session()
+    asc.headers.update({"Authorization": f"Bearer {token}"})
+    month_before = previous_month_end(month_end)
+    days = opt_in_days(asc, http.Session(), since=month_before.replace(day=1).isoformat())
+    sources["opt_in"] = (opt_in(days, month_end), opt_in(days, month_before))
+    return sources
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.strip().split("\n")[0])
     parser.add_argument("--state", required=True, metavar="DIR",
                         help="Holds inbox/, done/, rejected/ and history.json.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print what would be posted; move and write nothing.")
+    parser.add_argument("--asc-key", metavar="PATH",
+                        default=os.path.join(os.environ.get("CREDENTIALS_DIRECTORY", ""),
+                                             ASC_KEY_CREDENTIAL),
+                        help="The App Store Connect API key, for Apple's opt-in rate.")
     args = parser.parse_args(argv)
 
     inbox = os.path.join(args.state, "inbox")
@@ -310,10 +426,7 @@ def main(argv=None):
     if month in history["posted"]:
         print(f"{month} already posted.")
     elif not missing:
-        step("reading Desktop downloads")
-        session = http.Session()
-        session.headers.update({"Accept": "application/vnd.github.v3+json"})
-        message = report_message(month_end, history, revisions, desktop_downloads(session))
+        message = report_message(month_end, history, revisions, read_sources(args, month_end))
     elif today.day >= REMIND_DAY:
         message = reminder_message(month_end, missing, inbox)
     else:

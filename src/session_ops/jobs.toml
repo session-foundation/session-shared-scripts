@@ -135,7 +135,7 @@ entry = "session_ops.platforms.mau:main"
 args = ["--state", "{state}"]
 user = "sessionops"
 env_files = ["/etc/session-ops/mau.env"]
-env = ["MAU_DISCORD_WEBHOOK_URL"]
+env = ["MAU_DISCORD_WEBHOOK_URL", "ASC_ISSUER_ID", "ASC_KEY_ID"]
 channel_env = "MAU_DISCORD_WEBHOOK_URL"
 # An hour clear of the queue's posts at 10:00.
 schedule = "*-*-10 11:00 Australia/Melbourne"
@@ -143,3 +143,5 @@ watch = "inbox/*.csv"
 # The longest month, plus the hour a DST change adds and slack for the run.
 max_age_hours = 750
 timeout = "5min"
+# The App Store Connect API key, for Apple's opt-in rate.
+unit = ["LoadCredential=asc-key.p8:/etc/session-ops/asc-key.p8"]

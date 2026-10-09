@@ -74,9 +74,10 @@ done
 # What each file takes, commented; the env files stay empty until filled, since a job
 # is enabled once its env files have content.
 install -m 644 "$ROOT"/deploy/env/*.example "$ETC/"
-# The publishing units load this as a credential, and a missing file would stop them
-# starting; left empty, their runs exit naming the key.
+# The publishing units and mau load these as credentials, and a missing file would stop
+# them starting; left empty, their runs fail naming the key.
 [ -e "$ETC/github-app.pem" ] || install -m 600 /dev/null "$ETC/github-app.pem"
+[ -e "$ETC/asc-key.p8" ] || install -m 600 /dev/null "$ETC/asc-key.p8"
 
 install -d -m 755 "$STATE"
 install -d -o ghdigest -g ghdigest "$STATE/github-prs-digest"
