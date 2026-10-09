@@ -1,0 +1,12 @@
+# Starts a job when a file matching its watch lands. Its drop-in, written by
+# `session-ops units`, sets PathExistsGlob= from jobs.toml's watch.
+[Unit]
+Description=Inbox watch for session-ops job %i
+Documentation=https://github.com/session-foundation/session-shared-scripts
+
+[Path]
+# Re-triggers for as long as a file matches, so the job must move each one out.
+Unit=session-ops@%i.service
+
+[Install]
+WantedBy=paths.target

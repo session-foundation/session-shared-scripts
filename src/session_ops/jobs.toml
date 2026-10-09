@@ -10,6 +10,9 @@
 #   channel_env    where it posts, and where its own failures are reported; a job
 #                  without one reports to ALERT_DISCORD_WEBHOOK_URL
 #   unit           further [Service] lines, over the template's hardening
+#   discord        offered to `/run` in Discord, and startable by the relay's account
+#   watch          a glob under {state}: a file matching it starts the job, which must
+#                  move it out, or the path unit starts it again
 #
 #   max_age_hours  for a queued job, its queue's: the weekend's 72 h (73 h across
 #                  April's DST change), plus every job ahead of it running to its timeout
@@ -71,6 +74,7 @@ channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
 max_age_hours = 80
 # About 9 minutes; a full scan without --croql is ~110k requests, about 85 minutes.
 timeout = "2h"
+discord = true
 
 [[job]]
 name = "session-ops-silence"
@@ -111,6 +115,7 @@ env = ["CROWDIN_API_TOKEN", "PUBLISH_GIT_AUTHOR"]
 channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
 max_age_hours = 80
 timeout = "1h"
+discord = true
 # Readable by this unit alone, at $CREDENTIALS_DIRECTORY; publishing needs it.
 unit = ["LoadCredential=github-app.pem:/etc/session-ops/github-app.pem"]
 
@@ -127,10 +132,19 @@ timeout = "10min"
 unit = ["LoadCredential=github-app.pem:/etc/session-ops/github-app.pem"]
 
 [[job]]
-name = "release-stats"
-description = "Download counts of the latest Desktop and Android releases"
-entry = "session_ops.platforms.release_stats:main"
-args = ["--out", "{state}/runs"]
+name = "mau"
+description = "Monthly active users per platform, posted once a month"
+entry = "session_ops.platforms.mau:main"
+args = ["--state", "{state}"]
 user = "sessionops"
-env_files = ["/etc/session-ops/alerts.env"]
+env_files = ["/etc/session-ops/mau.env"]
+env = ["MAU_DISCORD_WEBHOOK_URL", "ASC_ISSUER_ID", "ASC_KEY_ID"]
+channel_env = "MAU_DISCORD_WEBHOOK_URL"
+# An hour clear of the queue's posts at 10:00.
+schedule = "*-*-10 11:00 Australia/Melbourne"
+watch = "inbox/*.csv"
+# The longest month, plus the hour a DST change adds and slack for the run.
+max_age_hours = 750
 timeout = "5min"
+# The App Store Connect API key, for Apple's opt-in rate.
+unit = ["LoadCredential=asc-key.p8:/etc/session-ops/asc-key.p8"]

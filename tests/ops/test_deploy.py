@@ -14,7 +14,7 @@ import tempfile
 import tomllib
 import unittest
 
-from session_ops.ops import registry, units
+from session_ops.ops import discord_commands, registry, units
 from tests.golden import assert_golden
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -62,6 +62,16 @@ class TestDeploy(unittest.TestCase):
                 self.assertEqual(f"session-ops@{job.name}.timer.d/schedule.conf" in files,
                                  bool(job.schedule))
 
+    def test_a_watched_job_gets_a_path_unit_and_moves_its_files_out_of_the_watch(self):
+        files = units.dropins(registry.load(), registry.load_queue())
+        for job in registry.load():
+            with self.subTest(job=job.name):
+                watch = files.get(f"session-ops@{job.name}.path.d/watch.conf")
+                self.assertEqual(watch is not None, bool(job.watch))
+                if job.watch:
+                    self.assertIn(f"\nPathExistsGlob={job.watch_glob}\n", watch)
+        self.assertIn("Unit=session-ops@%i.service\n", unit_text("session-ops@.path"))
+
     def test_each_queued_job_runs_after_every_one_before_it(self):
         queue = registry.load_queue()
         files = units.dropins(registry.load(), queue)
@@ -78,6 +88,23 @@ class TestDeploy(unittest.TestCase):
         files = units.dropins(registry.load(), registry.load_queue())
         text = "".join(f"==> {path} <==\n{files[path]}\n" for path in sorted(files))
         assert_golden(self, "units/dropins.txt", text)
+
+    def test_the_generated_polkit_rule(self):
+        assert_golden(self, "units/polkit.rules", units.polkit_rule(registry.load()))
+
+    def test_the_polkit_rule_names_the_account_the_discord_relay_runs_as(self):
+        self.assertIn(f"\nUser={units.RELAY_USER}\n", unit_text("session-ops-discord.service"))
+        self.assertIn(f'subject.user == "{units.RELAY_USER}"', units.polkit_rule([]))
+
+    def test_the_discord_relay_can_write_mau_s_inbox_and_nothing_else(self):
+        inbox = os.path.dirname(registry.get(discord_commands.MAU_JOB).watch_glob)
+        writable = re.findall(r"^ReadWritePaths=-?(.*)$",
+                              unit_text("session-ops-discord.service"), re.MULTILINE)
+        self.assertEqual(writable, [inbox])
+        with open(os.path.join(ROOT, "deploy", "install.sh"), encoding="utf-8") as handle:
+            self.assertIn(f'if [ "$job" = {discord_commands.MAU_JOB} ]; then\n'
+                          f'        install -d -o "$user" -g {units.RELAY_USER} -m 770',
+                          handle.read())
 
 
 class TestInstallScript(unittest.TestCase):
