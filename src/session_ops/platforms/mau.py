@@ -18,6 +18,7 @@ import glob
 import gzip
 import io
 import json
+import math
 import os
 import time
 from datetime import date, datetime, timedelta
@@ -67,6 +68,8 @@ def read_rows(path):
             return list(csv.reader(handle, strict=True))
     except (UnicodeDecodeError, csv.Error) as exc:
         raise Rejected(f"not a CSV export ({exc})") from None
+    except OSError as exc:
+        raise Rejected(f"unreadable ({exc.strerror})") from None
 
 
 def parse_export(path):
@@ -112,13 +115,13 @@ def parse_apple(rows):
     for line, row in enumerate(rows[header + 1:], start=header + 2):
         try:
             day = datetime.strptime(row[0], APPLE_DATE).date().isoformat()
-            # A day Apple is still counting comes as a fraction; a later export revises it.
-            value = round(float(row[1]))
-        except (IndexError, ValueError, OverflowError):
+            value = float(row[1])
+        except (IndexError, ValueError):
             raise Rejected(f"line {line} is not a date and a figure: {row[:2]}") from None
-        if value < 0:
+        if not math.isfinite(value) or value < 0:
             raise Rejected(f"line {line} has {row[1]!r} for a figure")
-        days[day] = value
+        # A day Apple is still counting comes as a fraction: kept, so it reads as provisional.
+        days[day] = int(value) if value.is_integer() else value
     return non_empty(days)
 
 
@@ -132,7 +135,7 @@ def read_inbox(inbox):
     """(path, platform, days) for each export, oldest first, and (path, reason) for each
     rejected one.
 
-    glob skips dotfiles, so rsync's temporary file is never read half-written.
+    glob skips dotfiles, so a file rsync or /mau-upload is still writing is never read.
     """
     exports, rejected = [], []
     for path in sorted(glob.glob(os.path.join(inbox, "*.csv")), key=os.path.getmtime):
@@ -143,16 +146,35 @@ def read_inbox(inbox):
     return exports, rejected
 
 
+def is_final(value):
+    return value is not None and float(value).is_integer()
+
+
 def merge(history, exports):
-    """Merge each export into its platform's history, the later export winning; returns
-    the revisions, (platform, day, old, new), for the figures a later export changed."""
-    revisions = []
+    """Merge each export into its platform's history, the later export winning, and record
+    in history["revisions"] each final figure a later export changed, until it is posted."""
     for _, platform, days in exports:
         for day, figure in sorted(days.items()):
             old = history[platform].get(day)
-            if old is not None and old != figure:
-                revisions.append((platform, day, old, figure))
             history[platform][day] = figure
+            if not is_final(old) or old == figure:
+                continue
+            key = f"{platform} {day}"
+            first = history["revisions"].get(key, [old])[0]
+            if first == figure:
+                history["revisions"].pop(key, None)
+            else:
+                history["revisions"][key] = [first, figure]
+            print(f"{key}: {old} revised to {figure}")
+
+
+def shown_revisions(history, days):
+    """(platform, day, first, latest) for the recorded revisions of `days`."""
+    revisions = []
+    for key, (first, latest) in sorted(history["revisions"].items()):
+        platform, day = key.split(" ")
+        if day in days:
+            revisions.append((platform, day, first, latest))
     return revisions
 
 
@@ -166,7 +188,7 @@ def load_history(path):
     """The history at `path`, empty if there is none yet. Unlike a digest's dedup cache it
     cannot be rebuilt from a re-run, so an unreadable one stops the run rather than reset."""
     if not os.path.exists(path):
-        return {"version": VERSION, "android": {}, "ios": {}, "posted": []}
+        return {"version": VERSION, "android": {}, "ios": {}, "posted": [], "revisions": {}}
     with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
     if data.get("version") != VERSION:
@@ -186,7 +208,7 @@ def previous_month_end(today):
 
 
 def figure(value):
-    return f"{value:,}"
+    return f"{round(value):,}"
 
 
 def get_json(session, url):
@@ -361,13 +383,15 @@ def report_message(month_end, history, revisions, sources):
     return "\n".join(lines)
 
 
-def reminder_message(month_end, missing):
+def reminder_message(month_end, missing, provisional=()):
     names = " and ".join(LABELS[p] for p in missing)
     day = f"{month_end:%-d %B}"
     return "\n".join([
         f"⏰ **{names} active users for {month_end:%B %Y} {'are' if len(missing) > 1 else 'is'} "
         "missing.** Export:",
-        *(f"- {LABELS[p]}: " + HOW_TO_EXPORT[p].format(day=day) for p in missing),
+        *(f"- {LABELS[p]}: " + HOW_TO_EXPORT[p].format(day=day)
+          + (" (the last export had it still being counted)" if p in provisional else "")
+          for p in missing),
         "Then hand each to `/mau-upload` here, and the figures post as soon as the last one "
         "lands.",
     ])
@@ -381,7 +405,11 @@ def read_sources(args, month_end):
 
     step("reading Apple's opt-in rate")
     with open(args.asc_key, encoding="utf-8") as handle:
-        token = asc_token(os.environ["ASC_ISSUER_ID"], os.environ["ASC_KEY_ID"], handle.read())
+        key = handle.read()
+    if not key.strip():
+        raise SystemExit(f"{args.asc_key} is empty: put the App Store Connect key's .p8 at "
+                         f"/etc/session-ops/{ASC_KEY_CREDENTIAL}, mode 600")
+    token = asc_token(os.environ["ASC_ISSUER_ID"], os.environ["ASC_KEY_ID"], key)
     asc = http.Session()
     asc.headers.update({"Authorization": f"Bearer {token}"})
     month_before = previous_month_end(month_end)
@@ -405,30 +433,39 @@ def main(argv=None):
     inbox = os.path.join(args.state, "inbox")
     history_path = os.path.join(args.state, HISTORY)
     step("reading the inbox")
-    history = load_history(history_path)
-    exports, rejected = read_inbox(inbox)
-    revisions = merge(history, exports)
-    for platform, day, old, new in revisions:
-        print(f"{platform} {day}: {old} revised to {new}")
-    if not args.dry_run:
-        # Saved before the files move: a run stopped in between reads them again, harmlessly.
-        save_history(history_path, history)
-        for path, _, _ in exports:
-            file_away(path, os.path.join(args.state, "done"))
-        for path, _ in rejected:
-            file_away(path, os.path.join(args.state, "rejected"))
+    try:
+        history = load_history(history_path)
+        exports, rejected = read_inbox(inbox)
+        merge(history, exports)
+        if not args.dry_run:
+            # Saved before the files move: a run stopped in between reads them again, harmlessly.
+            save_history(history_path, history)
+            for path, _, _ in exports:
+                file_away(path, os.path.join(args.state, "done"))
+            for path, _ in rejected:
+                file_away(path, os.path.join(args.state, "rejected"))
+    except Exception:
+        # The path unit restarts the job while a file matches its glob, then stops watching.
+        if not args.dry_run:
+            for path in glob.glob(os.path.join(inbox, "*.csv")):
+                file_away(path, os.path.join(args.state, "rejected"))
+            print("The inbox's exports are in rejected/: move them back once this is fixed.")
+        raise
 
     today = datetime.now(ZONE).date()
     month_end = previous_month_end(today)
     month = month_end.strftime("%Y-%m")
-    missing = [p for p in PLATFORMS if month_end.isoformat() not in history[p]]
+    missing = [p for p in PLATFORMS if not is_final(history[p].get(month_end.isoformat()))]
+    provisional = [p for p in missing if month_end.isoformat() in history[p]]
     message = None
     if month in history["posted"]:
         print(f"{month} already posted.")
     elif not missing:
+        revisions = shown_revisions(history, {month_end.isoformat(),
+                                              previous_month_end(month_end).isoformat()})
         message = report_message(month_end, history, revisions, read_sources(args, month_end))
     elif today.day >= REMIND_DAY:
-        message = reminder_message(month_end, missing)
+        message = reminder_message(month_end, missing, provisional)
     else:
         print(f"Waiting for {month_end} from {', '.join(missing)}; "
               f"reminders start on the {REMIND_DAY}th.")
@@ -444,6 +481,7 @@ def main(argv=None):
                 raise RuntimeError("Discord did not accept the message")
             if not missing:
                 history["posted"].append(month)
+                history["revisions"] = {}
                 save_history(history_path, history)
     if rejected:
         raise SystemExit("rejected " + "; ".join(

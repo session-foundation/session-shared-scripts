@@ -108,8 +108,13 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(self.parse(IOS_SEPTEMBER),
                          ("ios", {"2026-08-31": 40000, "2026-09-29": 41500, "2026-09-30": 42000}))
 
-    def test_a_day_apple_is_still_counting_is_rounded(self):
-        self.assertEqual(self.parse(apple(("10/7/26", "18973.094")))[1], {"2026-10-07": 18973})
+    def test_a_day_apple_is_still_counting_keeps_its_fraction(self):
+        self.assertEqual(self.parse(apple(("10/6/26", "19000.0"), ("10/7/26", "18973.094")))[1],
+                         {"2026-10-06": 19000, "2026-10-07": 18973.094})
+
+    def test_an_unreadable_file_is_a_rejection(self):
+        with self.assertRaisesRegex(mau.Rejected, "unreadable"):
+            mau.parse_export("/nonexistent/export.csv")
 
     def test_apples_daily_active_devices_is_refused_for_the_30_day_metric(self):
         with self.assertRaisesRegex(mau.Rejected, "of Active Devices: export Active Last 30 Days"):
@@ -208,20 +213,50 @@ class AppleTest(unittest.TestCase):
         self.assertIsNone(mau.opt_in(days, date(2026, 7, 31)))
         self.assertEqual(mau.ios_estimate(42000, (400, 100)), 168000)
 
+    def test_an_empty_key_names_the_file_to_fill(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".p8") as key, \
+                mock.patch.object(mau, "desktop_downloads", return_value=DOWNLOADS), \
+                mock.patch.object(mau, "apk_downloads", return_value=(ANDROID[1], 64)), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaisesRegex(SystemExit, "is empty: put the App Store Connect key's "
+                                                   ".p8 at /etc/session-ops/asc-key.p8"):
+            mau.read_sources(mock.Mock(asc_key=key.name), date(2026, 9, 30))
+
     def test_apks_of_the_latest_stable_android_release_only(self):
         session = FakeSession([FakeResponse(ANDROID)])
         self.assertEqual(mau.apk_downloads(session), (ANDROID[1], 64))
 
 
 class MergeTest(unittest.TestCase):
-    def test_a_later_export_wins_per_platform_and_its_changes_are_returned(self):
-        history = {"android": {"2026-09-29": 104000}, "ios": {"2026-09-29": 7}}
-        revisions = mau.merge(history, [("a", "android", {"2026-09-29": 104500, "2026-09-30": 1}),
-                                        ("b", "android", {"2026-09-30": 1}),
-                                        ("c", "ios", {"2026-09-29": 7})])
-        self.assertEqual(history, {"android": {"2026-09-29": 104500, "2026-09-30": 1},
-                                   "ios": {"2026-09-29": 7}})
-        self.assertEqual(revisions, [("android", "2026-09-29", 104000, 104500)])
+    def empty(self):
+        return {"android": {}, "ios": {}, "revisions": {}}
+
+    def test_a_later_export_wins_and_the_change_is_kept_from_the_first_figure(self):
+        history = {**self.empty(), "android": {"2026-09-29": 104000}}
+        with contextlib.redirect_stdout(io.StringIO()):
+            mau.merge(history, [("a", "android", {"2026-09-29": 104500, "2026-09-30": 1}),
+                                ("b", "android", {"2026-09-29": 104600, "2026-09-30": 1})])
+        self.assertEqual(history["android"], {"2026-09-29": 104600, "2026-09-30": 1})
+        self.assertEqual(history["revisions"], {"android 2026-09-29": [104000, 104600]})
+
+    def test_a_figure_changed_back_is_no_revision(self):
+        history = {**self.empty(), "ios": {"2026-09-30": 42000}}
+        with contextlib.redirect_stdout(io.StringIO()):
+            mau.merge(history, [("a", "ios", {"2026-09-30": 42100}),
+                                ("b", "ios", {"2026-09-30": 42000})])
+        self.assertEqual(history["revisions"], {})
+
+    def test_apple_completing_a_provisional_day_is_no_revision(self):
+        history = {**self.empty(), "ios": {"2026-09-30": 41000.5}}
+        mau.merge(history, [("a", "ios", {"2026-09-30": 42000})])
+        self.assertEqual(history["revisions"], {})
+
+    def test_only_the_days_shown_are_listed(self):
+        history = {**self.empty(), "revisions": {"ios 2026-09-30": [1, 2],
+                                                 "android 2026-08-31": [3, 4],
+                                                 "android 2026-09-15": [5, 6]}}
+        self.assertEqual(mau.shown_revisions(history, {"2026-09-30", "2026-08-31"}),
+                         [("android", "2026-08-31", 3, 4), ("ios", "2026-09-30", 1, 2)])
 
 
 class MessageTest(unittest.TestCase):
@@ -271,6 +306,11 @@ class MessageTest(unittest.TestCase):
         self.assertIn("- iOS: App Store Connect → Analytics", message)
         self.assertIn("covering 30 September", message)
         self.assertIn("`/mau-upload`", message)
+
+    def test_the_reminder_says_when_the_last_export_was_provisional(self):
+        message = mau.reminder_message(date(2026, 9, 30), ["ios"], ["ios"])
+        self.assertIn("covering 30 September → Export (the last export had it still being "
+                      "counted)", message)
 
     def test_the_reminder_for_one_platform_is_singular(self):
         message = mau.reminder_message(date(2026, 9, 30), ["ios"])
@@ -384,10 +424,49 @@ class RunTest(unittest.TestCase):
         self.assertEqual(len(self.listing("inbox")), 2)
         self.assertFalse(os.path.exists(os.path.join(self.state, mau.HISTORY)))
 
-    def test_an_unreadable_history_stops_the_run_instead_of_starting_over(self):
+    def test_an_unreadable_history_stops_the_run_and_empties_the_inbox(self):
         with open(os.path.join(self.state, mau.HISTORY), "w", encoding="utf-8") as handle:
             handle.write("{")
         self.drop("a.csv", ANDROID_SEPTEMBER)
         with self.assertRaises(ValueError):
             self.run_on((2026, 10, 9))
-        self.assertEqual(self.listing("inbox"), ["a.csv"])
+        self.assertEqual(self.listing("inbox"), [])
+        (held,) = self.listing("rejected")
+        self.assertTrue(held.endswith("-a.csv"))
+        with open(os.path.join(self.state, mau.HISTORY), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "{")
+
+    def test_an_unreadable_export_is_rejected_not_retried(self):
+        self.drop("a.csv", ANDROID_SEPTEMBER)
+        os.chmod(os.path.join(self.state, "inbox", "a.csv"), 0)
+        if os.access(os.path.join(self.state, "inbox", "a.csv"), os.R_OK):
+            self.skipTest("running as root, which reads any file")
+        with self.assertRaisesRegex(SystemExit, "a.csv: unreadable"):
+            self.run_on((2026, 10, 9))
+        self.assertEqual(self.listing("inbox"), [])
+
+    def test_a_provisional_ios_month_end_waits_for_a_final_one(self):
+        self.drop("a.csv", ANDROID_SEPTEMBER)
+        self.drop("i.csv", apple(("9/30/26", "41000.5")))
+        session, _ = self.run_on((2026, 10, 10))
+        (message,) = self.posted(session)
+        self.assertIn("iOS active users for September 2026 is missing", message)
+        self.assertIn("still being counted", message)
+        self.assertEqual(self.history()["posted"], [])
+
+        self.drop("i2.csv", IOS_SEPTEMBER)
+        session, _ = self.run_on((2026, 10, 11))
+        self.assertIn("iOS: **168,000**", self.posted(session)[0])
+
+    def test_revisions_from_an_earlier_run_are_posted_then_cleared(self):
+        self.drop("i.csv", IOS_SEPTEMBER)
+        self.run_on((2026, 10, 3))
+        self.drop("i2.csv", apple(("8/31/26", "40100.0"), ("9/15/26", "1.0"), ("9/30/26", "42000.0")))
+        self.drop("i3.csv", apple(("9/15/26", "2.0")))
+        self.run_on((2026, 10, 4))
+        self.drop("a.csv", ANDROID_SEPTEMBER)
+        session, _ = self.run_on((2026, 10, 9))
+        message = self.posted(session)[0]
+        self.assertIn("revised iOS 31 Aug 40,000 → 40,100", message)
+        self.assertNotIn("15 Sep", message)
+        self.assertEqual(self.history()["revisions"], {})

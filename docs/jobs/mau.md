@@ -52,16 +52,24 @@ territory it used in the month, 5% to 20% too many.
 
 1. Merges every export in `inbox/` into `history.json`, one figure per platform and day,
    then moves it to `done/`. An export may cover any range; where two give a day different
-   figures, the later one wins and the post lists the revision.
+   figures, the later one wins, and the change is kept until the month posts.
 2. Moves a file it cannot read to `rejected/` and fails the run naming it, after the
    rest of the run.
-3. Posts last month once `history.json` holds its last day for both platforms. Play's
-   figures trail by about eight days, so that is around the 9th. Until then, from the
-   10th, each run posts a reminder naming the platforms still missing.
-4. Records the month as posted, so neither the timer nor a later export posts it again.
+3. Posts last month once `history.json` holds a final figure for its last day on both
+   platforms. Play's figures trail by about eight days, so that is around the 9th. Apple
+   gives a day it is still counting as a fraction, which does not count as final. Until
+   then, from the 10th, each run posts a reminder naming the platforms still missing.
+4. Lists in the post the changes to the two month ends it compares, records the month as
+   posted, so neither the timer nor a later export posts it again, and forgets the
+   changes.
+
+Should a run fail before the inbox is filed, say on an unreadable `history.json`, it
+moves every export in `inbox/` to `rejected/` first: the path unit starts the job again
+for as long as a file matches, and gives up watching after five starts. Once the cause
+is fixed, move them back into `inbox/`.
 
 `history.json` cannot be rebuilt by a re-run: an unreadable one stops the job. If it is
-lost, drop an export covering the last 365 days.
+lost, drop an export covering the last 365 days for each platform.
 
 ## Desktop downloads
 
