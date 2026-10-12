@@ -21,6 +21,7 @@ runs/<stamp>/ for 14 days.
 Config (env vars):
     CROWDIN_API_TOKEN     read-only
     PUBLISH_GIT_AUTHOR    "Name <email>" the commits are authored as
+    CROWDIN_DISCORD_WEBHOOK_URL  where the run's summary goes (not needed with --dry-run)
     plus what shared/github.py reads to publish (not needed with --dry-run)
 
     session-ops run crowdin-sync [--dry-run] [-- --only android desktop]
@@ -36,7 +37,8 @@ from session_ops.crowdin import (codegen_localization, download_translations_fro
                                  generate_language_list, parse_xliff)
 from session_ops.ops.runner import Outcome, call_target, step
 from session_ops.platforms import publish, submodules
-from session_ops.shared import github
+from session_ops.shared import discord, github, http
+from session_ops.shared.env import get_env
 from session_ops.shared.git import Repo
 
 PROJECT_ID = "618696"
@@ -120,8 +122,9 @@ def sync_target(target, work, parsed, token, api, author, dry_run, published):
     step(f"{target}: generate")
     generate(target, repo, parsed)
     step(f"{target}: publish")
-    print(publish_target(target, repo, api, author, dry_run))
+    result = publish_target(target, repo, api, author, dry_run)
     published[target] = repo.head()
+    return result
 
 
 def localization_tip(work, token):
@@ -137,8 +140,15 @@ def bump_target(target, work, token, api, author, dry_run, published, localizati
     if localization_ran and "localization" not in published:
         raise RuntimeError("localization did not publish, so there is nothing to bump to")
     sha = published.get("localization") or localization_tip(work, token)
-    print(submodules.bump(CLIENTS[target], sha, work, token, api, SUBMODULE_BRANCH,
-                          SUBMODULE_TITLE, SUBMODULE_BODY, author, dry_run))
+    return submodules.bump(CLIENTS[target], sha, work, token, api, SUBMODULE_BRANCH,
+                           SUBMODULE_TITLE, SUBMODULE_BODY, author, dry_run)
+
+
+def summary(results, errors):
+    """The channel's line for every run, so one that changed nothing still shows it ran."""
+    lines = [results.get(target) or f"{target}: failed, see the alert" for target in errors]
+    return "\n".join(["🌐 **crowdin-sync**: translations from Crowdin",
+                      *(discord.without_previews(line) for line in lines)])
 
 
 def keep(work, runs_dir, names):
@@ -165,6 +175,8 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true",
                         help="Generate and commit locally; push nothing, open nothing.")
     args = parser.parse_args(argv)
+    # Resolved first, so a missing secret stops the run before it publishes anything.
+    webhook = get_env("CROWDIN_DISCORD_WEBHOOK_URL", required=not args.dry_run)
 
     author = os.environ.get("PUBLISH_GIT_AUTHOR") or "session-ops <session-ops@localhost>"
     work = os.environ.get("SESSION_OPS_WORK_DIR") or tempfile.mkdtemp(prefix="crowdin-sync-")
@@ -187,15 +199,26 @@ def main(argv=None):
         publish.ORG, [REPOS[t] for t in args.only])
     api = github.publish_session(token) if token else None
     published, localization_ran = {}, "localization" in args.only
+    results = {}
 
     def run_target(target):
         if target in CLIENTS:
-            bump_target(target, work, token, api, author, args.dry_run, published,
-                        localization_ran)
+            results[target] = bump_target(target, work, token, api, author, args.dry_run,
+                                          published, localization_ran)
         else:
-            sync_target(target, work, parsed, token, api, author, args.dry_run, published)
+            results[target] = sync_target(target, work, parsed, token, api, author,
+                                          args.dry_run, published)
+        print(results[target])
 
     # TARGETS' order, whatever --only's: the bumps follow localization.
-    results = {target: call_target(lambda _, target=target: run_target(target), [])
-               for target in TARGETS if target in args.only}
-    return Outcome(targets=results)
+    errors = {target: call_target(lambda _, target=target: run_target(target), [])
+              for target in TARGETS if target in args.only}
+    step("report")
+    message = summary(results, errors)
+    if args.dry_run:
+        print(message)
+    else:
+        payload = {"content": message, "allowed_mentions": {"parse": []}}
+        if discord.post_to_discord(http.Session(), webhook, [payload]) != 1:
+            raise RuntimeError("Discord did not accept the summary")
+    return Outcome(targets=errors)

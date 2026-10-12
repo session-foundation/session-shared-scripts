@@ -21,7 +21,6 @@ Environment:
 import argparse
 import json
 import os
-import re
 import tempfile
 
 from session_ops.ops.runner import Outcome, call_target, step
@@ -115,8 +114,7 @@ def summary(content, results):
     data = json.loads(content)
     nodes = data["service_node_states"]
     exiting = sum(1 for node in nodes if node.get("requested_unlock_height"))
-    # <url> keeps Discord from unfurling a preview of each pull request.
-    lines = [re.sub(r"(https?://\S+)", r"<\1>", result) for result in results]
+    lines = [discord.without_previews(result) for result in results]
     return "\n".join([f"🛰️ **snode-list**: {exiting} of {len(nodes)} service nodes are "
                       f"requesting exit at height {data.get('height')}.", *lines])
 

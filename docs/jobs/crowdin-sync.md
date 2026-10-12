@@ -17,7 +17,7 @@ commit just pushed:
 | | |
 | --- | --- |
 | Runs | `session-ops-queue.timer`, Mon–Fri from 10:00 Australia/Melbourne, after `zendesk-digest` |
-| Secrets | `/etc/session-ops/crowdin.env`: a read-only `CROWDIN_API_TOKEN`; `/etc/session-ops/publish.env` and the GitHub App key, to publish |
+| Secrets | `/etc/session-ops/crowdin.env`: a read-only `CROWDIN_API_TOKEN` and `CROWDIN_DISCORD_WEBHOOK_URL` for the summary; `/etc/session-ops/publish.env` and the GitHub App key, to publish |
 | Dry run | `session-ops run crowdin-sync --dry-run`: everything but the push, with each platform's diff in the journal |
 | Re-run | `systemctl start session-ops@crowdin-sync.service`; one target with `session-ops run crowdin-sync -- --only ios` |
 | Logs | `journalctl -u session-ops@crowdin-sync -n 100 --no-pager`; the run's downloads, parsed JSON and validation report under `/var/lib/session-ops/crowdin-sync/runs/`, for 14 days |
@@ -34,6 +34,8 @@ One process, in order:
 4. **Bump each client's submodule** to the commit localization published, cloning only
    `.gitmodules` and moving the gitlink. A bump is skipped, and reported, when
    localization fails; with `--only` leaving localization out, it moves to `main`'s tip.
+5. **Post a summary**: one line per target, pull request or "no changes", posted even
+   when nothing changed, so a quiet run is told apart from one that never ran.
 
 The pull requests come from `feature/update-crowdin-translations`, rebuilt from `dev`
 each run and force-pushed: the branch is the job's, and nobody else commits to it. An
