@@ -58,8 +58,13 @@ class TestApply(unittest.TestCase):
 
 
 class TestMessages(unittest.TestCase):
-    def test_nothing_changed_posts_nothing(self):
-        self.assertEqual(duplicates.build_messages([], [], 7, PROJECT), [])
+    def test_nothing_changed_posts_one_summary(self):
+        messages = duplicates.build_messages([], [], 7, PROJECT)
+        self.assertEqual(len(messages), 1)
+        embeds = messages[0]["embeds"]
+        self.assertEqual(len(embeds), 1)
+        self.assertIn("No change since the last run. **7** open in total.",
+                      embeds[0]["description"])
 
     def test_new_and_resolved_are_listed_with_editor_links(self):
         messages = duplicates.build_messages(
@@ -180,12 +185,14 @@ class TestReconcile(unittest.TestCase):
         self.assertIn("[accept]", embeds[2]["description"])
         self.assertIn("101:de:", self.slots(), "a dry run writes nothing")
 
-    def test_an_unchanged_run_posts_nothing_at_all(self):
+    def test_an_unchanged_run_posts_the_open_count(self):
         self.run_reconcile(recording(), "--seed")
-        with mock.patch.object(reconcile.discord, "post_to_discord") as post:
+        with mock.patch.object(reconcile.discord, "post_to_discord", return_value=1) as post:
             with mock.patch.dict(os.environ, {"CROWDIN_DISCORD_WEBHOOK_URL": "https://hook"}):
                 self.run_reconcile(recording())
-        post.assert_not_called()
+        (messages,) = [call.args[2] for call in post.call_args_list]
+        self.assertIn("No change since the last run. **5** open in total.",
+                      messages[0]["embeds"][0]["description"])
 
     def test_croql_checks_only_its_candidates_and_resolves_the_rest(self):
         self.run_reconcile(recording(), "--seed")

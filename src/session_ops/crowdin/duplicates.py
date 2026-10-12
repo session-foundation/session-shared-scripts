@@ -18,7 +18,7 @@ from session_ops.shared import discord
 from session_ops.shared.discord import clip
 
 STATE_VERSION = 1
-OPEN_COLOR, RESOLVED_COLOR = 0xE67E22, 0x2ECC71
+OPEN_COLOR, RESOLVED_COLOR, UNCHANGED_COLOR = 0xE67E22, 0x2ECC71, 0x95A5A6
 # A locale's slots listed one by one; past this, a count and the locale's editor. A burst
 # (a bulk import, a whole locale reviewed at once) then stays a message, not a flood that
 # outruns Discord's per-channel rate limit.
@@ -204,9 +204,14 @@ def section_embeds(slots, project, title, color, suffix):
 
 
 def build_messages(opened, resolved, still_open, project):
-    """Discord payloads for what changed, or [] when nothing did."""
+    """Discord payloads for what changed, or a one-line summary when nothing did."""
     if not opened and not resolved:
-        return []
+        # Posted anyway: a silent run looks the same as one that never happened.
+        return discord.pack_embeds([{
+            "title": "🈳 Crowdin: translations to choose between",
+            "description": f"No change since the last run. **{still_open}** open in total.",
+            "color": UNCHANGED_COLOR,
+        }])
     summary = {
         "title": "🈳 Crowdin: translations to choose between",
         "description": (

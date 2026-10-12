@@ -155,7 +155,7 @@ def reconcile(args):
         return
     if not args.seed:
         messages = duplicates.build_messages(opened, resolved, len(state["slots"]), project)
-        posted = discord.post_to_discord(http.Session(), webhook, messages) if messages else 0
+        posted = discord.post_to_discord(http.Session(), webhook, messages)
         if posted < len(messages):
             sys.exit(f"Posted {posted} of {len(messages)} messages; state not written, "
                      f"so the next run repeats them.")
