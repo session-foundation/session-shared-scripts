@@ -153,12 +153,20 @@ def reconcile(args):
         messages = duplicates.build_messages(opened, resolved, len(state["slots"]), project)
         print(json.dumps(messages, indent=2, ensure_ascii=False))
         return
-    if not args.seed:
-        messages = duplicates.build_messages(opened, resolved, len(state["slots"]), project)
-        posted = discord.post_to_discord(http.Session(), webhook, messages) if messages else 0
-        if posted < len(messages):
-            sys.exit(f"Posted {posted} of {len(messages)} messages; state not written, "
-                     f"so the next run repeats them.")
+    if args.seed:
+        duplicates.save(args.state, state)
+        return
+    messages = duplicates.build_messages(opened, resolved, len(state["slots"]), project)
+    if not (opened or resolved):
+        # Nothing a rerun would need to repost, so a lost summary costs no state.
+        duplicates.save(args.state, state)
+        if discord.post_to_discord(http.Session(), webhook, messages) < len(messages):
+            sys.exit("Discord did not accept the no-change summary.")
+        return
+    posted = discord.post_to_discord(http.Session(), webhook, messages)
+    if posted < len(messages):
+        sys.exit(f"Posted {posted} of {len(messages)} messages; state not written, "
+                 f"so the next run repeats them.")
     duplicates.save(args.state, state)
 
 

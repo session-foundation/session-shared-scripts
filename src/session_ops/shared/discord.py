@@ -8,6 +8,7 @@ webhook carry it: Discord allows a webhook that no application owns only those.
 Adding an interactive one would need the transport moved to a bot token.
 https://docs.discord.com/developers/components/reference
 """
+import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
@@ -34,6 +35,11 @@ def text_len(text):
 def clip(text, limit):
     text = (text or "").strip()
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def without_previews(text):
+    """Wraps each URL in <>, which keeps Discord from unfurling a preview of it."""
+    return re.sub(r"(https?://\S+)", r"<\1>", text)
 
 
 def text_display(content):

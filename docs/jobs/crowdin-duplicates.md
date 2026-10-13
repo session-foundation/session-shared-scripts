@@ -15,8 +15,8 @@ for a plural string, is what gets exported. A slot is (string, locale, plural ca
 ## How it stays current
 
 The open slots live in `/var/lib/session-ops/crowdin-duplicates/duplicates.json`. Each run posts
-only what changed: slots newly holding 2+ translations, and slots that no longer do.
-Nothing changed, nothing is posted.
+what changed: slots newly holding 2+ translations, and slots that no longer do. A run
+that changes nothing still posts one line with the open count.
 Each locale is one embed listing up to 10 slots with editor links; past that, it gives
 the count and a link to the locale in the editor, so a bulk import stays one message.
 

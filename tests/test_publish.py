@@ -524,6 +524,8 @@ class TestSnodeList(RepoTest):
         self.ios = bare_repo(self.root, "session-ios", "dev",
                              {snode_list.IOS_PATH: '{"old": true}\n', "Other.swift": "x"})
 
+    accepted = 1
+
     def run_job(self, *argv):
         api, posted = GitHubFake(), []
         exiting = [node(1, requested_unlock_height=2212248)] + NODES[:-1]
@@ -532,7 +534,8 @@ class TestSnodeList(RepoTest):
                 mock.patch.object(snode_list.github, "publish_token", lambda owner, repos: "t"), \
                 mock.patch.object(snode_list.github, "session", lambda token: api), \
                 mock.patch.object(snode_list.discord, "post_to_discord",
-                                  lambda session, url, messages: posted.extend(messages) or 1), \
+                                  lambda session, url, messages:
+                                  posted.extend(messages) or self.accepted), \
                 mock.patch.dict(os.environ, {"SESSION_OPS_WORK_DIR": self.work,
                                              "CROWDIN_DISCORD_WEBHOOK_URL": "https://hook"}), \
                 contextlib.redirect_stdout(io.StringIO()) as out, \
@@ -561,6 +564,11 @@ class TestSnodeList(RepoTest):
         self.assertEqual(set(outcome.failures()), {"dynamic-assets", "desktop"})
         self.assertIn(snode_list.IOS_BRANCH, self.branches("session-ios"))
         self.assertIn("desktop: failed, see the alert", posted[0]["content"])
+
+    def test_a_rejected_summary_fails_the_run_as_its_own_target(self):
+        self.accepted = 0
+        outcome, _, _ = self.run_job()
+        self.assertEqual(outcome.failures(), {"report": "Discord did not accept the summary"})
 
     def test_a_dry_run_pushes_nothing(self):
         _, posted, out = self.run_job("--dry-run")
@@ -597,15 +605,20 @@ class TestCrowdinSync(RepoTest):
         with open(os.path.join(repo.path, path), "w", encoding="utf-8") as handle:
             handle.write(json.dumps(target))
 
+    accepted = 1
+
     def run_sync(self, *argv):
         env = {"SESSION_OPS_WORK_DIR": self.work, "CROWDIN_API_TOKEN": "t",
-               "PUBLISH_GIT_AUTHOR": AUTHOR}
-        api = GitHubFake()
+               "PUBLISH_GIT_AUTHOR": AUTHOR, "CROWDIN_DISCORD_WEBHOOK_URL": "https://hook"}
+        api, self.posted = GitHubFake(), []
         with mock.patch.object(sync.download_translations_from_crowdin, "main"), \
                 mock.patch.object(sync.github, "publish_token", lambda owner, repos: "ghs_x"), \
                 mock.patch.object(sync.parse_xliff, "main"), \
                 mock.patch.object(sync, "generate", self.fake_generate), \
                 mock.patch.object(sync.github, "session", lambda token: api), \
+                mock.patch.object(sync.discord, "post_to_discord",
+                                  lambda session, url, messages:
+                                  self.posted.extend(messages) or self.accepted), \
                 mock.patch.dict(os.environ, env), \
                 contextlib.redirect_stdout(io.StringIO()), \
                 contextlib.redirect_stderr(io.StringIO()):
@@ -626,6 +639,24 @@ class TestCrowdinSync(RepoTest):
             self.assertEqual(self.bumped(target), tip(self.localization, "main"))
         opened = [c[2]["json"]["title"] for c in api.calls if c[0] == "POST"]
         self.assertEqual(opened, [sync.TITLE] + [sync.SUBMODULE_TITLE] * len(sync.CLIENTS))
+        message = self.posted[0]["content"]
+        self.assertIn("session-foundation/session-android: <https://github.com/pr/7>", message)
+        self.assertIn("ios: failed, see the alert", message)
+        self.assertNotIn(" https://", message)
+
+    def test_a_rejected_summary_keeps_every_targets_failure(self):
+        self.accepted = 0
+        outcome, _ = self.run_sync()
+        self.assertEqual(set(outcome.failures()), {"ios", "report"})
+
+    def test_a_run_that_changes_nothing_still_posts(self):
+        self.run_sync("--only", "playwright")
+        self.work = tempfile.mkdtemp(dir=self.root)
+        outcome, _ = self.run_sync("--only", "playwright")
+        self.assertEqual(outcome.failures(), {})
+        (message,) = self.posted
+        self.assertIn("session-foundation/session-playwright: update-localization already up to date",
+                      message["content"])
 
     def test_a_bump_alone_moves_to_localizations_tip(self):
         outcome, _ = self.run_sync("--only", "playwright")
@@ -638,6 +669,7 @@ class TestCrowdinSync(RepoTest):
         outcome, _ = self.run_sync("--only", "localization", "desktop")
         self.assertEqual(set(outcome.failures()), {"localization", "desktop"})
         self.assertEqual(self.branches("session-desktop"), ["dev"])
+        self.assertIn("desktop: failed, see the alert", self.posted[0]["content"])
 
 
 def crowdin_language(lang_id, locale, name):
