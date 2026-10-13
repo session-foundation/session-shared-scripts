@@ -194,6 +194,19 @@ class TestReconcile(unittest.TestCase):
         self.assertIn("No change since the last run. **5** open in total.",
                       messages[0]["embeds"][0]["description"])
 
+    def test_an_unchanged_run_saves_its_state_even_when_discord_is_down(self):
+        self.run_reconcile(recording(), "--seed")
+        state = duplicates.load(self.state)
+        for slot in state["slots"].values():
+            slot["count"] = 99
+        duplicates.save(self.state, state)
+        with mock.patch.object(reconcile.discord, "post_to_discord", return_value=0), \
+                mock.patch.dict(os.environ, {"CROWDIN_DISCORD_WEBHOOK_URL": "https://hook"}), \
+                self.assertRaisesRegex(SystemExit, "no-change summary"):
+            self.run_reconcile(recording())
+        counts = {slot["count"] for slot in duplicates.load(self.state)["slots"].values()}
+        self.assertNotIn(99, counts)
+
     def test_croql_checks_only_its_candidates_and_resolves_the_rest(self):
         self.run_reconcile(recording(), "--seed")
         exchanges = recording() + [{
