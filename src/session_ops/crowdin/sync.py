@@ -219,7 +219,7 @@ def main(argv=None):
         print(message)
     else:
         payload = {"content": message, "allowed_mentions": {"parse": []}}
-        # A target, not a raise, so the alert still lists every target's failure.
-        posted = discord.post_to_discord(http.Session(), webhook, [payload]) == 1
-        errors["report"] = None if posted else "Discord did not accept the summary"
+        if discord.post_to_discord(http.Session(), webhook, [payload]) != 1:
+            # Reported as a target so the alert still lists the others' failures.
+            errors["report"] = "Discord did not accept the summary"
     return Outcome(targets=errors)
