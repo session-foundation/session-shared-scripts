@@ -293,11 +293,9 @@ def quoted_para(text):
 def transcript_blocks(turns, translated):
     """One turn at a time, as readable paragraphs.
 
-    Deliberately not transcript.render_transcript's output re-split on blank lines: a
-    turn whose own text contains a blank line gets torn into several pieces that
-    way, which is what made the first version render as a row of disconnected code
-    boxes. The speaker line leads each turn and the body follows as prose — nothing
-    extracts this text, so it wants readability, not byte fidelity.
+    One speaker line per turn; a turn's own blank lines split its paragraphs, never
+    the turn. The body is prose, not a code box: nothing extracts this text, so it
+    wants readability, not byte fidelity.
     """
     english = {}
     for item in translated or []:
@@ -1093,6 +1091,22 @@ def run_english(session, subdomain, model, ticket, comments, command, dry_run):
                     public=False, as_html=True, drop_tags=[TAG_QUEUED, TAG_ERROR])
 
 
+def post_english_note(session, subdomain, model, ticket):
+    """One ticket's note, if it needs one. Returns 1 if a note was written, else 0."""
+    comments = api.fetch_comments(session, subdomain, ticket["id"], optional=True)
+    if comments is None:
+        return 0
+    outcome, detail = translate_conversation(session, subdomain, model, ticket, comments)
+    if outcome != "ready":
+        print(f"#{ticket['id']}: no English note ({outcome}"
+              + (f": {detail})" if outcome == "failed" else ")"))
+        return 0
+    turns, rendered, latest = detail
+    write_to_ticket(session, subdomain, ticket["id"], english_note(turns, rendered, latest),
+                    public=False, as_html=True)
+    return 1
+
+
 def post_english_notes(session, subdomain, tickets, findings, model):
     """The digest's `claude: english`, unasked: the same private note on every ticket
     in the run the classifier did not call English.
@@ -1119,23 +1133,14 @@ def post_english_notes(session, subdomain, tickets, findings, model):
             print(f"Note: #{finding.get('id')} was classified {finding.get('language')!r} "
                   f"but never fetched; no English note.")
             continue
-        comments = api.fetch_comments(session, subdomain, ticket["id"], optional=True)
-        if comments is None:
-            continue
-        outcome, detail = translate_conversation(session, subdomain, model, ticket, comments)
-        if outcome != "ready":
-            print(f"#{ticket['id']}: no English note ({outcome}"
-                  + (f": {detail})" if outcome == "failed" else ")"))
-            continue
-        turns, rendered, latest = detail
         try:
-            write_to_ticket(session, subdomain, ticket["id"],
-                            english_note(turns, rendered, latest),
-                            public=False, as_html=True)
+            written += post_english_note(session, subdomain, model, ticket)
         except (SystemExit, requests.RequestException) as exc:
             print(f"Note: could not post the English note on #{ticket['id']} ({exc}).")
-            continue
-        written += 1
+        except Exception as exc:  # noqa: BLE001 - one ticket must not take the digest down
+            # The type only: the message of an unexpected error may carry ticket text.
+            print(f"Note: the English note on #{ticket['id']} failed "
+                  f"({type(exc).__name__}).")
     # Printed even at zero, so a run that wrote nothing reads differently in the
     # journal from one that never reached this step.
     print(f"Posted an English note on {written} of {len(candidates)} non-English ticket(s).")

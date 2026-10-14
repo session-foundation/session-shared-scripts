@@ -506,7 +506,7 @@ def hydrate_descriptions(session, subdomain, tickets):
     return hydrated
 
 
-# ---- English transcript, for the reply dialog -------------------------------
+# ---- The classification request ---------------------------------------------
 
 
 def compact_ticket(ticket):
@@ -670,8 +670,7 @@ COLLAPSED_CATEGORY = "abuse_report"
 # Character budget for the links on that line, so a day of nothing but abuse reports
 # can't push it past MAX_MESSAGE_CHARS. Past it the rest are counted, not linked.
 COLLAPSED_LINKS_CHARS = 900
-# Every other ticket the model did not flag goes on one line under it, linked and
-# grouped by category: counted only in the tally, a ticket left the digest unseen.
+# Every other classified ticket, linked once, one line per category under it.
 UNFLAGGED_MARKER = "💤"
 
 # ---- Components V2 ---------------------------------------------------------
@@ -759,34 +758,35 @@ def build_collapsed_line(collapsed, subdomain):
             f"actionable ({', '.join(links)})")
 
 
-def build_unflagged_line(unflagged, subdomain):
-    """The tickets nobody is asked to look at, as one line under the abuse reports:
+def build_unflagged_lines(unflagged, subdomain):
+    """The tickets nobody is asked to look at: one (line, linked ids) per category,
+    most common first, under the abuse reports.
 
-        💤 **5** not flagged — 🔑 #28891, #28880 · ❓ #28870, #28866 · 💡 #28900
+        💤 🔑 **2** not flagged — #28891, #28880
 
-    Grouped by category, most common first, so the emoji says what each run is
-    without a summary per ticket. Links share COLLAPSED_LINKS_CHARS the same way, and
-    the count always covers every one of them.
+    Each category has its own COLLAPSED_LINKS_CHARS, so a busy category cannot push
+    a rarer one off the digest. Only linked tickets are returned as covered: one past
+    the budget stays eligible for the next run rather than being recorded unseen.
     """
     by_category = {}
     for f in unflagged:
         by_category.setdefault(f.get("category"), []).append(f)
-    groups, used, unlisted = [], 0, 0
+    out = []
     for category, members in sorted(by_category.items(), key=lambda kv: -len(kv[1])):
-        links = []
+        links, linked, used = [], set(), 0
         for f in members:
             link = f"[#{f.get('id')}]({ticket_url(subdomain, f.get('id'))})"
             used += len(link) + 2
             if used > COLLAPSED_LINKS_CHARS:
-                unlisted += 1
-                continue
+                break
             links.append(link)
-        if links:
-            groups.append(f"{CATEGORY_EMOJI.get(category, '•')} {', '.join(links)}")
-    if unlisted:
-        groups.append(f"+{unlisted} more")
-    return (f"{UNFLAGGED_MARKER} **{len(unflagged)}** not flagged — "
-            + " · ".join(groups))
+            linked.add(f.get("id"))
+        unlisted = len(members) - len(links)
+        if unlisted:
+            links.append(f"+{unlisted} more")
+        out.append((f"{UNFLAGGED_MARKER} {CATEGORY_EMOJI.get(category, '•')} "
+                    f"**{len(members)}** not flagged — {', '.join(links)}", linked))
+    return out
 
 
 def build_header(findings, highlights, stats=None):
@@ -895,13 +895,9 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
     collapsed = [f for f in findings if is_collapsed(f)]
     collapsed_ids = {f.get("id") for f in collapsed}
     unflagged = [f for f in findings if f.get("id") not in shown_ids | omitted_ids | collapsed_ids]
-    unflagged_ids = {f.get("id") for f in unflagged}
 
     # The highlights that didn't fit are covered by no message and stay eligible next
-    # run. The two summary lines account for every ticket they count, links or not,
-    # so re-reporting those next run would be noise.
-    header_ids = ({f.get("id") for f in findings}
-                  - shown_ids - omitted_ids - collapsed_ids - unflagged_ids)
+    # run. The abuse-report line accounts for every report it counts, links or not.
     header = build_header(findings, shown + omitted, stats)
     if omitted:
         header += (f"\nShowing the top **{len(shown)}** of "
@@ -914,13 +910,10 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
     # Last, under the individual tickets: lowest position for the lowest priority.
     if collapsed:
         entries.append((build_collapsed_line(collapsed, subdomain), collapsed_ids))
-    if unflagged:
-        entries.append((build_unflagged_line(unflagged, subdomain), unflagged_ids))
+    entries += build_unflagged_lines(unflagged, subdomain)
 
-    messages, coverage = discord.messages_from_entries(
+    return discord.messages_from_entries(
         header, entries, MAX_ENTRIES_PER_MESSAGE, MAX_COMPONENT_CHARS)
-    coverage[0] |= header_ids
-    return messages, coverage
 
 
 def main(argv=None):
@@ -1116,15 +1109,6 @@ def main(argv=None):
     print(f"{len(findings)} tickets classified; {len(shown) + len(omitted)} worth looking into"
           + (f" ({len(omitted)} beyond the display cap)." if omitted else "."))
 
-    # Every classified ticket, not just the highlights: whoever opens one from any
-    # line of the digest, or straight from the queue, reads it in English.
-    #
-    # Gated on the post actually happening, not just on --dry-run: --no-discord is
-    # the flag CI runs with, and neither CI nor a rehearsal may write to production
-    # tickets.
-    if needs_discord and not rehearsing():
-        post_english_notes(zd, subdomain, classified, findings, MODEL)
-
     messages, coverage = build_messages(findings, subdomain, stats, updated_ids)
     if args.dry_run:
         print(json.dumps(messages, indent=2, ensure_ascii=False))
@@ -1158,6 +1142,13 @@ def main(argv=None):
         kept, pruned = save_state(args.state, state, recorded, args.state_retention_days)
         print(f"Recorded {len(recorded)} tickets; state now tracks {kept} "
               f"({pruned} pruned beyond {args.state_retention_days} days).")
+
+    # After the post and the state, so a slow translation can never hold up or lose
+    # the digest. Abuse reports are left out: nobody acts on them. Only on a run that
+    # posts: neither CI (--no-discord) nor a rehearsal may write to production tickets.
+    if not rehearsing():
+        post_english_notes(zd, subdomain, classified,
+                           [f for f in findings if not is_collapsed(f)], MODEL)
 
     if posted < len(messages):
         sys.exit(f"Aborted after {posted}/{len(messages)} messages; "

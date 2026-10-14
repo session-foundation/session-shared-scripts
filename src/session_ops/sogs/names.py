@@ -8,8 +8,7 @@ posted recently has no name to find.
 
 from base64 import b64decode
 
-# Module imports both ways: ban and names import each other at load time.
-from session_ops.sogs import ban
+from session_ops.sogs.errors import SogsError
 
 # The most GET /room/<token>/messages/recent returns.
 RECENT_LIMIT = 256
@@ -77,25 +76,29 @@ def display_name(data_b64):
     return name.decode('utf-8', 'replace') or None
 
 
-def recent_names(client, rooms, session_ids):
-    """Looks each 05 id up in every room's recent messages.
+def recent_names(client, rooms, owners):
+    """Looks accounts up in every room's recent messages.
 
-    Returns ({id: name}, [(room token, status)]). An id that posted is in the dict, with
-    the name from its newest post (None if that post carried none); an id that did not
-    is absent. The list names the rooms that could not be read, so a missing id is not
-    mistaken for one that never posted.
+    `owners` maps each id form an account can post under (05 and both blinded 15
+    forms) to the 05 id to report it as. Returns ({id: name}, [(room token, why)]).
+    An id that posted is in the dict, with the name from its newest post (None if
+    that post carried none); an id that did not is absent. The list names the rooms
+    that could not be read, so a missing id is not mistaken for one that never
+    posted. Never raises: the lookup is informational and must not stop a ban.
     """
-    owner = {b: sid for sid in session_ids for b in ban.blinded_ids(sid, client.server_pubkey)}
-    owner.update({sid: sid for sid in session_ids})
     newest, unread = {}, []
     for room in rooms:
         token = room['token']
-        code, messages = client.request('GET', f'/room/{token}/messages/recent?limit={RECENT_LIMIT}')
+        try:
+            code, messages = client.request('GET', f'/room/{token}/messages/recent?limit={RECENT_LIMIT}')
+        except SogsError as e:
+            unread.append((token, str(e)))
+            continue
         if code != 200 or not isinstance(messages, list):
             unread.append((token, code))
             continue
         for m in messages:
-            sid = owner.get(m.get('session_id'))
+            sid = owners.get(m.get('session_id'))
             # A deleted message stays in the list with its data nulled.
             if not sid or not m.get('data'):
                 continue

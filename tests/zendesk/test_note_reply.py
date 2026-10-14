@@ -224,8 +224,8 @@ class EnglishTranscript(unittest.TestCase):
             turns, [{"index": 0, "english": "my app crashes"}]))
 
     def test_a_turn_with_blank_lines_stays_one_turn(self):
-        """The first version split render_transcript's output on blank lines, which
-        tore a single multi-paragraph message into a row of disconnected boxes."""
+        """A multi-paragraph message is one turn with several paragraphs, never
+        several turns."""
         turns = [{"index": 0, "who": "Customer", "when": "2026-09-03 10:00 UTC",
                   "body": "Hallo,\n\nzweiter Absatz.\n\ndritter Absatz."}]
         blocks = note_reply.transcript_blocks(turns, [])

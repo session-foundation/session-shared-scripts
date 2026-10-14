@@ -15,7 +15,7 @@ URL = "https://acme.zendesk.com/api/v2/tickets/7/comments.json"
 
 class TestFetchUser(unittest.TestCase):
     def test_an_unreachable_zendesk_is_an_unknown_author_not_an_error(self):
-        """attach_english promises never to raise; an unknown author counts as a customer."""
+        """post_english_notes promises never to raise; an unknown author counts as a customer."""
         self.assertEqual(api.fetch_user(FakeSession([requests.ConnectionError("down")]),
                                         "acme", 5), {})
 

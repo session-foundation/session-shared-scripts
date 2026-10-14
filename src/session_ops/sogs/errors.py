@@ -1,0 +1,2 @@
+class SogsError(RuntimeError):
+    pass

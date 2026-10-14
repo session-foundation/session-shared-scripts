@@ -9,7 +9,6 @@ Everything here is offline — no Zendesk, Claude, or Discord calls. The fetch
 tests drive fetch_tickets with a stub session instead.
 """
 import contextlib
-import inspect
 import io
 import json
 import os
@@ -721,6 +720,10 @@ class TestUnflaggedLine(unittest.TestCase):
     def quiet(self, ticket_id, category="account_access"):
         return finding(ticket_id, category=category, worth_looking_into=False)
 
+    def lines(self, findings):
+        return [l for l in digest_text(build_messages(findings, "acme")).splitlines()
+                if "not flagged" in l]
+
     def test_an_unflagged_ticket_is_linked(self):
         text = digest_text(build_messages([finding(1), self.quiet(2)], "acme"))
         self.assertIn("[#2](https://acme.zendesk.com/agent/tickets/2)", text)
@@ -734,40 +737,44 @@ class TestUnflaggedLine(unittest.TestCase):
         self.assertIn("abuse report", lines[-2])
         self.assertIn("not flagged", lines[-1])
 
-    def test_tickets_are_grouped_by_category_most_common_first(self):
-        findings = [self.quiet(1, "question"), self.quiet(2, "account_access"),
-                    self.quiet(3, "account_access")]
-        line = triage.build_unflagged_line(findings, "acme")
-        recovery, question = (triage.CATEGORY_EMOJI[c] for c in ("account_access", "question"))
-        self.assertLess(line.index(recovery), line.index(question))
-        self.assertEqual(line.count(recovery), 1)
+    def test_one_line_per_category_most_common_first(self):
+        findings = [self.quiet(1, "question"), self.quiet(2), self.quiet(3)]
+        lines = self.lines(findings)
+        self.assertEqual(len(lines), 2)
+        self.assertIn(triage.CATEGORY_EMOJI["account_access"] + " **2**", lines[0])
+        self.assertIn(triage.CATEGORY_EMOJI["question"] + " **1**", lines[1])
+
+    def test_a_busy_category_cannot_hide_a_rare_one(self):
+        """One shared budget let fifteen questions push the lone recovery ticket into
+        "+N more", which was then recorded as reported without ever being shown."""
+        findings = [self.quiet(28000 + i, "question") for i in range(15)] + [self.quiet(28891)]
+        messages, coverage = triage.build_messages(findings, "acme")
+        self.assertIn("[#28891]", digest_text(messages))
+        self.assertIn(28891, set().union(*coverage))
+
+    def test_a_ticket_past_the_budget_is_not_recorded(self):
+        findings = [self.quiet(27000 + i) for i in range(200)]
+        messages, coverage = triage.build_messages(findings, "acme")
+        covered, text = set().union(*coverage), digest_text(messages)
+        for f in findings:
+            self.assertEqual(f["id"] in covered, f"[#{f['id']}]" in text, f["id"])
+        self.assertIn("**200** not flagged", text)
+        self.assertRegex(text, r"\+\d+ more")
 
     def test_abuse_reports_and_highlights_are_not_repeated_on_it(self):
         findings = [finding(1), finding(2, category="abuse_report", severity="not_applicable"),
                     self.quiet(3)]
-        line = [l for l in digest_text(build_messages(findings, "acme")).splitlines()
-                if "not flagged" in l][0]
+        line, = self.lines(findings)
         self.assertNotIn("[#1]", line)
         self.assertNotIn("[#2]", line)
-        self.assertIn("**1** not flagged", line)
 
     def test_highlights_beyond_the_cap_stay_off_it(self):
         """Those stay eligible for the next run rather than being marked seen."""
         findings = [finding(i, priority_rank=i) for i in range(triage.MAX_HIGHLIGHTS + 2)]
-        self.assertNotIn("not flagged", digest_text(build_messages(findings, "acme")))
-
-    def test_it_covers_the_tickets_it_counts(self):
-        messages, coverage = triage.build_messages([finding(1), self.quiet(2)], "acme")
-        self.assertIn(2, set().union(*coverage))
-
-    def test_a_long_run_of_links_is_clipped_but_fully_counted(self):
-        line = triage.build_unflagged_line([self.quiet(27000 + i) for i in range(200)], "acme")
-        self.assertLess(len(line), triage.MAX_MESSAGE_CHARS)
-        self.assertIn("**200** not flagged", line)
-        self.assertRegex(line, r"\+\d+ more$")
+        self.assertEqual(self.lines(findings), [])
 
     def test_no_line_when_every_ticket_is_flagged(self):
-        self.assertNotIn("not flagged", digest_text(build_messages([finding(1)], "acme")))
+        self.assertEqual(self.lines([finding(1)]), [])
 
 
 # ---- Parsing helpers -------------------------------------------------------
@@ -1960,11 +1967,39 @@ class TestEnglishTranscript(unittest.TestCase):
 
     def test_a_run_that_posts_nothing_writes_nothing(self):
         """--no-discord is the flag CI runs with, and CI must not write to production
-        tickets. Guarded at the call site by `needs_discord`."""
-        source = inspect.getsource(triage.main)
-        call = source.index("post_english_notes(")
-        guard = source.rindex("if needs_discord", 0, call)
-        self.assertNotIn("\n    ", source[guard:call].rstrip())
+        tickets: the notes come after the post, past every early return."""
+        for flag in ("--no-discord", "--dry-run"):
+            with self.subTest(flag=flag):
+                seen = []
+                with tempfile.TemporaryDirectory() as directory:
+                    path = os.path.join(directory, "findings.json")
+                    with open(path, "w", encoding="utf-8") as handle:
+                        json.dump([finding(1, language="German")], handle)
+                    with Patched(triage, post_english_notes=lambda *a: seen.append(a)), \
+                            mock.patch.dict(os.environ, {"ZENDESK_SUBDOMAIN": "acme"}), \
+                            contextlib.redirect_stdout(io.StringIO()):
+                        triage.main(["--findings", path, flag])
+                self.assertEqual(seen, [])
+
+    def test_the_notes_come_after_the_post(self):
+        """A slow translation must never hold up, or time out, the digest."""
+        order = []
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "findings.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump([finding(1, language="German")], handle)
+            with Patched(triage, post_english_notes=lambda *a: order.append("notes"),
+                         post_to_discord=lambda s, u, m: order.append("post") or len(m)), \
+                    mock.patch.dict(os.environ, {"ZENDESK_SUBDOMAIN": "acme",
+                                                 "ZENDESK_DISCORD_WEBHOOK_URL": "https://x/y"}), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                triage.main(["--findings", path])
+        self.assertEqual(order, ["post", "notes"])
+
+    def test_abuse_reports_are_not_translated(self):
+        seen = self.run_main([finding(1, language="German"),
+                              finding(2, category="abuse_report", language="German")], {})
+        self.assertEqual([f["id"] for f in seen[0][3]], [1])
 
     def test_the_transcript_uses_the_same_model_as_the_classification(self):
         seen = self.run_main([finding(1)], {})
@@ -2046,6 +2081,38 @@ class TestEnglishTranscript(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(note_reply.post_english_notes(
                 object(), "acme", [{"id": 1}], [{"id": 1, "language": "German"}], "m"), 0)
+
+    def test_comments_that_cannot_be_fetched_skip_the_ticket(self):
+        calls = []
+        with Patched(api, fetch_comments=lambda *a, **k: None), \
+                Patched(claude_cli, claude_cli_json=lambda *a, **k: calls.append(a)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            got = note_reply.post_english_notes(object(), "acme", [{"id": 1}],
+                                                [{"id": 1, "language": "German"}], "m")
+        self.assertEqual((got, calls), (0, []))
+
+    def test_no_failure_on_one_ticket_reaches_the_digest(self):
+        """A network error on the write, and anything unforeseen, are both logged and
+        skipped; the next ticket is still translated."""
+        for error in (requests.ConnectionError("down"), KeyError("turns")):
+            with self.subTest(error=type(error).__name__):
+                writes = []
+
+                def write(*a, **k):
+                    writes.append(a[2])
+                    if a[2] == 1:
+                        raise error
+
+                with Patched(note_reply, write_to_ticket=write), \
+                        Patched(api, fetch_comments=lambda *a, **k: [],
+                                conversation_turns=lambda *a: self.GERMAN_TURNS), \
+                        Patched(claude_cli, claude_cli_json=lambda *a, **k: {
+                            "turns": [{"index": 0, "english": "It does not work."}]}), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    got = note_reply.post_english_notes(
+                        object(), "acme", [{"id": 1}, {"id": 2}],
+                        [{"id": 1, "language": "German"}, {"id": 2, "language": "German"}], "m")
+                self.assertEqual((got, writes), (1, [1, 2]))
 
     def test_a_run_that_wrote_nothing_says_so(self):
         """A run that wrote nothing and a run that never reached this step must read

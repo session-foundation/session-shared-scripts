@@ -8,6 +8,7 @@ from base64 import b64encode
 from nacl.signing import SigningKey
 
 from session_ops.sogs import ban, names
+from session_ops.sogs.errors import SogsError
 from tests.sogs.test_ban import BLINDED_ABS, SERVER_PUBKEY, SESSION_ID
 
 OTHER_ID = ban.session_id_of(SigningKey(bytes(range(32))))
@@ -39,14 +40,20 @@ def post(sid, posted, data):
     return {'session_id': sid, 'posted': posted, 'data': data}
 
 
+def owners(*sids):
+    pub = bytes.fromhex(SERVER_PUBKEY)
+    return {form: sid for sid in sids for form in (sid, *ban.blinded_ids(sid, pub))}
+
+
 class FakeClient:
     def __init__(self, by_room):
-        self.server_pubkey = bytes.fromhex(SERVER_PUBKEY)
         self.by_room = by_room
 
     def request(self, method, path, body_json=None):
-        token = path.split('/')[2]
-        return self.by_room[token]
+        answer = self.by_room[path.split('/')[2]]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
 
 
 class TestDisplayName(unittest.TestCase):
@@ -71,24 +78,35 @@ class TestRecentNames(unittest.TestCase):
             'a': (200, [post(BLINDED_ABS, 10, message_data('Old')), post(BLINDED_ABS, 30, message_data('New'))]),
             'b': (200, [post(BLINDED_ABS, 20, message_data('Middle'))]),
         })
-        found, unread = names.recent_names(client, [{'token': 'a'}, {'token': 'b'}], [SESSION_ID])
+        found, unread = names.recent_names(client, [{'token': 'a'}, {'token': 'b'}], owners(SESSION_ID))
         self.assertEqual(found, {SESSION_ID: 'New'})
         self.assertEqual(unread, [])
 
     def test_an_account_that_did_not_post_is_absent(self):
         client = FakeClient({'a': (200, [post(BLINDED_ABS, 10, message_data('Someone'))])})
-        found, _ = names.recent_names(client, [{'token': 'a'}], [OTHER_ID])
+        found, _ = names.recent_names(client, [{'token': 'a'}], owners(OTHER_ID))
         self.assertEqual(found, {})
 
     def test_a_deleted_post_is_skipped(self):
         client = FakeClient({'a': (200, [post(BLINDED_ABS, 10, None)])})
-        found, _ = names.recent_names(client, [{'token': 'a'}], [SESSION_ID])
+        found, _ = names.recent_names(client, [{'token': 'a'}], owners(SESSION_ID))
         self.assertEqual(found, {})
 
     def test_an_unreadable_room_is_reported(self):
         client = FakeClient({'a': (403, 'nope'), 'b': (200, [])})
-        _, unread = names.recent_names(client, [{'token': 'a'}, {'token': 'b'}], [SESSION_ID])
+        _, unread = names.recent_names(client, [{'token': 'a'}, {'token': 'b'}], owners(SESSION_ID))
         self.assertEqual(unread, [('a', 403)])
+
+
+class TestUnreachableRoom(unittest.TestCase):
+    def test_a_room_that_times_out_is_reported_not_raised(self):
+        """The lookup is informational; a timeout on one room must not stop the ban."""
+        client = FakeClient({'a': SogsError('GET /room/a failed: timed out'),
+                             'b': (200, [post(BLINDED_ABS, 10, message_data('Mallory'))])})
+        found, unread = names.recent_names(client, [{'token': 'a'}, {'token': 'b'}],
+                                           owners(SESSION_ID))
+        self.assertEqual(found, {SESSION_ID: 'Mallory'})
+        self.assertEqual([t for t, _ in unread], ['a'])
 
 
 class TestDescribePoster(unittest.TestCase):

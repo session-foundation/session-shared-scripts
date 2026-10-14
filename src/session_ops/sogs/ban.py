@@ -113,6 +113,7 @@ import requests
 from nacl.signing import SigningKey
 
 from session_ops.sogs import names as sogs_names
+from session_ops.sogs.errors import SogsError
 
 try:
     from session_util import blinding, xed25519
@@ -133,10 +134,6 @@ SOGS_PUBKEY = 'a03c383cf63c3c4efe67acc52112a6dd734b3a946b9545f488aaa93da7991238'
 
 HTTP_TIMEOUT = 30
 
-
-
-class SogsError(RuntimeError):
-    pass
 
 
 class PartialBan(SogsError):
@@ -487,7 +484,8 @@ def main():
         print(f"  {step}")
 
     print()
-    names, unread = sogs_names.recent_names(client, rooms, ids)
+    owners = {form: sid for sid in ids for form in (sid, *blinded_ids(sid, server_pubkey))}
+    names, unread = sogs_names.recent_names(client, rooms, owners)
     for sid in ids:
         print(f"  {sid}  {describe_poster(sid, names)}")
     for token, code in unread:
