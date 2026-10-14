@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 from session_ops.shared import discord
-from session_ops.zendesk import api, claude_cli, transcript, triage
+from session_ops.zendesk import api, claude_cli, note_reply, transcript, triage
 from session_ops.shared.testing import (
     FakeResponse, FakeSession, NonJsonResponse, Patched)
 
@@ -1783,8 +1783,8 @@ if __name__ == "__main__":
 
 
 class TestEnglishTranscript(unittest.TestCase):
-    """The digest writes the English the reply dialog reads. It runs before the post
-    because the Comment button only exists on a card the post creates."""
+    """The digest posts `claude: english`'s private note on every non-English ticket
+    it classifies, so nobody has to ask for one."""
 
     def test_a_ticket_the_classifier_called_english_is_left_alone(self):
         """Translating English into English would put a machine's wording in front of
@@ -1857,45 +1857,9 @@ class TestEnglishTranscript(unittest.TestCase):
 
     # ---- rendering ---------------------------------------------------------
 
-    def test_python_owns_the_timestamps_and_the_speaker_labels(self):
-        """Asked to format the transcript itself, a model can drop a turn, merge two,
-        or date one it was never given — and each is invisible in the output."""
-        turns = [{"index": 0, "who": "Customer", "when": "2026-08-28 00:22 UTC",
-                  "body": "Es geht nicht."},
-                 {"index": 1, "who": "Support", "when": "2026-08-28 01:31 UTC",
-                  "body": "Have you tried?"}]
-        got = transcript.render_transcript(turns, [
-            {"index": 0, "english": "It does not work."},
-            {"index": 1, "english": "Have you tried?"},
-        ])
-        self.assertEqual(got,
-                         "2026-08-28 00:22 UTC Customer:\nIt does not work.\n\n"
-                         "2026-08-28 01:31 UTC Support:\nHave you tried?")
-
-    def test_a_turn_the_model_skipped_keeps_its_original_text(self):
-        """Untranslated is a degraded transcript. Missing is a conversation that reads
-        as if that turn never happened."""
-        turns = [{"index": 0, "who": "Customer", "when": "", "body": "Es geht nicht."},
-                 {"index": 1, "who": "Customer", "when": "", "body": "Immer noch."}]
-        got = transcript.render_transcript(turns, [{"index": 0, "english": "Broken."}])
-        self.assertIn("Broken.", got)
-        self.assertIn("Immer noch.", got)
-
-    def test_a_scrambled_index_does_not_shift_every_later_turn(self):
-        """The model echoes indexes back. Matching by position instead would put one
-        speaker's words under another's name for the rest of the transcript."""
-        turns = [{"index": 0, "who": "Customer", "when": "", "body": "eins"},
-                 {"index": 1, "who": "Support", "when": "", "body": "zwei"}]
-        got = transcript.render_transcript(turns, [{"index": 1, "english": "two"},
-                                                   {"index": 0, "english": "one"}])
-        self.assertEqual(got, "Customer:\none\n\nSupport:\ntwo")
-
-    def test_an_unparseable_timestamp_leaves_the_turn_labelled(self):
+    def test_an_unparseable_timestamp_leaves_the_turn_unstamped(self):
         self.assertEqual(api.stamp_minutes("not a date"), "")
         self.assertEqual(api.stamp_minutes(None), "")
-        got = transcript.render_transcript(
-            [{"index": 0, "who": "Customer", "when": "", "body": "x"}], [])
-        self.assertEqual(got, "Customer:\nx")
 
     def test_the_stamp_is_minutes_not_seconds(self):
         """This dates a turn for somebody reading a conversation; seconds are noise in
@@ -1905,124 +1869,100 @@ class TestEnglishTranscript(unittest.TestCase):
 
     # ---- the run -----------------------------------------------------------
 
-    def test_nothing_happens_until_the_field_exists(self):
-        """The field is not in Zendesk yet. Until its id is configured the digest has
-        to behave exactly as it did before — no comment fetches, no Claude calls, no
-        writes."""
-        calls = []
-        with Patched(transcript, conversation_turns=lambda *a: calls.append(a),
-                     claude_cli_json=lambda *a, **k: calls.append(a)):
-            written = transcript.attach_english(object(), "acme", [{"id": 1}],
-                                                [{"id": 1, "language": "German"}],
-                                                "claude-sonnet-5", field_id=None)
-        self.assertEqual(written, 0)
-        self.assertEqual(calls, [])
+    GERMAN_TURNS = [{"index": 0, "who": "Customer", "when": "2026-08-28 00:22 UTC",
+                     "body": "Es geht nicht."}]
 
-    def test_nothing_happens_without_a_zendesk_session(self):
-        """--findings never builds one: the findings already exist and no ticket was
-        ever fetched, so there is nothing to read comments from or write back to."""
-        self.assertEqual(
-            transcript.attach_english(None, "acme", [{"id": 1}],
-                                      [{"id": 1, "language": "German"}],
-                                      "claude-sonnet-5", field_id=42),
-            0)
+    def run_notes(self, tickets, findings, comments=(), translated=None, session=object()):
+        """post_english_notes with Zendesk and Claude faked. Returns (count, notes, out)."""
+        notes, out = [], io.StringIO()
+        translated = translated or (lambda *a, **k: {
+            "turns": [{"index": 0, "english": "It does not work."}]})
+        with Patched(api, fetch_comments=lambda *a, **k: list(comments),
+                     conversation_turns=lambda *a: self.GERMAN_TURNS), \
+                Patched(claude_cli, claude_cli_json=translated), \
+                Patched(note_reply, write_to_ticket=lambda *a, **k: notes.append((a, k))), \
+                contextlib.redirect_stdout(out):
+            got = note_reply.post_english_notes(session, "acme", tickets, findings,
+                                                "claude-sonnet-5")
+        return got, notes, out.getvalue()
 
-    def test_a_run_that_posts_no_card_writes_nothing(self):
-        """--no-discord is the flag CI runs with. No post means no Comment button,
-        so a transcript written on that path is a write to a production ticket for a
-        dialog nobody can open. Guarded at the call site by `needs_discord`."""
-        source = inspect.getsource(triage.main)
-        call = source.index("attach_english(")
-        guard = source.rindex("if needs_discord:", 0, call)
-        self.assertNotIn("\n    ", source[guard:call].rstrip())
-
-    def test_the_transcript_uses_the_same_model_as_the_classification(self):
+    def run_main(self, findings, env):
+        """triage.main over --findings, recording post_english_notes' arguments."""
         seen = []
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "findings.json")
             with open(path, "w", encoding="utf-8") as handle:
-                json.dump([finding(1)], handle)
-            with Patched(triage, attach_english=lambda *a: seen.append(a[4]),
-                         post_to_discord=lambda session, url, messages: len(messages)), \
-                    mock.patch.dict(os.environ, {"ZENDESK_SUBDOMAIN": "acme",
-                                                 "ZENDESK_DISCORD_WEBHOOK_URL": "https://x/y"}), \
-                    contextlib.redirect_stdout(io.StringIO()):
-                triage.main(["--findings", path])
-        self.assertEqual(seen, [claude_cli.MODEL])
-
-    def test_a_rehearsal_writes_no_transcript(self):
-        seen = []
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "findings.json")
-            with open(path, "w", encoding="utf-8") as handle:
-                json.dump([finding(1)], handle)
-            with Patched(triage, attach_english=lambda *a: seen.append(a[5]),
+                json.dump(findings, handle)
+            with Patched(triage, post_english_notes=lambda *a: seen.append(a),
                          post_to_discord=lambda session, url, messages: len(messages)), \
                     mock.patch.dict(os.environ, {"ZENDESK_SUBDOMAIN": "acme",
                                                  "ZENDESK_DISCORD_WEBHOOK_URL": "https://x/y",
-                                                 "ZENDESK_ENGLISH_FIELD_ID": "42",
-                                                 "SESSION_OPS_REHEARSAL": "1"}), \
+                                                 **env}), \
                     contextlib.redirect_stdout(io.StringIO()):
                 triage.main(["--findings", path])
-        self.assertEqual(seen, [None])
+        return seen
+
+    def test_a_run_that_posts_nothing_writes_nothing(self):
+        """--no-discord is the flag CI runs with, and CI must not write to production
+        tickets. Guarded at the call site by `needs_discord`."""
+        source = inspect.getsource(triage.main)
+        call = source.index("post_english_notes(")
+        guard = source.rindex("if needs_discord", 0, call)
+        self.assertNotIn("\n    ", source[guard:call].rstrip())
+
+    def test_the_transcript_uses_the_same_model_as_the_classification(self):
+        seen = self.run_main([finding(1)], {})
+        self.assertEqual([a[4] for a in seen], [claude_cli.MODEL])
+
+    def test_a_rehearsal_writes_no_transcript(self):
+        self.assertEqual(self.run_main([finding(1)], {"SESSION_OPS_REHEARSAL": "1"}), [])
 
     def test_unflagged_tickets_are_translated_too(self):
         """A ticket with no card of its own is still opened from the digest or the
         queue, and whoever opens it should read it in English."""
-        seen = []
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "findings.json")
-            with open(path, "w", encoding="utf-8") as handle:
-                json.dump([finding(1), finding(2, worth_looking_into=False, language="German")],
-                          handle)
-            with Patched(triage, attach_english=lambda *a: seen.extend(f["id"] for f in a[3]),
-                         post_to_discord=lambda session, url, messages: len(messages)), \
-                    mock.patch.dict(os.environ, {"ZENDESK_SUBDOMAIN": "acme",
-                                                 "ZENDESK_DISCORD_WEBHOOK_URL": "https://x/y"}), \
-                    contextlib.redirect_stdout(io.StringIO()):
-                triage.main(["--findings", path])
-        self.assertEqual(sorted(seen), [1, 2])
+        seen = self.run_main([finding(1), finding(2, worth_looking_into=False,
+                                                  language="German")], {})
+        self.assertEqual(sorted(f["id"] for f in seen[0][3]), [1, 2])
 
-    def said(self, **kwargs):
-        """attach_english's console output for one call."""
-        out = io.StringIO()
-        defaults = dict(session=object(), subdomain="acme", tickets=[], findings=[],
-                        model="claude-sonnet-5", field_id=42)
-        defaults.update(kwargs)
-        with contextlib.redirect_stdout(out):
-            transcript.attach_english(**defaults)
-        return out.getvalue()
+    def test_a_non_english_ticket_gets_a_private_note(self):
+        got, notes, _ = self.run_notes([{"id": 1}, {"id": 2}],
+                                       [{"id": 1, "language": "German"},
+                                        {"id": 2, "language": "English"}])
+        self.assertEqual(got, 1)
+        (args, kwargs), = notes
+        self.assertEqual(args[2], 1)
+        self.assertIs(kwargs["public"], False)
+        self.assertIn("It does not work.", args[3])
+        self.assertIn("Customer:", args[3])
 
-    def test_a_run_that_wrote_nothing_says_so(self):
-        """The count printed only when it was non-zero, so a run that wrote nothing
-        and a run that never reached this step read identically in the journal — the
-        one thing somebody checking whether the feature is on needs to tell apart."""
-        with Patched(transcript, conversation_turns=lambda *a: None):
-            said = self.said(tickets=[{"id": 1}],
-                             findings=[{"id": 1, "language": "German"}])
-        self.assertIn("0 of 1", said)
+    def test_the_note_is_the_one_claude_english_writes(self):
+        """Same note, same marker: a transcript either one wrote stops the other
+        repeating it until somebody writes again."""
+        _, notes, _ = self.run_notes([{"id": 1}], [{"id": 1, "language": "German"}],
+                                     comments=[{"id": 5, "public": True, "body": "x"}])
+        self.assertIn(note_reply.english_marker(5), notes[0][0][3])
 
-    def test_an_unset_field_id_says_which_variable_is_missing(self):
-        said = self.said(field_id=None, findings=[{"id": 1, "language": "German"}])
-        self.assertIn(transcript.ENGLISH_FIELD_ENV, said)
+    def test_a_ticket_already_transcribed_is_not_re_rendered(self):
+        calls = []
+        comments = [{"id": 6, "public": False, "body": note_reply.english_marker(5)},
+                    {"id": 5, "public": True, "body": "x"}]
+        got, notes, _ = self.run_notes([{"id": 1}], [{"id": 1, "language": "German"}],
+                                       comments=comments,
+                                       translated=lambda *a, **k: calls.append(a))
+        self.assertEqual((got, notes, calls), (0, [], []))
 
-    def test_an_all_english_digest_says_so_rather_than_nothing(self):
-        said = self.said(findings=[{"id": 1, "language": "English"},
-                                   {"id": 2, "language": "English"}])
-        self.assertIn("No non-English tickets", said)
-        self.assertIn("2", said)
+    def test_a_conversation_that_turns_out_english_gets_no_note(self):
+        got, notes, _ = self.run_notes(
+            [{"id": 1}], [{"id": 1, "language": "German"}],
+            translated=lambda *a, **k: {"turns": [{"index": 0, "english": "Es geht nicht."}]})
+        self.assertEqual((got, notes), (0, []))
 
-    def test_a_ticket_that_was_classified_but_never_fetched_is_named(self):
-        said = self.said(tickets=[], findings=[{"id": 99, "language": "German"}])
-        self.assertIn("99", said)
-        self.assertIn("never fetched", said)
-
-    def test_a_ticket_with_no_public_comments_is_named(self):
-        with Patched(transcript, conversation_turns=lambda *a: None):
-            said = self.said(tickets=[{"id": 7}],
-                             findings=[{"id": 7, "language": "German"}])
-        self.assertIn("7", said)
-        self.assertIn("no public comments", said)
+    def test_nothing_happens_without_a_zendesk_session(self):
+        """--findings never builds one: the findings already exist and no ticket was
+        ever fetched, so there is nothing to read comments from or write back to."""
+        got, notes, _ = self.run_notes([{"id": 1}], [{"id": 1, "language": "German"}],
+                                       session=None)
+        self.assertEqual((got, notes), (0, []))
 
     def test_one_ticket_that_cannot_be_rendered_does_not_stop_the_digest(self):
         """claude_cli_json exits on a failed call, which is right for the
@@ -2031,51 +1971,45 @@ class TestEnglishTranscript(unittest.TestCase):
         def explode(*args, **kwargs):
             raise SystemExit("claude exited 1")
 
-        written = []
-        with Patched(transcript,
-                     conversation_turns=lambda *a: [
-                         {"index": 0, "who": "Customer", "when": "", "body": "x"}],
-                     claude_cli_json=explode,
-                     write_english_field=lambda *a: written.append(a) or True):
-            got = transcript.attach_english(
-                object(), "acme", [{"id": 1}, {"id": 2}],
-                [{"id": 1, "language": "German"}, {"id": 2, "language": "German"}],
-                "claude-sonnet-5", field_id=42)
-        self.assertEqual(got, 0)
-        self.assertEqual(written, [])
+        got, notes, out = self.run_notes([{"id": 1}, {"id": 2}],
+                                         [{"id": 1, "language": "German"},
+                                          {"id": 2, "language": "German"}],
+                                         translated=explode)
+        self.assertEqual((got, notes), (0, []))
+        self.assertIn("claude exited 1", out)
 
-    def test_the_transcript_is_written_to_the_configured_field(self):
-        puts = []
-        with Patched(transcript,
-                     conversation_turns=lambda *a: [
-                         {"index": 0, "who": "Customer", "when": "2026-08-28 00:22 UTC",
-                          "body": "Es geht nicht."}],
-                     claude_cli_json=lambda *a, **k: {
-                         "turns": [{"index": 0, "english": "It does not work."}]},
-                     write_english_field=lambda *a: puts.append(a) or True):
-            got = transcript.attach_english(
-                object(), "acme", [{"id": 1}, {"id": 2}],
-                [{"id": 1, "language": "German"}, {"id": 2, "language": "English"}],
-                "claude-sonnet-5", field_id=42)
-        self.assertEqual(got, 1)
-        # The English ticket was never touched; the German one carries the transcript.
-        self.assertEqual([(p[2], p[3]) for p in puts], [(1, 42)])
-        self.assertIn("Customer:", puts[0][4])
-        self.assertIn("It does not work.", puts[0][4])
+    def test_a_rejected_note_does_not_stop_the_digest(self):
+        def reject(*a, **k):
+            raise SystemExit("Zendesk rejected the note on #1 (422).")
 
-    def test_a_ticket_with_no_matching_row_is_skipped(self):
-        """--findings and a partial fetch both leave findings whose ticket was never
-        loaded. There is nothing to read comments from, so there is nothing to do."""
-        with Patched(transcript,
-                     conversation_turns=lambda *a: [
-                         {"index": 0, "who": "Customer", "when": "", "body": "x"}],
-                     claude_cli_json=lambda *a, **k: {"turns": []},
-                     write_english_field=lambda *a: True):
-            self.assertEqual(
-                transcript.attach_english(object(), "acme", [],
-                                          [{"id": 99, "language": "German"}],
-                                          "claude-sonnet-5", field_id=42),
-                0)
+        with Patched(note_reply, write_to_ticket=reject), \
+                Patched(api, fetch_comments=lambda *a, **k: [],
+                        conversation_turns=lambda *a: self.GERMAN_TURNS), \
+                Patched(claude_cli, claude_cli_json=lambda *a, **k: {
+                    "turns": [{"index": 0, "english": "It does not work."}]}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(note_reply.post_english_notes(
+                object(), "acme", [{"id": 1}], [{"id": 1, "language": "German"}], "m"), 0)
+
+    def test_a_run_that_wrote_nothing_says_so(self):
+        """A run that wrote nothing and a run that never reached this step must read
+        differently in the journal."""
+        _, _, out = self.run_notes([{"id": 1}], [{"id": 1, "language": "German"}],
+                                   translated=lambda *a, **k: {
+                                       "turns": [{"index": 0, "english": "Es geht nicht."}]})
+        self.assertIn("0 of 1", out)
+
+    def test_an_all_english_digest_says_so_rather_than_nothing(self):
+        _, _, out = self.run_notes([], [{"id": 1, "language": "English"},
+                                        {"id": 2, "language": "English"}])
+        self.assertIn("No non-English tickets", out)
+        self.assertIn("2", out)
+
+    def test_a_ticket_that_was_classified_but_never_fetched_is_named(self):
+        _, notes, out = self.run_notes([], [{"id": 99, "language": "German"}])
+        self.assertEqual(notes, [])
+        self.assertIn("99", out)
+        self.assertIn("never fetched", out)
 
 
 class TestCustomerSide(unittest.TestCase):

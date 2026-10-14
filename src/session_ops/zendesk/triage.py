@@ -86,7 +86,7 @@ from session_ops.zendesk.api import (REVIEW_CHANNEL, SEARCH_RESULT_LIMIT, fetch_
                                      review_platform, review_stars, ticket_url,
                                      zendesk_session)
 from session_ops.zendesk.claude_cli import MODEL, claude_cli_json
-from session_ops.zendesk.transcript import ENGLISH_FIELD_ENV, attach_english
+from session_ops.zendesk.note_reply import post_english_notes
 
 # Never analyzed. A store review cannot be answered the way a ticket can: it takes
 # one developer response, replacing any previous one, with no way to ask a follow-up
@@ -1084,11 +1084,10 @@ def main(argv=None):
     # line of the digest, or straight from the queue, reads it in English.
     #
     # Gated on the post actually happening, not just on --dry-run: --no-discord is
-    # the flag CI runs with, and CI must not write to production tickets. A
-    # rehearsal passes no field, so it writes nothing.
-    if needs_discord:
-        attach_english(zd, subdomain, classified, findings, MODEL,
-                       None if rehearsing() else get_env(ENGLISH_FIELD_ENV, required=False))
+    # the flag CI runs with, and neither CI nor a rehearsal may write to production
+    # tickets.
+    if needs_discord and not rehearsing():
+        post_english_notes(zd, subdomain, classified, findings, MODEL)
 
     messages, coverage = build_messages(findings, subdomain, stats, updated_ids)
     if args.dry_run:

@@ -62,6 +62,8 @@ import re
 import sys
 import textwrap
 
+import requests
+
 from session_ops.shared.discord import clip
 from session_ops.shared.env import get_env
 from session_ops.shared.text import undash_english
@@ -1014,31 +1016,27 @@ def already_english(turns, translated):
                for turn in turns)
 
 
-def run_english(session, subdomain, model, ticket, comments, command, dry_run):
-    """Put the conversation on the ticket in English, as a private note.
+def translate_conversation(session, subdomain, model, ticket, comments):
+    """The conversation on a ticket in English, or why there is none.
+
+    Returns (outcome, detail): ("current", None) when a transcript already covers the
+    newest public comment, ("empty", None), ("english", None) when the conversation
+    is already English, ("failed", the reason), or ("ready", (turns, rendered, latest)).
 
     Reads both sides, not just the customer's: their second message is usually an
     answer to a reply, and without the reply it reads as a complaint about nothing.
 
-    Python owns the speaker labels and timestamps and the model only translates —
-    the same split transcript.py makes, for the same reason: a model asked to format the
-    transcript can drop a turn, merge two, or date one it was never given, and each
-    of those is invisible in the output.
+    Python owns the speaker labels and timestamps and the model only translates: a
+    model asked to format the transcript can drop a turn, merge two, or date one it
+    was never given, and each of those is invisible in the output.
     """
     ticket_id = ticket["id"]
     latest = next((c.get("id") for c in comments if c.get("public")), None)
     if latest is not None and api.has_marker(comments, english_marker(latest)):
-        say(session, subdomain, ticket_id, command["id"],
-            "The English transcript on this ticket is already up to date — nothing "
-            "has been said since it was written.", dry_run, error=False)
-        return
+        return "current", None
     turns = api.conversation_turns(session, subdomain, ticket)
     if not turns:
-        say(session, subdomain, ticket_id, command["id"],
-            "There are no public comments on this ticket to translate.", dry_run,
-            error=False)
-        return
-
+        return "empty", None
     payload = json.dumps([{"index": t["index"], "speaker": t["who"], "text": t["body"]}
                           for t in turns], ensure_ascii=False)
     try:
@@ -1047,28 +1045,101 @@ def run_english(session, subdomain, model, ticket, comments, command, dry_run):
             clip(payload, transcript.TRANSCRIPT_INPUT_CHARS),
             transcript.ENGLISH_TIMEOUT_SECONDS, f"the English transcript of #{ticket_id}")
     except SystemExit as exc:
+        return "failed", str(exc)
+    # A transcript of English text repeats what is already a few comments above it.
+    if already_english(turns, rendered.get("turns")):
+        return "english", None
+    return "ready", (turns, rendered, latest)
+
+
+def english_note(turns, rendered, latest, command_id=None):
+    """The private note carrying the transcript. Its english_marker is what stops
+    either the command or the digest writing the same transcript twice."""
+    markers = ([done_marker(command_id)] if command_id is not None else []) + [english_marker(latest)]
+    return "".join(
+        [para(f"This conversation in English — {len(turns)} turn(s), both sides."),
+         para("Translated for reading; the customer has not seen this.")]
+        + transcript_blocks(turns, rendered.get("turns"))
+        + [para(" ".join(markers))])
+
+
+def run_english(session, subdomain, model, ticket, comments, command, dry_run):
+    """Put the conversation on the ticket in English, as a private note."""
+    ticket_id = ticket["id"]
+    outcome, detail = translate_conversation(session, subdomain, model, ticket, comments)
+    answers = {
+        "current": "The English transcript on this ticket is already up to date — nothing "
+                   "has been said since it was written.",
+        "empty": "There are no public comments on this ticket to translate.",
+        "english": "This conversation is already in English, so there is nothing to "
+                   "translate.",
+    }
+    if outcome in answers:
+        say(session, subdomain, ticket_id, command["id"], answers[outcome], dry_run,
+            error=False)
+        return
+    if outcome == "failed":
         say(session, subdomain, ticket_id, command["id"],
-            f"The English transcript could not be produced: {exc} To try again, add "
+            f"The English transcript could not be produced: {detail} To try again, add "
             "a new private note reading claude: english.", dry_run)
         return
-    if already_english(turns, rendered.get("turns")):
-        # A transcript of English text repeats what is already a few comments above
-        # it. Say so rather than posting the same words back.
-        say(session, subdomain, ticket_id, command["id"],
-            "This conversation is already in English, so there is nothing to "
-            "translate.", dry_run, error=False)
-        return
+    turns, rendered, latest = detail
     print(f"#{ticket_id}: rendered {len(turns)} turn(s) in English.")
     if dry_run:
         print(f"#{ticket_id}: dry run, nothing written.")
         return
-    note = "".join(
-        [para(f"This conversation in English — {len(turns)} turn(s), both sides."),
-         para("Translated for reading; the customer has not seen this.")]
-        + transcript_blocks(turns, rendered.get("turns"))
-        + [para(f"{done_marker(command['id'])} {english_marker(latest)}")])
-    write_to_ticket(session, subdomain, ticket_id, note, public=False, as_html=True,
-                    drop_tags=[TAG_QUEUED, TAG_ERROR])
+    write_to_ticket(session, subdomain, ticket_id,
+                    english_note(turns, rendered, latest, command["id"]),
+                    public=False, as_html=True, drop_tags=[TAG_QUEUED, TAG_ERROR])
+
+
+def post_english_notes(session, subdomain, tickets, findings, model):
+    """The digest's `claude: english`, unasked: the same private note on every ticket
+    in the run the classifier did not call English.
+
+    The digest only classifies tickets that are new or changed, and the note's marker
+    is shared with the command, so a conversation is translated once per new public
+    comment whichever of the two gets there first.
+
+    Never raises: a digest that fails to post because one translation failed is a
+    worse trade than one ticket left untranslated.
+    """
+    if not session:
+        return 0
+    candidates = [f for f in findings if not transcript.is_english(f)]
+    if not candidates:
+        print(f"No non-English tickets among the {len(findings)} classified; "
+              f"no English notes to post.")
+        return 0
+    by_id = {t.get("id"): t for t in tickets}
+    written = 0
+    for finding in candidates:
+        ticket = by_id.get(finding.get("id"))
+        if not ticket:
+            print(f"Note: #{finding.get('id')} was classified {finding.get('language')!r} "
+                  f"but never fetched; no English note.")
+            continue
+        comments = api.fetch_comments(session, subdomain, ticket["id"], optional=True)
+        if comments is None:
+            continue
+        outcome, detail = translate_conversation(session, subdomain, model, ticket, comments)
+        if outcome != "ready":
+            print(f"#{ticket['id']}: no English note ({outcome}"
+                  + (f": {detail})" if outcome == "failed" else ")"))
+            continue
+        turns, rendered, latest = detail
+        try:
+            write_to_ticket(session, subdomain, ticket["id"],
+                            english_note(turns, rendered, latest),
+                            public=False, as_html=True)
+        except (SystemExit, requests.RequestException) as exc:
+            print(f"Note: could not post the English note on #{ticket['id']} ({exc}).")
+            continue
+        written += 1
+    # Printed even at zero, so a run that wrote nothing reads differently in the
+    # journal from one that never reached this step.
+    print(f"Posted an English note on {written} of {len(candidates)} non-English ticket(s).")
+    return written
 
 
 def say(session, subdomain, ticket_id, comment_id, text, dry_run, error=True):

@@ -258,6 +258,17 @@ class EnglishTranscript(unittest.TestCase):
         self.assertIn("B", joined)          # translated turn used
         self.assertIn("a", joined)          # untranslated turn falls back to original
 
+    def test_a_scrambled_index_does_not_shift_every_later_turn(self):
+        """The model echoes indexes back. Matching by position instead would put one
+        speaker's words under another's name for the rest of the transcript."""
+        turns = [{"index": 0, "who": "Customer", "when": "", "body": "eins"},
+                 {"index": 1, "who": "Support", "when": "", "body": "zwei"}]
+        joined = "".join(note_reply.transcript_blocks(
+            turns, [{"index": 1, "english": "two"}, {"index": 0, "english": "one"}]))
+        self.assertLess(joined.index("Customer:"), joined.index("one"))
+        self.assertLess(joined.index("one"), joined.index("Support:"))
+        self.assertLess(joined.index("Support:"), joined.index("two"))
+
     def test_the_transcript_note_is_never_public(self):
         turns = [{"index": 0, "who": "Customer", "when": "2026-09-03 10:00 UTC",
                   "body": "Hallo"}]
