@@ -670,6 +670,9 @@ COLLAPSED_CATEGORY = "abuse_report"
 # Character budget for the links on that line, so a day of nothing but abuse reports
 # can't push it past MAX_MESSAGE_CHARS. Past it the rest are counted, not linked.
 COLLAPSED_LINKS_CHARS = 900
+# Every other ticket the model did not flag goes on one line under it, linked and
+# grouped by category: counted only in the tally, a ticket left the digest unseen.
+UNFLAGGED_MARKER = "💤"
 
 # ---- Components V2 ---------------------------------------------------------
 #
@@ -754,6 +757,36 @@ def build_collapsed_line(collapsed, subdomain):
     return (f"{CATEGORY_EMOJI[COLLAPSED_CATEGORY]} **{len(collapsed)}** abuse report"
             f"{'' if len(collapsed) == 1 else 's'} — reported Session IDs, nothing "
             f"actionable ({', '.join(links)})")
+
+
+def build_unflagged_line(unflagged, subdomain):
+    """The tickets nobody is asked to look at, as one line under the abuse reports:
+
+        💤 **5** not flagged — 🔑 #28891, #28880 · ❓ #28870, #28866 · 💡 #28900
+
+    Grouped by category, most common first, so the emoji says what each run is
+    without a summary per ticket. Links share COLLAPSED_LINKS_CHARS the same way, and
+    the count always covers every one of them.
+    """
+    by_category = {}
+    for f in unflagged:
+        by_category.setdefault(f.get("category"), []).append(f)
+    groups, used, unlisted = [], 0, 0
+    for category, members in sorted(by_category.items(), key=lambda kv: -len(kv[1])):
+        links = []
+        for f in members:
+            link = f"[#{f.get('id')}]({ticket_url(subdomain, f.get('id'))})"
+            used += len(link) + 2
+            if used > COLLAPSED_LINKS_CHARS:
+                unlisted += 1
+                continue
+            links.append(link)
+        if links:
+            groups.append(f"{CATEGORY_EMOJI.get(category, '•')} {', '.join(links)}")
+    if unlisted:
+        groups.append(f"+{unlisted} more")
+    return (f"{UNFLAGGED_MARKER} **{len(unflagged)}** not flagged — "
+            + " · ".join(groups))
 
 
 def build_header(findings, highlights, stats=None):
@@ -861,13 +894,14 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
     omitted_ids = {f.get("id") for f in omitted}
     collapsed = [f for f in findings if is_collapsed(f)]
     collapsed_ids = {f.get("id") for f in collapsed}
+    unflagged = [f for f in findings if f.get("id") not in shown_ids | omitted_ids | collapsed_ids]
+    unflagged_ids = {f.get("id") for f in unflagged}
 
-    # The header accounts for every classified ticket except the highlights that
-    # didn't fit; those are covered by no message and stay eligible next run. The
-    # collapsed line accounts for the abuse reports, links or not — its count covers
-    # every one of them, so re-reporting them next run would be noise.
+    # The highlights that didn't fit are covered by no message and stay eligible next
+    # run. The two summary lines account for every ticket they count, links or not,
+    # so re-reporting those next run would be noise.
     header_ids = ({f.get("id") for f in findings}
-                  - shown_ids - omitted_ids - collapsed_ids)
+                  - shown_ids - omitted_ids - collapsed_ids - unflagged_ids)
     header = build_header(findings, shown + omitted, stats)
     if omitted:
         header += (f"\nShowing the top **{len(shown)}** of "
@@ -880,6 +914,8 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
     # Last, under the individual tickets: lowest position for the lowest priority.
     if collapsed:
         entries.append((build_collapsed_line(collapsed, subdomain), collapsed_ids))
+    if unflagged:
+        entries.append((build_unflagged_line(unflagged, subdomain), unflagged_ids))
 
     messages, coverage = discord.messages_from_entries(
         header, entries, MAX_ENTRIES_PER_MESSAGE, MAX_COMPONENT_CHARS)

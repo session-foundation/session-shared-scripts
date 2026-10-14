@@ -558,8 +558,8 @@ class TestBuildMessages(unittest.TestCase):
     def test_only_tickets_worth_looking_into_get_a_line(self):
         findings = [finding(1), finding(2, worth_looking_into=False)]
         text = digest_text(build_messages(findings, "acme"))
-        self.assertEqual(sum(1 for line in text.splitlines() if "[#" in line), 1)
-        self.assertIn("[#1]", text)
+        self.assertIn("| [#1]", text)
+        self.assertNotIn("| [#2]", text)
 
     def test_highlights_are_ordered_by_priority_rank(self):
         findings = [finding(1, priority_rank=3), finding(2, priority_rank=1)]
@@ -712,6 +712,62 @@ class TestCollapsedAbuseReports(unittest.TestCase):
     def test_nothing_is_clipped_when_it_fits(self):
         line = triage.build_collapsed_line([self.abuse(i) for i in range(10, 15)], "acme")
         self.assertNotIn("more", line)
+
+
+class TestUnflaggedLine(unittest.TestCase):
+    """Every ticket the model did not flag is still linked once, so a lost recovery
+    phrase the model judged routine can be found from the digest."""
+
+    def quiet(self, ticket_id, category="account_access"):
+        return finding(ticket_id, category=category, worth_looking_into=False)
+
+    def test_an_unflagged_ticket_is_linked(self):
+        text = digest_text(build_messages([finding(1), self.quiet(2)], "acme"))
+        self.assertIn("[#2](https://acme.zendesk.com/agent/tickets/2)", text)
+        self.assertIn("**1** not flagged", text)
+
+    def test_it_sits_below_the_abuse_reports(self):
+        findings = [self.quiet(2), finding(3, category="abuse_report",
+                                           severity="not_applicable"), finding(1)]
+        lines = [l for l in digest_text(build_messages(findings, "acme")).splitlines()
+                 if "[#" in l]
+        self.assertIn("abuse report", lines[-2])
+        self.assertIn("not flagged", lines[-1])
+
+    def test_tickets_are_grouped_by_category_most_common_first(self):
+        findings = [self.quiet(1, "question"), self.quiet(2, "account_access"),
+                    self.quiet(3, "account_access")]
+        line = triage.build_unflagged_line(findings, "acme")
+        recovery, question = (triage.CATEGORY_EMOJI[c] for c in ("account_access", "question"))
+        self.assertLess(line.index(recovery), line.index(question))
+        self.assertEqual(line.count(recovery), 1)
+
+    def test_abuse_reports_and_highlights_are_not_repeated_on_it(self):
+        findings = [finding(1), finding(2, category="abuse_report", severity="not_applicable"),
+                    self.quiet(3)]
+        line = [l for l in digest_text(build_messages(findings, "acme")).splitlines()
+                if "not flagged" in l][0]
+        self.assertNotIn("[#1]", line)
+        self.assertNotIn("[#2]", line)
+        self.assertIn("**1** not flagged", line)
+
+    def test_highlights_beyond_the_cap_stay_off_it(self):
+        """Those stay eligible for the next run rather than being marked seen."""
+        findings = [finding(i, priority_rank=i) for i in range(triage.MAX_HIGHLIGHTS + 2)]
+        self.assertNotIn("not flagged", digest_text(build_messages(findings, "acme")))
+
+    def test_it_covers_the_tickets_it_counts(self):
+        messages, coverage = triage.build_messages([finding(1), self.quiet(2)], "acme")
+        self.assertIn(2, set().union(*coverage))
+
+    def test_a_long_run_of_links_is_clipped_but_fully_counted(self):
+        line = triage.build_unflagged_line([self.quiet(27000 + i) for i in range(200)], "acme")
+        self.assertLess(len(line), triage.MAX_MESSAGE_CHARS)
+        self.assertIn("**200** not flagged", line)
+        self.assertRegex(line, r"\+\d+ more$")
+
+    def test_no_line_when_every_ticket_is_flagged(self):
+        self.assertNotIn("not flagged", digest_text(build_messages([finding(1)], "acme")))
 
 
 # ---- Parsing helpers -------------------------------------------------------
