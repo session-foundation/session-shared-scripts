@@ -30,6 +30,20 @@ the deletion has already walked.
 There is no flag to keep the messages or to narrow the scope: the tool exists for abuse
 reports, where both are always wanted.
 
+## Who is about to be banned
+
+Before the prompt, and in a dry run, each id is listed with the display name of its newest
+post in our rooms' last 256 messages:
+
+```
+  05abc...def  posted as 'Mallory'
+  05123...456  no recent posts
+```
+
+SOGS stores no profiles, so a name exists only in a message the account posted: an
+account that has not posted recently has none to show. A room that cannot be read is
+named under the list, since its posters would otherwise read as "no recent posts".
+
 ## Confirming the ban
 
 Each step's HTTP status is the confirmation, and the script prints one line per step:
