@@ -1080,16 +1080,14 @@ def main(argv=None):
     print(f"{len(findings)} tickets classified; {len(shown) + len(omitted)} worth looking into"
           + (f" ({len(omitted)} beyond the display cap)." if omitted else "."))
 
-    # Before the post, never after: the Comment button only exists on a digest card,
-    # so writing the rendering first is what guarantees every ticket that can reach
-    # the dialog already carries one.
+    # Every classified ticket, not just the highlights: whoever opens one from any
+    # line of the digest, or straight from the queue, reads it in English.
     #
-    # Gated on the post actually happening, not just on --dry-run. --no-discord is
-    # the flag CI runs with, and a run that posts no card creates no button — so a
-    # rendering written there would be a write to a production ticket for a dialog
-    # that can never be opened. A rehearsal passes no field, so it writes nothing.
+    # Gated on the post actually happening, not just on --dry-run: --no-discord is
+    # the flag CI runs with, and CI must not write to production tickets. A
+    # rehearsal passes no field, so it writes nothing.
     if needs_discord:
-        attach_english(zd, subdomain, classified, shown, MODEL,
+        attach_english(zd, subdomain, classified, findings, MODEL,
                        None if rehearsing() else get_env(ENGLISH_FIELD_ENV, required=False))
 
     messages, coverage = build_messages(findings, subdomain, stats, updated_ids)

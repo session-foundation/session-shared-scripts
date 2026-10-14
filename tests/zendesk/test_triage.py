@@ -1966,6 +1966,23 @@ class TestEnglishTranscript(unittest.TestCase):
                 triage.main(["--findings", path])
         self.assertEqual(seen, [None])
 
+    def test_unflagged_tickets_are_translated_too(self):
+        """A ticket with no card of its own is still opened from the digest or the
+        queue, and whoever opens it should read it in English."""
+        seen = []
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "findings.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump([finding(1), finding(2, worth_looking_into=False, language="German")],
+                          handle)
+            with Patched(triage, attach_english=lambda *a: seen.extend(f["id"] for f in a[3]),
+                         post_to_discord=lambda session, url, messages: len(messages)), \
+                    mock.patch.dict(os.environ, {"ZENDESK_SUBDOMAIN": "acme",
+                                                 "ZENDESK_DISCORD_WEBHOOK_URL": "https://x/y"}), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                triage.main(["--findings", path])
+        self.assertEqual(sorted(seen), [1, 2])
+
     def said(self, **kwargs):
         """attach_english's console output for one call."""
         out = io.StringIO()

@@ -122,16 +122,11 @@ def write_english_field(session, subdomain, ticket_id, field_id, english):
 
 
 def attach_english(session, subdomain, tickets, findings, model, field_id):
-    """Render every non-English ticket about to be posted into English, on the ticket.
+    """Render every non-English ticket in the run into English, on the ticket.
 
-    Runs before the digest is posted, and that order is the whole design: the Comment
-    button exists only on a digest card, so a ticket that reaches the dialog has
-    necessarily been through here first. relay.py can then read the field it needs
-    without a Claude call of its own — which it has no time for, being on the three
-    seconds Discord allows a dialog that cannot be deferred.
-
-    Scoped to the tickets that actually get a button. Translating the rest would be
-    paying for every ticket in the window to serve the handful anybody replies to.
+    One call per non-English ticket the run classified. The digest only classifies
+    tickets that are new or changed since they were last reported, so a ticket is
+    translated again only when its conversation has moved on.
 
     Never raises: this is enrichment, and a digest that fails to post because a
     translation failed would be a worse trade than a dialog showing German.
@@ -143,7 +138,7 @@ def attach_english(session, subdomain, tickets, findings, model, field_id):
         return 0
     candidates = [f for f in findings if not is_english(f)]
     if not candidates:
-        print(f"No non-English tickets among the {len(findings)} being posted; "
+        print(f"No non-English tickets among the {len(findings)} classified; "
               f"no English transcripts to write.")
         return 0
     by_id = {t.get("id"): t for t in tickets}
