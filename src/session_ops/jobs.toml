@@ -101,6 +101,20 @@ max_age_hours = 27
 timeout = "5min"
 
 [[job]]
+name = "store-versions"
+description = "Store releases against GitHub releases, posted as they diverge"
+entry = "session_ops.store_versions.job:main"
+args = ["--state", "{state}/state.json"]
+user = "sessionops"
+env_files = ["/etc/session-ops/store-versions.env"]
+env = ["STORE_VERSIONS_DISCORD_WEBHOOK_URL"]
+channel_env = "STORE_VERSIONS_DISCORD_WEBHOOK_URL"
+# Unauthenticated GitHub allows 60 requests an hour; this makes 36, one per repo a run.
+schedule = "*:0/5"
+max_age_hours = 1
+timeout = "4min"
+
+[[job]]
 name = "crowdin-sync"
 description = "Crowdin translations into the platform repos"
 entry = "session_ops.crowdin.sync:main"

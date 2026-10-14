@@ -1,0 +1,11 @@
+# /etc/session-ops/store-versions.toml: who each platform's warnings tag. Not a
+# secret: mode 644. Without it, warnings tag nobody.
+
+[tag]
+#android = [111111111111111111]
+#android-fdroid-merged = [111111111111111111]
+#android-fdroid-live = [111111111111111111]
+#ios = [222222222222222222]
+#desktop = [333333333333333333]
+#desktop-flathub-merged = [333333333333333333]
+#desktop-flathub-live = [333333333333333333]

@@ -1,5 +1,5 @@
-"""GitHub's REST API for the jobs that publish to the platform repos: who they
-authenticate as, and the pull requests they keep open.
+"""GitHub's REST API: the org's releases, and for the jobs that publish to the platform
+repos, who they authenticate as and the pull requests they keep open.
 
 Publishing authenticates as a GitHub App, with an installation token minted per run
 and scoped to the repositories the job names: it expires in an hour, and pull
@@ -114,6 +114,13 @@ def check(resp, what):
     if resp.status_code >= 400:
         raise RuntimeError(f"GitHub {resp.status_code} {what}: {resp.text[:200]}")
     return resp.json() if resp.content else None
+
+
+def latest_release(api, repo):
+    """(tag, page URL) of `repo`'s latest release: published, neither draft nor prerelease."""
+    release = check(api.request("GET", f"{API}/repos/{repo}/releases/latest"),
+                    f"reading {repo}'s latest release")
+    return release["tag_name"], release.get("html_url", "")
 
 
 def app_jwt(app_id, private_key, now=None):
