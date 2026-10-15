@@ -5,7 +5,7 @@ import unittest
 
 from session_ops.store_versions.transitions import (
     ALL_CLEAR, INFO_GITHUB, INFO_STORE, SOURCE_FAILING, SOURCE_RECOVERED, WARNING,
-    WARNING_REMINDER, WARNING_UPDATE, evaluate, source_events)
+    WARNING_LOWERED, WARNING_REMINDER, WARNING_UPDATE, evaluate, source_events)
 
 DAY = 12 * 3600
 
@@ -203,14 +203,14 @@ class TestWatermark(unittest.TestCase):
                               reminder_seconds=DAY)
             posted.append(kinds(result))
             state = result.state
-        self.assertEqual(posted, [[], [WARNING], [], [WARNING_UPDATE]])
+        self.assertEqual(posted, [[], [WARNING], [], [WARNING_LOWERED]])
         self.assertEqual((result.events[0].store, result.state["warned_at"]), ("1.5", 8 * 3600))
 
     def test_a_lowered_watermark_updates_a_shrinking_gap(self):
         state = evaluate(None, "1.6", "1.8", now=0).state
         state = evaluate(state, "1.6", "1.7", now=3600).state
         result = evaluate(state, "1.6", "1.7", now=7 * 3600)
-        self.assertEqual(kinds(result), [WARNING_UPDATE])
+        self.assertEqual(kinds(result), [WARNING_LOWERED])
         self.assertEqual(result.events[0].store, "1.7")
 
 class TestPrereleases(unittest.TestCase):

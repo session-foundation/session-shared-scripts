@@ -147,6 +147,17 @@ class TestJob(unittest.TestCase):
             failures.append(str(raised.exception))
         self.assertEqual(failures[0], failures[1])
 
+    def test_a_lowered_watermark_is_not_titled_as_a_growing_gap(self):
+        run = Run({"session-ios": "2.15.5", "session-desktop": "1.18.2"},
+                  {"appstore": "2.15.7", "deb": "1.18.2"})
+        run(now=0.0)
+        run.stores["appstore"] = "2.15.6"
+        run(now=3600.0)
+        run(now=8 * 3600.0)
+        title = titles(run.posted)[-1]
+        self.assertNotIn("grew", title)
+        self.assertIn("App Store is ahead of GitHub — App Store came down to 2.15.6", title)
+
     def test_every_request_has_a_deadline_inside_the_units_timeout(self):
         run = Run({"session-ios": "2.15.5"}, {"appstore": "2.15.6"})
         run()

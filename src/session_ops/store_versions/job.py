@@ -40,7 +40,7 @@ from session_ops.shared.state import write_json
 from session_ops.store_versions import sources
 from session_ops.store_versions.transitions import (
     ALL_CLEAR, INFO_GITHUB, INFO_STORE, SOURCE_RECOVERED, WARNING,
-    WARNING_REMINDER, WARNING_UPDATE, WARNINGS, evaluate, source_events)
+    WARNING_LOWERED, WARNING_REMINDER, WARNING_UPDATE, WARNINGS, evaluate, source_events)
 
 TAGS_FILE = "/etc/session-ops/store-versions.toml"
 STATE_VERSION = 1
@@ -172,6 +172,7 @@ def event_message(platform, event, github_url, store_url, tags):
         direction, description = gap(platform, event)
         suffix = {WARNING: " (first check)" if event.initial else "",
                   WARNING_UPDATE: " — divergence grew",
+                  WARNING_LOWERED: f" — {store} came down to {event.store}",
                   WARNING_REMINDER: " — still unresolved"}[event.kind]
         embed.update(color=RED, title=f"⚠️ {platform.display}: {direction}{suffix}",
                      description=description)

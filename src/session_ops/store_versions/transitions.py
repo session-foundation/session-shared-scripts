@@ -10,11 +10,12 @@ from session_ops.store_versions.sources import compare
 
 WARNING = "warning"
 WARNING_UPDATE = "warning_update"
+WARNING_LOWERED = "warning_lowered"
 WARNING_REMINDER = "warning_reminder"
 ALL_CLEAR = "all_clear"
 INFO_GITHUB = "info_github"
 INFO_STORE = "info_store"
-WARNINGS = (WARNING, WARNING_UPDATE, WARNING_REMINDER)
+WARNINGS = (WARNING, WARNING_UPDATE, WARNING_LOWERED, WARNING_REMINDER)
 
 # Longer than the hours iTunes and Flathub's CDN take to stop re-serving an old version.
 WATERMARK_SECONDS = 6 * 3600
@@ -82,7 +83,11 @@ def evaluate(prev, github, store, *, prereleases=(), strict_sync=False, now=0.0,
         events.append(Event(WARNING, github, high))
         warned_at = now
     elif out_of_sync:
-        if (store_ahead and new_high) or (store_behind and github_advanced) or lowered:
+        # A lowered watermark can shrink the gap or flip its direction, so it is not "grew".
+        if lowered:
+            events.append(Event(WARNING_LOWERED, github, high))
+            warned_at = now
+        elif (store_ahead and new_high) or (store_behind and github_advanced):
             events.append(Event(WARNING_UPDATE, github, high))
             warned_at = now
         elif reminder_seconds is not None and now - warned_at >= reminder_seconds:
