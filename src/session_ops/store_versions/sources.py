@@ -142,13 +142,16 @@ def fetch_deb(session, base_url, package, suite="sid", component="main", arch="a
 
 
 def packages_version(text, package):
-    """The Version: of `package` in a Packages index, or None."""
+    """The highest Version: of `package` in a Packages index, or None: a repo can keep
+    several versions of one package."""
+    versions = []
     for stanza in re.split(r"\n\s*\n", text):
         fields = dict(line.split(":", 1) for line in stanza.splitlines()
                       if ":" in line and not line.startswith(" "))
         if fields.get("Package", "").strip() == package and fields.get("Version"):
-            return fields["Version"].strip()
-    return None
+            versions.append(fields["Version"].strip())
+    by_upstream = functools.cmp_to_key(lambda a, b: compare(deb_upstream(a), deb_upstream(b)))
+    return max(versions, key=by_upstream) if versions else None
 
 
 def fetch_fdroid(session, base_url, app_id):

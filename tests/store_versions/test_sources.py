@@ -47,6 +47,12 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(sources.packages_version(self.PACKAGES, "session-desktop"), "1:1.18.2-1")
         self.assertIsNone(sources.packages_version(self.PACKAGES, "nope"))
 
+    def test_packages_takes_the_highest_of_several_versions(self):
+        text = ("Package: session-desktop\nVersion: 1.18.2\n\n"
+                "Package: session-desktop\nVersion: 1.18.10\n\n"
+                "Package: session-desktop\nVersion: 1.9.0\n")
+        self.assertEqual(sources.packages_version(text, "session-desktop"), "1.18.10")
+
     def test_fdroid_takes_the_highest_version_code(self):
         index = {"packages": {"app": [{"versionCode": 9, "versionName": "9.0.0"},
                                       {"versionCode": 10, "versionName": "10.0.0"},
