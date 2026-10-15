@@ -671,6 +671,7 @@ COLLAPSED_CATEGORY = "abuse_report"
 COLLAPSED_LINKS_CHARS = 900
 # Every other classified ticket, linked once, one line per category under it.
 UNFLAGGED_MARKER = "💤"
+NON_ENGLISH_MARKER = "🌐"
 
 # ---- Components V2 ---------------------------------------------------------
 #
@@ -788,6 +789,39 @@ def build_unflagged_lines(unflagged, subdomain):
     return out
 
 
+def is_english(finding):
+    """Unknown counts as English: a thin classification is likelier than a ticket
+    nobody here can read."""
+    language = (finding.get("language") or "").strip().lower()
+    return language in ("", "unknown") or language.startswith("english")
+
+
+def build_non_english_line(findings, subdomain, updated_ids):
+    """The tickets reported for the first time that are not in English, for an agent to
+    answer `claude: english` on. None when there are none.
+
+        🌐 **2** new, not in English — #28891 German, #28880 Russian
+
+    Covers no ticket: each is accounted for by its own line elsewhere in the digest.
+    """
+    members = [f for f in findings if f.get("id") not in updated_ids and not is_english(f)]
+    if not members:
+        return None
+    links, used = [], 0
+    for f in members:
+        link = (f"[#{f.get('id')}]({ticket_url(subdomain, f.get('id'))}) "
+                f"{clip(f.get('language'), 20)}")
+        used += len(link) + 2
+        if used > COLLAPSED_LINKS_CHARS:
+            break
+        links.append(link)
+    unlisted = len(members) - len(links)
+    if unlisted:
+        links.append(f"+{unlisted} more")
+    return (f"{NON_ENGLISH_MARKER} **{len(members)}** new, not in English — "
+            f"{', '.join(links)}", set())
+
+
 def build_header(findings, highlights, stats=None):
     """The lead lines: what was looked at, the category tally, duplicate clusters.
 
@@ -901,7 +935,10 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
     if omitted:
         header += (f"\nShowing the top **{len(shown)}** of "
                    f"**{len(shown) + len(omitted)}** worth looking into.")
-    entries = [
+    non_english = build_non_english_line(findings, subdomain, updated_ids)
+    # First, under the header: it is the run's to-do list for `claude: english`.
+    entries = [non_english] if non_english else []
+    entries += [
         (build_ticket_line(f, subdomain, is_update=f.get("id") in updated_ids),
          {f.get("id")})
         for f in shown

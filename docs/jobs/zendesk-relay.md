@@ -42,26 +42,9 @@ there are several.
 | --- | --- | --- |
 | `claude: draft - <brief>` | Compose the reply from the brief, in the requester's language. A second `draft` amends the one already there rather than starting over | no |
 | `claude: reply [n]` | Publish the chosen option verbatim, status -> `pending` | **yes** |
-| `claude: english` | Post the conversation, both sides, in English. Says so and writes nothing when the ticket is already English | no |
+| `claude: english` | Post the conversation, both sides, in English. Says so and writes nothing when the ticket is already English. Too long to send whole, it drops the oldest turns and says how many | no |
 | `claude: explain` | Post what support usually replied to this kind of ticket, what was actually done about it, and the caveats | no |
 | `claude: solve [reason]` | Solve without writing to the customer, for tickets that need no reply. The note records who decided and why | no comment, but **solving fires the CSAT automation** |
-
-The same transcript is also posted unasked, when the customer writes on a ticket that
-is not in English (see the second trigger below). It shares `claude: english`'s marker,
-so whichever gets there first stops the other repeating it until there is a new public
-comment. It answers nobody: an English conversation, a failed translation or an
-app-store review leaves only a line in the journal, and nothing is tagged. It costs one
-Claude call per burst of customer messages, English ones included: the language is
-judged from the translation, because a character test calls unaccented German English.
-
-The relay waits 60 seconds after a customer message, restarted by each further one on
-that ticket, before translating, and never runs two jobs on one ticket at once: a
-message arriving mid-run gets one more run after it. A relay restart drops a wait in
-progress; that ticket is translated on the customer's next message, or by
-`claude: english`.
-
-A conversation too long to send whole loses its oldest turns, never its newest, and
-the note says how many were left out.
 
 ## Why a draft is always reviewed
 
@@ -145,14 +128,6 @@ A trigger, and a webhook it calls:
 - **Trigger** — conditions: *Ticket is Updated*, *Comment is Private*, *Comment text
   contains `claude:`*, and *Current user is not* the automation user. Actions: notify
   the webhook, and add the tag `claude-queued`.
-- **Second trigger, the customer wrote** — conditions: *Comment is Public*, *Current
-  user is (end-user)*, and *Channel is not* the app-store review integration. Action:
-  notify the same webhook with `{"ticket_id": "{{ticket.id}}", "event": "customer"}`,
-  and no tag. It runs `note_reply --english-if-needed`, which never acts on a command.
-  App-store reviews are refused in the code as well, whatever these conditions say.
-
-Any other `event` is refused with a 400, so a misconfigured trigger cannot fall
-through to the command path.
 
 ## Required Secrets
 
@@ -172,5 +147,4 @@ uv run zendesk-note-reply --ticket 27603 --dry-run
 ```
 
 A ticket with no command note prints `no command note to act on` and stops, so this
-is safe to point at anything. `--english-if-needed --dry-run` shows what the customer
-trigger would do.
+is safe to point at anything.

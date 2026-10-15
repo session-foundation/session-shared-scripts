@@ -1077,10 +1077,9 @@ def translate_conversation(session, subdomain, model, ticket, comments):
     return "ready", (turns, rendered, latest, omitted)
 
 
-def english_note(turns, rendered, latest, omitted=0, command_id=None):
-    """The private note carrying the transcript. Its english_marker is what stops
-    either the command or the customer trigger writing the same transcript twice."""
-    markers = ([done_marker(command_id)] if command_id is not None else []) + [english_marker(latest)]
+def english_note(turns, rendered, latest, omitted, command_id):
+    """The private note carrying the transcript. Its english_marker is what stops a
+    second `claude: english` writing the same transcript before anything new is said."""
     left_out = ([para(f"The {omitted} earliest turn(s) are left out: the conversation is "
                       "too long to translate whole.")] if omitted else [])
     return "".join(
@@ -1088,7 +1087,7 @@ def english_note(turns, rendered, latest, omitted=0, command_id=None):
          para("Translated for reading; the customer has not seen this.")]
         + left_out
         + transcript_blocks(turns, rendered.get("turns"))
-        + [para(" ".join(markers))])
+        + [para(f"{done_marker(command_id)} {english_marker(latest)}")])
 
 
 def transcript_landed(session, subdomain, ticket_id, latest):
@@ -1129,39 +1128,6 @@ def run_english(session, subdomain, model, ticket, comments, command, dry_run):
     write_to_ticket(session, subdomain, ticket_id,
                     english_note(turns, rendered, latest, omitted, command["id"]),
                     public=False, as_html=True, drop_tags=[TAG_QUEUED, TAG_ERROR])
-
-
-def run_auto_english(session, subdomain, model, ticket, comments, dry_run):
-    """`claude: english`, unasked, after the customer writes: the same private note,
-    posted only when the conversation is not English and no transcript covers it yet.
-
-    The note's marker is shared with the command, so whichever writes first stops the
-    other repeating it until there is a new public comment. Nobody asked, so there is
-    no one to answer: every outcome other than a note goes to the journal only, and
-    nothing is tagged.
-    """
-    ticket_id = ticket["id"]
-    # App-store reviews take one developer response, not a conversation, and they
-    # are most of the account: refused here whatever the trigger's conditions say.
-    if api.is_store_review(ticket):
-        print(f"#{ticket_id}: an app-store review; no English note.")
-        return
-    outcome, detail = translate_conversation(session, subdomain, model, ticket, comments)
-    if outcome != "ready":
-        print(f"#{ticket_id}: no English note ({outcome}"
-              + (f": {detail})" if outcome == "failed" else ")"))
-        return
-    turns, rendered, latest, omitted = detail
-    print(f"#{ticket_id}: rendered {len(turns)} turn(s) in English.")
-    if dry_run:
-        print(f"#{ticket_id}: dry run, nothing written.")
-        return
-    if transcript_landed(session, subdomain, ticket_id, latest):
-        print(f"#{ticket_id}: another run posted this transcript first; nothing written.")
-        return
-    write_to_ticket(session, subdomain, ticket_id,
-                    english_note(turns, rendered, latest, omitted),
-                    public=False, as_html=True)
 
 
 def say(session, subdomain, ticket_id, comment_id, text, dry_run, error=True):
@@ -1225,9 +1191,6 @@ def main(argv=None):
     parser.add_argument("--ticket", type=int, required=True)
     parser.add_argument("--dry-run", action="store_true",
                         help="do everything except write to Zendesk")
-    parser.add_argument("--english-if-needed", action="store_true",
-                        help="ignore commands; post the English transcript if the "
-                             "conversation needs one (the customer just wrote)")
     args = parser.parse_args(argv)
     model = claude_cli.MODEL
 
@@ -1243,10 +1206,6 @@ def main(argv=None):
         print(f"#{args.ticket}: closed, so Zendesk takes no comments. Nothing done.")
         return
     comments = api.fetch_comments(session, subdomain, args.ticket)
-
-    if args.english_if_needed:
-        run_auto_english(session, subdomain, model, ticket, comments, args.dry_run)
-        return
 
     command = latest_command(comments, api_user, session, subdomain)
     if not command:

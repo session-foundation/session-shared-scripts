@@ -43,13 +43,13 @@ The star-floor machinery (`partition_reviews`, `--review-star-floor`, `--include
 ## What else is out of scope
 
 - **`pending` tickets.** Somebody already replied and the ball is with the customer; the "Pending to Solved" automation resolves them after 72h. The query is `status<pending`, so `new` and `open` only.
-- **Tickets only we touched.** The window is on `updated>`, and `updated_at` moves on any change — a tag edit, the hourly automation, and every private note the relay writes, the automatic English transcripts included. So the run drops anything whose `requester_updated_at` falls outside the window. Measured on a real 72h window: 79 fetched, 23 the requester had actually touched.
+- **Tickets only we touched.** The window is on `updated>`, and `updated_at` moves on any change — a tag edit, the hourly automation, and every private note the `claude:` commands write. So the run drops anything whose `requester_updated_at` falls outside the window. Measured on a real 72h window: 79 fetched, 23 the requester had actually touched.
 
 ## Content-free tickets
 
 Twitter DM tickets arrive with `description` identical to `subject` — both just `"Conversation with <handle>"` — which is 15% of non-review tickets and unclassifiable as fetched. For those only, `hydrate_descriptions` fetches a page of up to 10 comments and joins every body that differs from the subject into the description; later replies often carry the actual detail. Hydration is an enrichment, so an HTTP error or an unreachable endpoint leaves the ticket as-is rather than failing the run (`--no-hydrate` to skip it entirely).
 
-The script (`zendesk-triage`, [triage.py](../../src/session_ops/zendesk/triage.py)) fetches the tickets in a rolling time window, classifies the whole batch in one schema-enforced request through the Claude Code CLI, and posts a Discord digest: a short header, one line per ticket worth looking into, then the abuse reports and the unflagged tickets.
+The script (`zendesk-triage`, [triage.py](../../src/session_ops/zendesk/triage.py)) fetches the tickets in a rolling time window, classifies the whole batch in one schema-enforced request through the Claude Code CLI, and posts a Discord digest: a short header, the new tickets not in English, one line per ticket worth looking into, then the abuse reports and the unflagged tickets.
 
 Each line leads with a severity marker, a category emoji and a platform icon, links the ticket id, and carries the model's one-line summary plus its root-cause guess:
 
@@ -59,6 +59,7 @@ Backlog: **428** awaiting a reply, excluding app-store reviews (**5,252** more a
 **9** worth looking into.
 ⭐ **6** · 🐛 **3** · ❓ **2** · 🔇 **2** · 🔑 **1** · ⚖️ **1** · 🔒 **1**
 Likely duplicates: **push-notifications-not-delivered** ×5 (#27637, #27610, #27606, #27605)
+🌐 **2** new, not in English — #27610 German, #27648 Russian
 🚨 | ⚖️ | ❔ | #27632 · Police summons demanding user details for a Session ID
 🚨 | 🔒 | 🤖 | #27603 · Exported component lets another app obtain internal SharedPreferences | Likely cause: Improperly exported provider allowing external apps to trigger file sharing
 🟠 | ⭐ | 🍎 | #27610 · Messages not delivered for days; nothing shows even after opening | Likely cause: Push notification delivery / message retrieval failure
@@ -75,6 +76,8 @@ Likely duplicates: **push-notifications-not-delivered** ×5 (#27637, #27610, #27
 | Platform | 🤖 Android · 🍎 iOS · 🖥️ desktop (all three) · 🌐 multiple · ❔ unknown |
 
 The header accounts for the batch in full, so nothing is dropped silently. The backlog line is scoped exactly like the analysis — `status<pending`, **excluding app-store reviews** — so the number and the tickets under it mean the same thing. That matters because 92% of unsolved tickets are AppFollow reviews, so the unqualified number reads as roughly 13× the queue that actually needs a human (5,680 against 428). Both counts come from Zendesk's count-only search endpoint, one request each and both best-effort — if the review-excluded count fails, the line falls back to the plain total rather than disappearing. The category tally counts abuse reports like anything else, so the numbers still sum to what was analyzed; the collapsed line at the bottom is where they are listed, and its links stop at a character budget (the remainder counted as `+N more`) so a heavy day cannot push a message past 2,000. Every other ticket the model did not flag gets a 💤 line per category, most common first, each with its own budget; a ticket past it is not recorded as reported, so it stays eligible for the next run.
+
+The 🌐 line lists every ticket reported for the first time whose classified `language` is not English (a blank or `unknown` one counts as English), whatever line it also sits on: it is the to-do list for answering `claude: english` on each. A 🔄 ticket is left off it. It records nothing as reported, so a ticket past the highlight cap is listed again next run.
 
 **One block per ticket, and the digest is read-only.** Each line is its own Components V2 Text Display inside one Container, so the digest is skimmed rather than read as a wall. Nothing in it is interactive: replies are written on the ticket itself (see [Zendesk Reply from a Private Note](zendesk-relay.md)), and a button here would open a compose flow that no longer exists.
 

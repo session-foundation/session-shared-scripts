@@ -774,6 +774,58 @@ class TestUnflaggedLine(unittest.TestCase):
         self.assertEqual(self.lines([finding(1)]), [])
 
 
+class TestNonEnglishLine(unittest.TestCase):
+    """The new tickets not in English, linked on one line for `claude: english`."""
+
+    def line(self, findings, updated_ids=None):
+        lines = [l for l in digest_text(build_messages(findings, "acme", {},
+                                                       updated_ids=updated_ids)).splitlines()
+                 if "not in English" in l]
+        return lines[0] if lines else None
+
+    def test_it_lists_each_new_non_english_ticket_with_its_language(self):
+        line = self.line([finding(1), finding(2, language="German"),
+                          finding(3, language="Russian", worth_looking_into=False)])
+        self.assertIn("**2** new, not in English", line)
+        self.assertIn("[#2](https://acme.zendesk.com/agent/tickets/2) German", line)
+        self.assertIn("[#3](https://acme.zendesk.com/agent/tickets/3) Russian", line)
+        self.assertNotIn("[#1]", line)
+
+    def test_it_leads_the_entries(self):
+        findings = [finding(1), finding(2, language="German")]
+        lines = [l for l in digest_text(build_messages(findings, "acme")).splitlines()
+                 if "[#" in l]
+        self.assertIn("not in English", lines[0])
+
+    def test_a_ticket_reported_before_is_not_listed(self):
+        self.assertIsNone(self.line([finding(2, language="German")], updated_ids={2}))
+
+    def test_unknown_or_english_variants_are_not_listed(self):
+        for language in ("", "unknown", "ENGLISH", "English (US)"):
+            with self.subTest(language=language):
+                self.assertIsNone(self.line([finding(1, language=language)]))
+
+    def test_it_covers_no_ticket(self):
+        """Each is recorded by its own line, so one past the highlight cap stays
+        eligible for the next run."""
+        findings = [finding(i, priority_rank=i, language="German")
+                    for i in range(triage.MAX_HIGHLIGHTS + 2)]
+        messages, coverage = triage.build_messages(findings, "acme")
+        covered = set().union(*coverage)
+        self.assertNotIn(triage.MAX_HIGHLIGHTS + 1, covered)
+        self.assertIn(f"**{triage.MAX_HIGHLIGHTS + 2}** new, not in English",
+                      digest_text(messages))
+
+    def test_links_stop_at_the_budget_and_the_rest_are_counted(self):
+        findings = [finding(27000 + i, language="German", worth_looking_into=False)
+                    for i in range(200)]
+        text = digest_text(build_messages(findings, "acme"))
+        self.assertIn("**200** new, not in English", text)
+        line = next(l for l in text.splitlines() if "not in English" in l)
+        self.assertLess(len(line), triage.COLLAPSED_LINKS_CHARS + 100)
+        self.assertRegex(line, r"\+\d+ more")
+
+
 # ---- Parsing helpers -------------------------------------------------------
 
 

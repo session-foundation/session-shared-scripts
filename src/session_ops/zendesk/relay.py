@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Webhook endpoint for acting on `claude:` private notes in Zendesk, and for putting a
-conversation into English when the customer writes.
+Webhook endpoint for acting on `claude:` private notes in Zendesk.
 
 Serves POST /zendesk/notes — vendor-namespaced so the same host and certificate can
 carry other integrations later. Run it behind a TLS terminator; see
@@ -19,12 +18,7 @@ and keeps its own test suite testing exactly what runs in production.
 
 Nothing is stored. A ticket is read when its webhook fires and forgotten; the draft
 awaiting review lives in a private note on the ticket, so a restart mid-review loses
-nothing. A restart does drop a customer event still waiting out its debounce: that
-ticket gets its transcript on the customer's next message, or from `claude: english`.
-
-One ticket's runs never overlap, so two runs cannot both find no transcript and both
-post one. A customer event waits ENGLISH_DEBOUNCE_SECONDS, restarted by each further
-event on that ticket, so a burst of messages costs one translation.
+nothing.
 
 This used to serve a second route, POST /discord/interactions, behind a Comment button
 on each digest card. Replies are written on the ticket now — the digest is read-only,
@@ -47,12 +41,10 @@ an endpoint that refuses everything whenever this host's clock trails Zendesk's.
 Usage:
     uvicorn session_ops.zendesk.relay:app --host 127.0.0.1 --port 8080
 """
-import asyncio
 import base64
 import datetime
 import hashlib
 import hmac
-import itertools
 import json
 import os
 import subprocess
@@ -75,8 +67,6 @@ MAX_CLOCK_SKEW_SECONDS = 60
 # Zendesk gets its 200 immediately and the outcome is written to the ticket whenever
 # it lands.
 NOTE_TIMEOUT_SECONDS = 420
-# Customers on messaging channels send several short messages in a row.
-ENGLISH_DEBOUNCE_SECONDS = 60
 # Zendesk signs a webhook over the timestamp followed by the raw body.
 ZENDESK_SIGNATURE_HEADER = "x-zendesk-webhook-signature"
 ZENDESK_TIMESTAMP_HEADER = "x-zendesk-webhook-signature-timestamp"
@@ -115,12 +105,7 @@ def dry_run_requested():
     return bool(value) and value.split()[0] not in ("0", "false", "no", "off")
 
 
-# The `event` a trigger may send, and the note_reply.py mode it runs. Absent is the
-# `claude:` note trigger; "customer" is the trigger on the customer writing.
-EVENT_ARGS = {None: [], "customer": ["--english-if-needed"]}
-
-
-def run_note_reply(ticket_id, extra_args=()):
+def run_note_reply(ticket_id):
     """Run note_reply.py over one ticket. Never raises.
 
     A subprocess because its error paths are sys.exit
@@ -130,7 +115,7 @@ def run_note_reply(ticket_id, extra_args=()):
     ticket, not at an open dialog — so the outcome goes to the journal and, where
     note_reply.py got far enough to write one, to the ticket itself.
     """
-    command = [sys.executable, "-m", NOTE_MODULE, "--ticket", str(ticket_id), *extra_args]
+    command = [sys.executable, "-m", NOTE_MODULE, "--ticket", str(ticket_id)]
     if dry_run_requested():
         command.append("--dry-run")
     try:
@@ -144,44 +129,6 @@ def run_note_reply(ticket_id, extra_args=()):
     if done.returncode != 0:
         print(f"note_reply.py exited {done.returncode} on #{ticket_id}: "
               f"{(done.stderr or '').strip()[:300]}", flush=True)
-
-
-async def run_in_thread(ticket_id, extra_args):
-    await run_in_threadpool(run_note_reply, ticket_id, extra_args)
-
-
-class TicketRuns:
-    """note_reply.py runs, one at a time per ticket, with customer events debounced."""
-
-    def __init__(self, run, debounce_seconds, sleep=asyncio.sleep):
-        self.run, self.debounce_seconds, self.sleep = run, debounce_seconds, sleep
-        self.locks = {}
-        self.latest_event = {}
-        self.events = itertools.count()
-
-    async def now(self, ticket_id, extra_args):
-        lock, users = self.locks.get(ticket_id, (asyncio.Lock(), 0))
-        self.locks[ticket_id] = (lock, users + 1)
-        try:
-            async with lock:
-                await self.run(ticket_id, extra_args)
-        finally:
-            lock, users = self.locks[ticket_id]
-            if users == 1:
-                del self.locks[ticket_id]
-            else:
-                self.locks[ticket_id] = (lock, users - 1)
-
-    async def customer_wrote(self, ticket_id):
-        event = self.latest_event[ticket_id] = next(self.events)
-        await self.sleep(self.debounce_seconds)
-        if self.latest_event.get(ticket_id) != event:
-            return
-        del self.latest_event[ticket_id]
-        await self.now(ticket_id, EVENT_ARGS["customer"])
-
-
-runs = TicketRuns(run_in_thread, ENGLISH_DEBOUNCE_SECONDS)
 
 
 def zendesk_signature_ok(raw, signature, timestamp, secret):
@@ -223,13 +170,10 @@ def healthz():
 
 @app.post("/zendesk/notes")
 async def zendesk_notes(request: Request, background: BackgroundTasks):
-    """A private note on a ticket asked Claude to do something, or, with
-    `"event": "customer"`, the customer wrote and the ticket may need an English
-    transcript.
+    """A private note on a ticket asked Claude to do something.
 
-    The Zendesk trigger that calls this is the first gate — the note trigger fires
-    only on private comments, and both must exclude the API user so a note Claude
-    wrote cannot trigger another run.
+    The Zendesk trigger that calls this is the first gate — it fires only on private
+    comments, and must exclude the API user so a draft cannot trigger another draft.
     This is the second: without ZENDESK_WEBHOOK_SECRET set, nothing is accepted, so
     an unconfigured relay refuses rather than trusting anything that reaches the URL.
     Which Zendesk user may command it is note_reply.py's decision, on the note.
@@ -255,14 +199,7 @@ async def zendesk_notes(request: Request, background: BackgroundTasks):
                  if isinstance(body, dict) else None)
     if not ticket_id:
         return Response("no ticket id", status_code=400)
-    event = body.get("event")
-    # An unhashable value, a list say, would raise in the lookup and answer 500.
-    if not (event is None or isinstance(event, str)) or event not in EVENT_ARGS:
-        return Response("unknown event", status_code=400)
-    if event == "customer":
-        background.add_task(runs.customer_wrote, ticket_id)
-    else:
-        background.add_task(runs.now, ticket_id, EVENT_ARGS[event])
+    background.add_task(run_in_threadpool, run_note_reply, ticket_id)
     return {"ok": True}
 
 

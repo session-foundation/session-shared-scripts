@@ -208,6 +208,25 @@ class EnglishTranscript(unittest.TestCase):
                  if m == "PUT" and "/tags.json" in u]
         self.assertEqual(added, [[note_reply.TAG_ERROR]])
 
+    def test_a_transcript_posted_meanwhile_is_not_posted_again(self):
+        """The model call takes minutes; a second `claude: english` can land in them."""
+        turns = [{"index": 0, "who": "Customer", "when": "t", "body": "Hallo"}]
+        landed = comment(f"transcript {note_reply.english_marker(3)}", author=API_USER, cid=4)
+        session = fake_session(FakeResponse({"comments": [landed]}))
+        with Patched(api, conversation_turns=lambda *a: turns), \
+                Patched(claude_cli, claude_cli_json=lambda *a, **k: {
+                    "turns": [{"index": 0, "english": "Hello"}]}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            note_reply.run_english(session, "sub", "model", {"id": 7},
+                                   [comment("claude: english", cid=9),
+                                    comment("Hallo", author=42, public=True, cid=3)],
+                                   {"id": 9, "author": AGENT, "action": "english",
+                                    "brief": ""}, dry_run=False)
+        bodies = [kw["json"]["ticket"]["comment"]["html_body"] for m, u, kw in writes(session)
+                  if "comment" in (kw.get("json") or {}).get("ticket", {})]
+        self.assertEqual(len(bodies), 1)
+        self.assertIn("already up to date", bodies[0])
+
     def test_unaccented_german_is_still_translated(self):
         """The reason this is checked after the call, not guessed before it:
         "Hallo, ich habe ein Problem" is pure ASCII, and a character test would have
@@ -334,9 +353,9 @@ class FitTurns(unittest.TestCase):
 
     def test_the_note_says_older_turns_were_left_out(self):
         turns = self.turns("Es geht nicht.")
-        note = note_reply.english_note(turns, {"turns": []}, 3, omitted=2)
+        note = note_reply.english_note(turns, {"turns": []}, 3, 2, 9)
         self.assertIn("2 earliest turn(s) are left out", note)
-        self.assertNotIn("left out", note_reply.english_note(turns, {"turns": []}, 3))
+        self.assertNotIn("left out", note_reply.english_note(turns, {"turns": []}, 3, 0, 9))
 
 
 BOOK = {
@@ -1100,100 +1119,6 @@ class Composition(unittest.TestCase):
     def test_the_brief_is_bounded(self):
         action, brief = note_reply.parse_command("claude: draft - " + "x" * 5000)
         self.assertLessEqual(len(brief), note_reply.BRIEF_CHARS)
-
-
-class AutoEnglish(unittest.TestCase):
-    """`--english-if-needed`, run when the customer writes. Nobody asked, so it
-    answers nobody: a note when one is needed, the journal otherwise."""
-
-    GERMAN_TURNS = [{"index": 0, "who": "Customer", "when": "t", "body": "Es geht nicht."}]
-
-    def run_auto(self, ticket=None, comments=(), translated=None, dry_run=False,
-                 landed=()):
-        session = fake_session(FakeResponse({"comments": list(landed)}))
-        calls = []
-
-        def translate(*a, **k):
-            calls.append(a)
-            return translated if translated is not None else {
-                "turns": [{"index": 0, "english": "It does not work."}]}
-
-        with Patched(api, conversation_turns=lambda *a: self.GERMAN_TURNS), \
-                Patched(claude_cli, claude_cli_json=translate), \
-                contextlib.redirect_stdout(io.StringIO()) as out:
-            note_reply.run_auto_english(session, "sub", "model", ticket or {"id": 7},
-                                        list(comments), dry_run)
-        return writes(session), calls, out.getvalue()
-
-    def test_a_foreign_conversation_gets_the_private_note(self):
-        writes, _, _ = self.run_auto(comments=[comment("Hallo", author=42, public=True, cid=3)])
-        note = writes[0][2]["json"]["ticket"]["comment"]
-        self.assertIs(note["public"], False)
-        self.assertIn("It does not work.", note["html_body"])
-        self.assertIn(note_reply.english_marker(3), note["html_body"])
-
-    def test_it_tags_nothing_and_claims_no_command(self):
-        writes, _, _ = self.run_auto()
-        self.assertEqual([c for c in writes if "/tags.json" in c[1]], [])
-        self.assertNotIn("claude:done", writes[0][2]["json"]["ticket"]["comment"]["html_body"])
-
-    def test_a_covered_conversation_costs_nothing(self):
-        prior = comment(f"transcript {note_reply.english_marker(3)}", author=API_USER, cid=4)
-        writes, calls, _ = self.run_auto(
-            comments=[prior, comment("Hallo", author=42, public=True, cid=3)])
-        self.assertEqual((writes, calls), ([], []))
-
-    def test_an_english_conversation_writes_nothing(self):
-        writes, _, out = self.run_auto(
-            translated={"turns": [{"index": 0, "english": "Es geht nicht."}]})
-        self.assertEqual(writes, [])
-        self.assertIn("english", out)
-
-    def test_a_failed_translation_writes_nothing_and_flags_no_error(self):
-        def fail(*a, **k):
-            raise SystemExit("claude exited 1")
-
-        session = fake_session()
-        with Patched(api, conversation_turns=lambda *a: self.GERMAN_TURNS), \
-                Patched(claude_cli, claude_cli_json=fail), \
-                contextlib.redirect_stdout(io.StringIO()) as out:
-            note_reply.run_auto_english(session, "sub", "model", {"id": 7}, [], False)
-        self.assertEqual(session.calls, [])
-        self.assertIn("claude exited 1", out.getvalue())
-
-    def test_a_transcript_posted_meanwhile_is_not_posted_again(self):
-        """The model call takes minutes; a `claude: english` run can land in them."""
-        landed = comment(f"transcript {note_reply.english_marker(3)}", author=API_USER, cid=4)
-        writes, calls, out = self.run_auto(
-            comments=[comment("Hallo", author=42, public=True, cid=3)], landed=[landed])
-        self.assertEqual((writes, len(calls)), ([], 1))
-        self.assertIn("another run", out)
-
-    def test_an_app_store_review_is_never_translated(self):
-        writes, calls, _ = self.run_auto(ticket={"id": 7, "via": {"channel": "any_channel"}})
-        self.assertEqual((writes, calls), ([], []))
-
-    def test_a_dry_run_writes_nothing(self):
-        writes, calls, _ = self.run_auto(dry_run=True)
-        self.assertEqual(writes, [])
-        self.assertEqual(len(calls), 1)
-
-    def test_the_flag_never_runs_a_pending_command(self):
-        """The customer trigger fires on their reply, and a `claude: reply` waiting
-        on the ticket must not be sent because of it."""
-        ran = []
-        env = {"ZENDESK_SUBDOMAIN": "sub", "ZENDESK_EMAIL": "e", "ZENDESK_API_TOKEN": "t"}
-        command = {"id": 9, "author": AGENT, "action": "reply", "brief": ""}
-        with mock.patch.dict(os.environ, env), \
-                Patched(api, zendesk_session=lambda *a: object(),
-                        fetch_ticket=lambda *a: {"id": 7, "status": "open"},
-                        fetch_comments=lambda *a, **k: []), \
-                Patched(note_reply, api_user_id=lambda *a: API_USER,
-                        latest_command=lambda *a: command,
-                        run_reply=lambda *a: ran.append("reply"),
-                        run_auto_english=lambda *a: ran.append("english")):
-            note_reply.main(["--ticket", "7", "--english-if-needed"])
-        self.assertEqual(ran, ["english"])
 
 
 class Model(unittest.TestCase):
