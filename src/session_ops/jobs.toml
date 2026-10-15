@@ -9,9 +9,9 @@
 #   env            variables the run refuses to start without
 #   channel_env    where it posts, and where its own failures are reported; a job
 #                  without one reports to ALERT_DISCORD_WEBHOOK_URL
-#   unit           further [Service] lines, over the template's hardening
 #   repeat_alert_hours  report the same failure again only this often until a run
 #                  succeeds, for a schedule short enough to repeat it every few minutes
+#   unit           further [Service] lines, over the template's hardening
 #
 #   max_age_hours  for a queued job, its queue's: the weekend's 72 h (73 h across
 #                  April's DST change), plus every job ahead of it running to its timeout
