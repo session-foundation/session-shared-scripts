@@ -862,6 +862,115 @@ class Writes(unittest.TestCase):
         self.assertEqual([kw.get("attempts") for _, _, kw in session.calls], [1, None])
 
 
+CUSTOMER = 42
+TICKET = {"id": 7, "requester_id": CUSTOMER}
+
+
+def said(body, author=CUSTOMER, cid=1):
+    return comment(body, author=author, public=True, cid=cid)
+
+
+class FollowUps(unittest.TestCase):
+    """Once support has replied, a draft answers what the customer said since, and a
+    reply does not send a draft the customer has written past."""
+
+    def draft(self, comments, brief="still broken, ask for logs"):
+        seen = {}
+        def fake(model, sample, brief, previous=None, precedent=None, thread=None):
+            seen.update(sample=sample, previous=previous, thread=thread)
+            return GERMAN
+        with Patched(note_reply, compose=fake):
+            session = fake_session(*[FakeResponse({"ticket": {}})])
+            note_reply.run_draft(session, "sub", "model", TICKET,
+                                 [comment(f"claude: draft - {brief}", cid=20)] + comments,
+                                 {"id": 20, "author": AGENT, "action": "draft",
+                                  "brief": brief}, API_USER, dry_run=False)
+        return seen
+
+    def test_a_draft_already_sent_is_not_amended(self):
+        """Amending it carries its paragraphs into the next reply, so the customer
+        gets the first answer again."""
+        seen = self.draft([said("Immer noch kaputt", cid=13),
+                           said("Anhänge werden 14 Tage gespeichert.", author=AGENT, cid=12),
+                           draft_note("Anhänge werden 14 Tage gespeichert.", cid=11),
+                           said("Meine Fotos sind weg", cid=10)])
+        self.assertIsNone(seen["previous"])
+
+    def test_a_draft_newer_than_every_public_comment_is_still_amended(self):
+        seen = self.draft([draft_note("Zweiter Entwurf", cid=14),
+                           said("Immer noch kaputt", cid=13),
+                           said("Erste Antwort", author=AGENT, cid=12),
+                           said("Meine Fotos sind weg", cid=10)])
+        self.assertIn("Zweiter Entwurf", seen["previous"])
+
+    def test_the_newest_message_is_separated_from_what_was_answered(self):
+        seen = self.draft([said("Immer noch kaputt", cid=13),
+                           said("Erste Antwort", author=AGENT, cid=12),
+                           said("Meine Fotos sind weg", cid=10)])
+        self.assertEqual(seen["thread"], ("Customer: Meine Fotos sind weg\n\n"
+                                          "Support: Erste Antwort", "Immer noch kaputt"))
+
+    def test_a_first_reply_has_no_thread(self):
+        seen = self.draft([said("Meine Fotos sind weg", cid=10)])
+        self.assertIsNone(seen["thread"])
+
+    def test_the_earlier_conversation_keeps_its_newest_end(self):
+        earlier, _ = note_reply.follow_up(
+            None, "sub", TICKET, [said("x", cid=13),
+                                  said("NEWEST " + "b" * 5000, author=AGENT, cid=12),
+                                  said("OLDEST " + "a" * 5000, cid=10)])
+        self.assertLessEqual(len(earlier), note_reply.EARLIER_CHARS + 1)
+        self.assertNotIn("OLDEST", earlier)
+        self.assertTrue(earlier.endswith("b"))
+
+    def test_the_follow_up_prompt_leaves_out_the_pooled_customer_words(self):
+        built = note_reply.build_compose_prompt(
+            "EVERYTHING THEY EVER SAID", "ask for logs",
+            thread=("Customer: a\n\nSupport: b", "still broken"))
+        self.assertNotIn("EVERYTHING THEY EVER SAID", built)
+        self.assertLess(built.index("Support: b"), built.index("still broken"))
+        self.assertLess(built.index("still broken"), built.index("ask for logs"))
+
+    def test_the_prompt_answers_only_the_newest_message(self):
+        prompt = " ".join(note_reply.COMPOSE_SYSTEM.lower().split())
+        self.assertIn("answer only the customer's newest message", prompt)
+        self.assertIn("do not repeat its explanations", prompt)
+
+    def reply(self, comments, brief=""):
+        session = fake_session(*[FakeResponse({"user": {"id": AGENT, "name": "Audric"}}),
+                               FakeResponse({"ticket": {}}), FakeResponse({"ticket": {}})])
+        note_reply.run_reply(session, "sub", TICKET,
+                             [comment(f"claude: reply {brief}", cid=20)] + comments,
+                             {"id": 20, "author": AGENT, "action": "reply", "brief": brief},
+                             API_USER, dry_run=False)
+        return [kw["json"]["ticket"]["comment"] for m, u, kw in session.calls
+                if m == "PUT" and "/tags.json" not in u], \
+               [kw["json"]["tags"] for m, u, kw in session.calls
+                if m == "PUT" and "/tags.json" in u]
+
+    def test_a_draft_the_customer_wrote_after_is_not_sent(self):
+        written, tags = self.reply([said("Immer noch kaputt", cid=13),
+                                    draft_note("Alter Entwurf", cid=12)])
+        self.assertEqual([c["public"] for c in written], [False])
+        self.assertIn("claude: reply anyway", written[0]["html_body"])
+        self.assertNotIn([note_reply.TAG_ERROR], tags)
+
+    def test_the_confirmation_names_the_option_asked_for(self):
+        written, _ = self.reply([said("Immer noch kaputt", cid=13),
+                                 draft_note("eins", "zwei", cid=12)], brief="2")
+        self.assertIn("claude: reply 2 anyway", written[0]["html_body"])
+
+    def test_anyway_sends_it(self):
+        written, _ = self.reply([said("Immer noch kaputt", cid=13),
+                                 draft_note("eins", "zwei", cid=12)], brief="2 anyway")
+        self.assertEqual(written[-1], {"body": "zwei", "public": True})
+
+    def test_a_draft_newer_than_the_customer_is_sent(self):
+        written, _ = self.reply([draft_note("Neuer Entwurf", cid=14),
+                                 said("Immer noch kaputt", cid=13)])
+        self.assertEqual(written[-1], {"body": "Neuer Entwurf", "public": True})
+
+
 class DraftNote(unittest.TestCase):
     def test_carries_the_back_translation_for_a_foreign_ticket(self):
         note = note_reply.build_draft_note(GERMAN, "keeps 14 days", 42)
@@ -932,7 +1041,7 @@ class Composition(unittest.TestCase):
         """An agent writing "also mention X" wants the draft they just read plus X.
         Regenerating from the new brief alone throws away wording they kept."""
         seen = {}
-        def fake(model, sample, brief, previous=None, precedent=None):
+        def fake(model, sample, brief, previous=None, precedent=None, thread=None):
             seen.update(brief=brief, previous=previous, precedent=precedent)
             return GERMAN
         with Patched(note_reply, compose=fake):
@@ -971,7 +1080,7 @@ class Composition(unittest.TestCase):
 
     def test_a_first_draft_has_nothing_to_amend(self):
         seen = {}
-        def fake(model, sample, brief, previous=None, precedent=None):
+        def fake(model, sample, brief, previous=None, precedent=None, thread=None):
             seen.update(previous=previous, precedent=precedent)
             return GERMAN
         with Patched(note_reply, compose=fake):
