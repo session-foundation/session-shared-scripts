@@ -48,10 +48,10 @@ HOUR = 3600
 REMINDER_SECONDS = 12 * HOUR
 FAILING_AFTER_SECONDS = HOUR
 USER_AGENT = "session-ops store-versions (+https://github.com/session-foundation)"
-# A request takes at most ~110 s: two 25 s attempts and a 60 s Retry-After between them.
+# Inside the unit's 4-minute timeout: fetches end by 60 s, no post starts after 100 s
+# or lasts past 20 s, and the runner's alert takes at most another 45 s.
 HTTP_ATTEMPTS, HTTP_TIMEOUT = 2, (5, 20)
-# Messages still unposted by then wait for the next run: a post started by 100 s ends
-# inside the unit's 4-minute timeout.
+FETCH_SECONDS, POST_SECONDS = 60, 20
 POST_DEADLINE_SECONDS = 100
 EMBED_FIELD_CHARS = 1024
 
@@ -221,7 +221,8 @@ def source_message(source, kind, failure, now):
 
 
 def http_session():
-    session = http.Session(attempts=HTTP_ATTEMPTS, timeout=HTTP_TIMEOUT)
+    session = http.Session(attempts=HTTP_ATTEMPTS, timeout=HTTP_TIMEOUT,
+                           deadline=FETCH_SECONDS)
     session.headers["User-Agent"] = USER_AGENT
     return session
 
@@ -321,7 +322,8 @@ def main(argv=None):
         print(f"Would post {len(messages)} message(s).")
         return
 
-    session = http.Session(attempts=HTTP_ATTEMPTS, timeout=HTTP_TIMEOUT)
+    session = http.Session(attempts=HTTP_ATTEMPTS, timeout=HTTP_TIMEOUT,
+                           deadline=POST_SECONDS)
     posted, refused, deferred = 0, False, False
     for step_messages, apply in steps:
         if step_messages:

@@ -45,13 +45,12 @@ def evaluate(prev, github, store, *, prereleases=(), strict_sync=False, now=0.0,
     App stores warn only when the store is ahead of GitHub: a public build whose source
     is not published. A `strict_sync` channel is ours and must match GitHub, so it
     warns in either direction. An unresolved warning repeats every `reminder_seconds`,
-    and at once if the leading side pulls further ahead. `prereleases` are the
+    and at once if the leading side pulls further ahead or the store's watermark comes
+    down. `prereleases` are the
     published prereleases above `github`: a store shipping one of them is in sync.
     """
-    # Store APIs are eventually consistent: iTunes and Flathub's CDN re-serve the
-    # previous version for hours after a release. Every comparison uses the highest
-    # version the store has served, so a dip and recovery stays quiet, until the store
-    # has served lower for `watermark_seconds`: a rollback or a bad read, not a lag.
+    # iTunes and Flathub's CDN re-serve the previous version for hours; compare against
+    # the highest served until a lower one has held for `watermark_seconds`.
     prev_high = prev and (prev.get("store_high") or prev["store"])
     new_high = prev_high is None or compare(store, prev_high) > 0
     high, low_since = (store if new_high else prev_high), None
@@ -59,6 +58,7 @@ def evaluate(prev, github, store, *, prereleases=(), strict_sync=False, now=0.0,
         low_since = now if prev.get("low_since") is None else prev["low_since"]
         if now - low_since >= watermark_seconds:
             high, low_since = store, None
+    lowered = compare(high, prev_high) < 0 if prev_high else False
     if compare(high, github) > 0 and any(compare(high, p) == 0 for p in prereleases):
         github = high
 
@@ -82,7 +82,7 @@ def evaluate(prev, github, store, *, prereleases=(), strict_sync=False, now=0.0,
         events.append(Event(WARNING, github, high))
         warned_at = now
     elif out_of_sync:
-        if (store_ahead and new_high) or (store_behind and github_advanced):
+        if (store_ahead and new_high) or (store_behind and github_advanced) or lowered:
             events.append(Event(WARNING_UPDATE, github, high))
             warned_at = now
         elif reminder_seconds is not None and now - warned_at >= reminder_seconds:

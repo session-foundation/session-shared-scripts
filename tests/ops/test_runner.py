@@ -22,7 +22,7 @@ def job(entry, **extra):
 class TestRun(unittest.TestCase):
     def setUp(self):
         self.state = tempfile.mkdtemp()
-        self.posted = []
+        self.posted, self.sessions = [], []
         env = {"STATE_DIRECTORY": self.state, "INVOCATION_ID": "inv-1",
                "ALERT_DISCORD_WEBHOOK_URL": HOOK, "DEMO_TOKEN": "s3cr3t-value"}
         for patcher in (mock.patch.dict(os.environ, env),
@@ -34,6 +34,7 @@ class TestRun(unittest.TestCase):
         fake_jobs.calls.clear()
 
     def post(self, session, url, messages):
+        self.sessions.append(session)
         self.posted.append((url, messages))
         return len(messages)
 
@@ -209,6 +210,10 @@ class TestRun(unittest.TestCase):
         payload = self.posted[0][1][0]
         self.assertTrue(payload["content"].startswith("❌ "))
         self.assertEqual(payload["allowed_mentions"], {"parse": []})
+
+    def test_an_alert_post_has_a_deadline(self):
+        self.run_job(job("exits"))
+        self.assertEqual(self.sessions[0].deadline, runner.ALERT_SECONDS)
 
 
 class TestCommandLine(unittest.TestCase):

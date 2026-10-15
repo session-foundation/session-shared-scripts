@@ -38,6 +38,9 @@ from session_ops.zendesk import claude_cli
 
 ALERTED_MARKER = "alerted"
 LAST_ALERT = "last-alert.json"
+# Discord answers in a second; past this the OnFailure backstop reports the run instead,
+# and a job with a short timeout still has room for its alert.
+ALERT_SECONDS = 45
 # Present on a host rehearsing production: jobs publish beside it (env.rehearsing).
 REHEARSAL_MARKER = "/etc/session-ops/rehearsal"
 
@@ -137,7 +140,8 @@ def post_alert(job, message):
               file=sys.stderr)
         return False
     payload = {"content": message, "allowed_mentions": {"parse": []}}
-    return discord.post_to_discord(http.Session(), webhook, [payload]) == 1
+    session = http.Session(deadline=ALERT_SECONDS)
+    return discord.post_to_discord(session, webhook, [payload]) == 1
 
 
 def mark_alerted(state_dir):

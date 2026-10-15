@@ -196,6 +196,23 @@ class TestWatermark(unittest.TestCase):
         self.assertEqual(result.state["low_since"], 100.0)
 
 
+    def test_a_lowered_watermark_updates_a_warning_that_flips_direction(self):
+        posted, state = [], None
+        for hours, store in ((0, "1.6"), (1, "1.7"), (2, "1.5"), (8, "1.5")):
+            result = evaluate(state, "1.6", store, strict_sync=True, now=hours * 3600,
+                              reminder_seconds=DAY)
+            posted.append(kinds(result))
+            state = result.state
+        self.assertEqual(posted, [[], [WARNING], [], [WARNING_UPDATE]])
+        self.assertEqual((result.events[0].store, result.state["warned_at"]), ("1.5", 8 * 3600))
+
+    def test_a_lowered_watermark_updates_a_shrinking_gap(self):
+        state = evaluate(None, "1.6", "1.8", now=0).state
+        state = evaluate(state, "1.6", "1.7", now=3600).state
+        result = evaluate(state, "1.6", "1.7", now=7 * 3600)
+        self.assertEqual(kinds(result), [WARNING_UPDATE])
+        self.assertEqual(result.events[0].store, "1.7")
+
 class TestPrereleases(unittest.TestCase):
     def test_a_store_shipping_a_prerelease_is_in_sync(self):
         result = evaluate(None, "1.32.2", "1.33.0", prereleases=["1.33.0"])

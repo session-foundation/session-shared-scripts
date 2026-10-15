@@ -37,14 +37,16 @@ that release is in sync with it.
 
 A store is held at the highest version it has served: iTunes and the CDNs re-serve the
 previous one for hours after a release, so a store returning to it changes nothing.
-Once a store has served a lower version for 6 hours, that version counts: a rollback
-warns, and a bad read clears itself, with nothing to edit by hand.
+Once a store has served a lower version for 6 hours, that version counts, with nothing
+to edit by hand: a bad read clears itself, a warning out is updated to the new gap, and
+a rollback warns on the channels warned on either way.
 
 State is `/var/lib/session-ops/store-versions/state.json`. Losing it makes the next run
 a first check. A message Discord refuses is posted again on the next run, as is one
-still unposted 100 seconds into a run, so a run ends inside its 4-minute timeout. A version that does not start with a digit, or
-runs past 64 characters, fails its source. A failed run is reported once, then every
-12 hours until one succeeds.
+still unposted 100 seconds into a run. Every request has a wall-clock limit, 60 s for a
+source and 20 s for a post, so a run and its failure alert end inside the 4-minute
+timeout. A version that does not start with a digit, or runs past 64 characters, fails
+its source. A failed run is reported once, then every 12 hours until one succeeds.
 
 GitHub is read unauthenticated: one request per repository a run, 36 an hour of the 60
 allowed. The organisation refuses fine-grained tokens that live longer than 366 days.

@@ -6,6 +6,7 @@ import os
 import tempfile
 import unittest
 
+from session_ops.ops import runner
 from session_ops.shared import discord
 from session_ops.shared.testing import Patched
 from session_ops.store_versions import job, sources
@@ -24,6 +25,7 @@ class Run:
 
     def __init__(self, github, stores, accept=None, tags=""):
         self.github, self.stores, self.accept, self.posted = github, stores, accept, []
+        self.post_deadlines = []
         self.dir = tempfile.mkdtemp()
         self.state = os.path.join(self.dir, "state.json")
         self.tags = os.path.join(self.dir, "tags.toml")
@@ -43,6 +45,7 @@ class Run:
         taken = messages if self.accept is None else messages[:self.accept]
         if self.accept is not None:
             self.accept -= len(taken)
+        self.post_deadlines.append(session.deadline)
         self.posted += taken
         return len(taken)
 
@@ -143,6 +146,15 @@ class TestJob(unittest.TestCase):
                 run()
             failures.append(str(raised.exception))
         self.assertEqual(failures[0], failures[1])
+
+    def test_every_request_has_a_deadline_inside_the_units_timeout(self):
+        run = Run({"session-ios": "2.15.5"}, {"appstore": "2.15.6"})
+        run()
+        self.assertEqual(run.post_deadlines, [job.POST_SECONDS])
+        self.assertEqual(job.http_session().deadline, job.FETCH_SECONDS)
+        worst = (max(job.FETCH_SECONDS, job.POST_DEADLINE_SECONDS) + job.POST_SECONDS
+                 + runner.ALERT_SECONDS)
+        self.assertLess(worst, 4 * 60)
 
     def test_past_the_deadline_messages_wait_for_the_next_run(self):
         run = Run({"session-ios": "2.15.5", "session-desktop": "1.18.3"},

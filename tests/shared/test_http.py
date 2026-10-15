@@ -260,6 +260,84 @@ class TestSession(unittest.TestCase):
         self.assertEqual(limiter.acquire.call_count, 2)
 
 
+class Trickle:
+    """Sends a 200 whose body comes one byte every `gap` seconds: each read is quick,
+    so only a deadline on the whole call stops it."""
+
+    def __init__(self, size=20, gap=0.2):
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(5)
+        self.url = f"http://127.0.0.1:{self.sock.getsockname()[1]}/"
+        self.size, self.gap = size, gap
+        threading.Thread(target=self.serve, daemon=True).start()
+
+    def serve(self):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self.answer, args=(conn,), daemon=True).start()
+
+    def answer(self, conn):
+        with conn:
+            conn.recv(4096)
+            conn.sendall(f"HTTP/1.1 200 OK\r\nContent-Length: {self.size}\r\n\r\n".encode())
+            for _ in range(self.size):
+                time.sleep(self.gap)
+                try:
+                    conn.sendall(b"x")
+                except OSError:
+                    return
+
+    def close(self):
+        self.sock.close()
+
+
+class TestDeadline(unittest.TestCase):
+    def trickle(self, **kwargs):
+        server = Trickle(**kwargs)
+        self.addCleanup(server.close)
+        return server
+
+    def test_a_trickling_body_stops_at_the_deadline(self):
+        server = self.trickle()
+        session = http.Session(attempts=1, timeout=(1, 1), deadline=1)
+        started = time.monotonic()
+        with self.assertRaises(http.DeadlineExceeded):
+            session.get(server.url)
+        self.assertLess(time.monotonic() - started, 2)
+
+    def test_a_deadline_is_a_requests_timeout(self):
+        self.assertTrue(issubclass(http.DeadlineExceeded, requests.Timeout))
+
+    def test_an_answer_inside_the_deadline_is_returned_whole(self):
+        server = self.trickle(size=3, gap=0.05)
+        resp = http.Session(attempts=1, deadline=5).get(server.url)
+        self.assertEqual((resp.status_code, resp.content), (200, b"xxx"))
+
+    def test_a_per_call_deadline_overrides_the_sessions(self):
+        server = self.trickle()
+        with self.assertRaises(http.DeadlineExceeded):
+            http.Session(attempts=1, timeout=(1, 1)).request("GET", server.url, deadline=0.5)
+
+    def test_a_failure_inside_the_deadline_raises_as_itself(self):
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            url = f"http://127.0.0.1:{sock.getsockname()[1]}/"
+        with self.assertRaises(requests.ConnectionError) as caught:
+            http.Session(attempts=1, deadline=5).get(url)
+        self.assertNotIsInstance(caught.exception, http.DeadlineExceeded)
+
+    def test_the_per_call_attempts_reach_the_deadlines_thread(self):
+        server = Server(status(500), status(500), ok())
+        self.addCleanup(server.close)
+        with NoSleep():
+            resp = http.Session(attempts=1, deadline=5).request("GET", server.url, attempts=3)
+        self.assertEqual((resp.status_code, len(server.seen)), (200, 3))
+
+
 class TestTokenBucket(unittest.TestCase):
     def test_a_burst_up_to_the_rate_is_free_then_calls_wait(self):
         bucket = http.TokenBucket(4)
