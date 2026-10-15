@@ -27,6 +27,7 @@ class Job:
     max_age_hours: float = None
     channel_env: str = "ALERT_DISCORD_WEBHOOK_URL"
     timeout: str = "30min"
+    repeat_alert_hours: float = None
     unit: tuple = field(default=())
     queued: bool = False
     after: tuple = ()

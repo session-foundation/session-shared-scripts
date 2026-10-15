@@ -69,12 +69,16 @@ def save_state(path, state, records, retention_days, version, extra=None):
         if last >= cutoff:
             kept[key] = record
 
+    write_json(path, {"version": version, "updated_at": stamp, **(extra or {}), "seen": kept})
+    return len(kept), len(seen) - len(kept)
+
+
+def write_json(path, data):
+    """Write `data` to `path` atomically: a crash mid-write cannot corrupt the state."""
     directory = os.path.dirname(path)
     if directory:
         os.makedirs(directory, exist_ok=True)
     temporary = f"{path}.tmp"
     with open(temporary, "w", encoding="utf-8") as handle:
-        json.dump({"version": version, "updated_at": stamp, **(extra or {}), "seen": kept},
-                  handle, indent=2)
-    os.replace(temporary, path)  # atomic: a crash mid-write cannot corrupt the state
-    return len(kept), len(seen) - len(kept)
+        json.dump(data, handle, indent=2)
+    os.replace(temporary, path)

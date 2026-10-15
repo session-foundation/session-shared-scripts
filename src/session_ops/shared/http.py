@@ -11,6 +11,7 @@ on.
     session = http.Session(attempts=10, timeout=60, rate=20)
     session.get(url)                       # the session's budget
     session.request("GET", url, attempts=2)  # a shorter one for optional data
+    session.request("GET", url, deadline=60)  # and a wall-clock limit on all of it
 """
 import contextvars
 import email.utils
@@ -32,6 +33,10 @@ MAX_RETRY_AFTER = 60
 RETRY_STATUSES = frozenset({403, 429, *range(500, 600)})
 
 _attempts = contextvars.ContextVar("attempts", default=None)
+
+
+class DeadlineExceeded(requests.Timeout):
+    """No complete answer within the call's deadline."""
 
 
 def retry_after_seconds(resp, default):
@@ -171,25 +176,59 @@ class Session(requests.Session):
 
     `limiter` may be shared between sessions, so that per-thread sessions against one
     API still draw on one budget. It paces each call, not each retry inside it.
+
+    `deadline` bounds a whole call, retries, waits and the body included, in seconds.
+    `timeout` cannot: it applies to each socket read, so a server trickling a byte at
+    a time never trips it.
     """
 
     def __init__(self, attempts=DEFAULT_ATTEMPTS, timeout=DEFAULT_TIMEOUT, rate=None,
-                 limiter=None):
+                 limiter=None, deadline=None):
         super().__init__()
         self.timeout = timeout
+        self.deadline = deadline
         self.limiter = limiter or (TokenBucket(rate) if rate else None)
         adapter = _Adapter(max_retries=_retry(attempts))
         self.mount("https://", adapter)
         self.mount("http://", adapter)
 
-    def request(self, method, url, *args, attempts=None, **kwargs):
+    def request(self, method, url, *args, attempts=None, deadline=None, **kwargs):
         if attempts is not None and attempts <= 0:
             raise ValueError("attempts must be at least 1")
         kwargs.setdefault("timeout", self.timeout)
         if self.limiter:
             self.limiter.acquire()
+        deadline = self.deadline if deadline is None else deadline
+        if deadline is None:
+            return self._send(method, url, attempts, args, kwargs)
+        return within(deadline, lambda: self._send(method, url, attempts, args, kwargs))
+
+    def _send(self, method, url, attempts, args, kwargs):
         token = _attempts.set(attempts)
         try:
             return super().request(method, url, *args, **kwargs)
         finally:
             _attempts.reset(token)
+
+
+def within(seconds, call):
+    """`call()`'s result, or DeadlineExceeded once `seconds` pass.
+
+    A daemon thread runs it, since no socket option bounds a whole exchange; one left
+    behind dies with the process instead of holding its exit."""
+    outcome = {}
+
+    def run():
+        try:
+            outcome["result"] = call()
+        except BaseException as exc:  # re-raised in the caller's thread
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if worker.is_alive():
+        raise DeadlineExceeded(f"no complete answer within {seconds:g} s")
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["result"]
