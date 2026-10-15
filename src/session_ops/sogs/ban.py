@@ -112,6 +112,9 @@ import nacl.bindings as sodium
 import requests
 from nacl.signing import SigningKey
 
+from session_ops.sogs import names as sogs_names
+from session_ops.sogs.errors import SogsError
+
 try:
     from session_util import blinding, xed25519
 except ImportError as e:  # pragma: no cover - environment, not logic
@@ -131,10 +134,6 @@ SOGS_PUBKEY = 'a03c383cf63c3c4efe67acc52112a6dd734b3a946b9545f488aaa93da7991238'
 
 HTTP_TIMEOUT = 30
 
-
-
-class SogsError(RuntimeError):
-    pass
 
 
 class PartialBan(SogsError):
@@ -392,6 +391,12 @@ def read_ids(args):
     return out
 
 
+def describe_poster(sid, names):
+    if sid not in names:
+        return "no recent posts"
+    return f"posted as {names[sid]!r}" if names[sid] else "posted, with no display name"
+
+
 def confirm(assume_yes):
     """Asks before acting. A closed stdin is a refusal, not a traceback: these run from
     cron and CI, where the prompt would otherwise fail with an unhandled EOFError."""
@@ -478,10 +483,16 @@ def main():
     for step in steps:
         print(f"  {step}")
 
+    print()
+    owners = {form: sid for sid in ids for form in (sid, *blinded_ids(sid, server_pubkey))}
+    names, unread = sogs_names.recent_names(client, rooms, owners)
+    for sid in ids:
+        print(f"  {sid}  {describe_poster(sid, names)}")
+    for token, code in unread:
+        print(f"  (could not read {token}: {code}; its posters are missing above)")
+
     if args.dry_run:
         print("\nDry run: no ban or deletion was sent.")
-        for sid in ids:
-            print(f"  {sid}")
         return 0
 
     if not confirm(args.yes):

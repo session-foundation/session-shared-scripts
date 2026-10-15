@@ -8,20 +8,16 @@ Stdlib unittest so the repo needs no test dependency. Run from anywhere:
 Everything here is offline — no Zendesk, Claude, or Discord calls. The fetch
 tests drive fetch_tickets with a stub session instead.
 """
-import contextlib
-import inspect
-import io
 import json
 import os
 import tempfile
 import unittest
-from unittest import mock
 from datetime import datetime, timedelta, timezone
 
 import requests
 
 from session_ops.shared import discord
-from session_ops.zendesk import api, claude_cli, transcript, triage
+from session_ops.zendesk import api, claude_cli, triage
 from session_ops.shared.testing import (
     FakeResponse, FakeSession, NonJsonResponse, Patched)
 
@@ -558,8 +554,8 @@ class TestBuildMessages(unittest.TestCase):
     def test_only_tickets_worth_looking_into_get_a_line(self):
         findings = [finding(1), finding(2, worth_looking_into=False)]
         text = digest_text(build_messages(findings, "acme"))
-        self.assertEqual(sum(1 for line in text.splitlines() if "[#" in line), 1)
-        self.assertIn("[#1]", text)
+        self.assertIn("| [#1]", text)
+        self.assertNotIn("| [#2]", text)
 
     def test_highlights_are_ordered_by_priority_rank(self):
         findings = [finding(1, priority_rank=3), finding(2, priority_rank=1)]
@@ -712,6 +708,129 @@ class TestCollapsedAbuseReports(unittest.TestCase):
     def test_nothing_is_clipped_when_it_fits(self):
         line = triage.build_collapsed_line([self.abuse(i) for i in range(10, 15)], "acme")
         self.assertNotIn("more", line)
+
+
+class TestUnflaggedLine(unittest.TestCase):
+    """Every ticket the model did not flag is still linked once, so a lost recovery
+    phrase the model judged routine can be found from the digest."""
+
+    def quiet(self, ticket_id, category="account_access"):
+        return finding(ticket_id, category=category, worth_looking_into=False)
+
+    def lines(self, findings):
+        return [l for l in digest_text(build_messages(findings, "acme")).splitlines()
+                if "not flagged" in l]
+
+    def test_an_unflagged_ticket_is_linked(self):
+        text = digest_text(build_messages([finding(1), self.quiet(2)], "acme"))
+        self.assertIn("[#2](https://acme.zendesk.com/agent/tickets/2)", text)
+        self.assertIn("**1** not flagged", text)
+
+    def test_it_sits_below_the_abuse_reports(self):
+        findings = [self.quiet(2), finding(3, category="abuse_report",
+                                           severity="not_applicable"), finding(1)]
+        lines = [l for l in digest_text(build_messages(findings, "acme")).splitlines()
+                 if "[#" in l]
+        self.assertIn("abuse report", lines[-2])
+        self.assertIn("not flagged", lines[-1])
+
+    def test_one_line_per_category_most_common_first(self):
+        findings = [self.quiet(1, "question"), self.quiet(2), self.quiet(3)]
+        lines = self.lines(findings)
+        self.assertEqual(len(lines), 2)
+        self.assertIn(triage.CATEGORY_EMOJI["account_access"] + " **2**", lines[0])
+        self.assertIn(triage.CATEGORY_EMOJI["question"] + " **1**", lines[1])
+
+    def test_a_busy_category_cannot_hide_a_rare_one(self):
+        """One shared budget let fifteen questions push the lone recovery ticket into
+        "+N more", which was then recorded as reported without ever being shown."""
+        findings = [self.quiet(28000 + i, "question") for i in range(15)] + [self.quiet(28891)]
+        messages, coverage = triage.build_messages(findings, "acme")
+        self.assertIn("[#28891]", digest_text(messages))
+        self.assertIn(28891, set().union(*coverage))
+
+    def test_a_ticket_past_the_budget_is_not_recorded(self):
+        findings = [self.quiet(27000 + i) for i in range(200)]
+        messages, coverage = triage.build_messages(findings, "acme")
+        covered, text = set().union(*coverage), digest_text(messages)
+        for f in findings:
+            self.assertEqual(f["id"] in covered, f"[#{f['id']}]" in text, f["id"])
+        self.assertIn("**200** not flagged", text)
+        self.assertRegex(text, r"\+\d+ more")
+
+    def test_the_oldest_are_linked_when_a_category_overflows(self):
+        findings = [self.quiet(27000 + i) for i in range(200)]
+        messages, coverage = triage.build_messages(list(reversed(findings)), "acme")
+        covered = set().union(*coverage)
+        self.assertIn(27000, covered)
+        self.assertNotIn(27199, covered)
+
+    def test_abuse_reports_and_highlights_are_not_repeated_on_it(self):
+        findings = [finding(1), finding(2, category="abuse_report", severity="not_applicable"),
+                    self.quiet(3)]
+        line, = self.lines(findings)
+        self.assertNotIn("[#1]", line)
+        self.assertNotIn("[#2]", line)
+
+    def test_highlights_beyond_the_cap_stay_off_it(self):
+        """Those stay eligible for the next run rather than being marked seen."""
+        findings = [finding(i, priority_rank=i) for i in range(triage.MAX_HIGHLIGHTS + 2)]
+        self.assertEqual(self.lines(findings), [])
+
+    def test_no_line_when_every_ticket_is_flagged(self):
+        self.assertEqual(self.lines([finding(1)]), [])
+
+
+class TestNonEnglishLine(unittest.TestCase):
+    """The new tickets not in English, linked on one line for `claude: english`."""
+
+    def line(self, findings, updated_ids=None):
+        lines = [l for l in digest_text(build_messages(findings, "acme", {},
+                                                       updated_ids=updated_ids)).splitlines()
+                 if "not in English" in l]
+        return lines[0] if lines else None
+
+    def test_it_lists_each_new_non_english_ticket_with_its_language(self):
+        line = self.line([finding(1), finding(2, language="German"),
+                          finding(3, language="Russian", worth_looking_into=False)])
+        self.assertIn("**2** new, not in English", line)
+        self.assertIn("[#2](https://acme.zendesk.com/agent/tickets/2) German", line)
+        self.assertIn("[#3](https://acme.zendesk.com/agent/tickets/3) Russian", line)
+        self.assertNotIn("[#1]", line)
+
+    def test_it_leads_the_entries(self):
+        findings = [finding(1), finding(2, language="German")]
+        lines = [l for l in digest_text(build_messages(findings, "acme")).splitlines()
+                 if "[#" in l]
+        self.assertIn("not in English", lines[0])
+
+    def test_a_ticket_reported_before_is_not_listed(self):
+        self.assertIsNone(self.line([finding(2, language="German")], updated_ids={2}))
+
+    def test_unknown_or_english_variants_are_not_listed(self):
+        for language in ("", "unknown", "ENGLISH", "English (US)", "en", "EN-us", "en_GB"):
+            with self.subTest(language=language):
+                self.assertIsNone(self.line([finding(1, language=language)]))
+
+    def test_it_covers_no_ticket(self):
+        """Each is recorded by its own line, so one past the highlight cap stays
+        eligible for the next run."""
+        findings = [finding(i, priority_rank=i, language="German")
+                    for i in range(triage.MAX_HIGHLIGHTS + 2)]
+        messages, coverage = triage.build_messages(findings, "acme")
+        covered = set().union(*coverage)
+        self.assertNotIn(triage.MAX_HIGHLIGHTS + 1, covered)
+        self.assertIn(f"**{triage.MAX_HIGHLIGHTS + 2}** new, not in English",
+                      digest_text(messages))
+
+    def test_links_stop_at_the_budget_and_the_rest_are_counted(self):
+        findings = [finding(27000 + i, language="German", worth_looking_into=False)
+                    for i in range(200)]
+        text = digest_text(build_messages(findings, "acme"))
+        self.assertIn("**200** new, not in English", text)
+        line = next(l for l in text.splitlines() if "not in English" in l)
+        self.assertLess(len(line), triage.COLLAPSED_LINKS_CHARS + 100)
+        self.assertRegex(line, r"\+\d+ more")
 
 
 # ---- Parsing helpers -------------------------------------------------------
@@ -1783,25 +1902,7 @@ if __name__ == "__main__":
 
 
 class TestEnglishTranscript(unittest.TestCase):
-    """The digest writes the English the reply dialog reads. It runs before the post
-    because the Comment button only exists on a card the post creates."""
-
-    def test_a_ticket_the_classifier_called_english_is_left_alone(self):
-        """Translating English into English would put a machine's wording in front of
-        the agent in place of the words everyone could already read."""
-        for language in ("English", "english", "en", "EN"):
-            self.assertTrue(transcript.is_english({"language": language}), language)
-
-    def test_an_unknown_language_counts_as_english(self):
-        """A blank `language` is far more likely to be a thin classification than a
-        ticket nobody could read. Guessing this way wastes nothing; the other way
-        overwrites words everyone could read with a translation of them."""
-        for language in ("", None, "   "):
-            self.assertTrue(transcript.is_english({"language": language}), repr(language))
-
-    def test_a_non_english_ticket_is_translated(self):
-        for language in ("German", "Spanish", "Japanese"):
-            self.assertFalse(transcript.is_english({"language": language}), language)
+    """What the English transcript is built from: the language call and the turns."""
 
     # ---- turns -------------------------------------------------------------
 
@@ -1857,208 +1958,15 @@ class TestEnglishTranscript(unittest.TestCase):
 
     # ---- rendering ---------------------------------------------------------
 
-    def test_python_owns_the_timestamps_and_the_speaker_labels(self):
-        """Asked to format the transcript itself, a model can drop a turn, merge two,
-        or date one it was never given — and each is invisible in the output."""
-        turns = [{"index": 0, "who": "Customer", "when": "2026-08-28 00:22 UTC",
-                  "body": "Es geht nicht."},
-                 {"index": 1, "who": "Support", "when": "2026-08-28 01:31 UTC",
-                  "body": "Have you tried?"}]
-        got = transcript.render_transcript(turns, [
-            {"index": 0, "english": "It does not work."},
-            {"index": 1, "english": "Have you tried?"},
-        ])
-        self.assertEqual(got,
-                         "2026-08-28 00:22 UTC Customer:\nIt does not work.\n\n"
-                         "2026-08-28 01:31 UTC Support:\nHave you tried?")
-
-    def test_a_turn_the_model_skipped_keeps_its_original_text(self):
-        """Untranslated is a degraded transcript. Missing is a conversation that reads
-        as if that turn never happened."""
-        turns = [{"index": 0, "who": "Customer", "when": "", "body": "Es geht nicht."},
-                 {"index": 1, "who": "Customer", "when": "", "body": "Immer noch."}]
-        got = transcript.render_transcript(turns, [{"index": 0, "english": "Broken."}])
-        self.assertIn("Broken.", got)
-        self.assertIn("Immer noch.", got)
-
-    def test_a_scrambled_index_does_not_shift_every_later_turn(self):
-        """The model echoes indexes back. Matching by position instead would put one
-        speaker's words under another's name for the rest of the transcript."""
-        turns = [{"index": 0, "who": "Customer", "when": "", "body": "eins"},
-                 {"index": 1, "who": "Support", "when": "", "body": "zwei"}]
-        got = transcript.render_transcript(turns, [{"index": 1, "english": "two"},
-                                                   {"index": 0, "english": "one"}])
-        self.assertEqual(got, "Customer:\none\n\nSupport:\ntwo")
-
-    def test_an_unparseable_timestamp_leaves_the_turn_labelled(self):
+    def test_an_unparseable_timestamp_leaves_the_turn_unstamped(self):
         self.assertEqual(api.stamp_minutes("not a date"), "")
         self.assertEqual(api.stamp_minutes(None), "")
-        got = transcript.render_transcript(
-            [{"index": 0, "who": "Customer", "when": "", "body": "x"}], [])
-        self.assertEqual(got, "Customer:\nx")
 
     def test_the_stamp_is_minutes_not_seconds(self):
         """This dates a turn for somebody reading a conversation; seconds are noise in
         front of every paragraph."""
         self.assertEqual(api.stamp_minutes("2026-08-28T01:31:09Z"),
                          "2026-08-28 01:31 UTC")
-
-    # ---- the run -----------------------------------------------------------
-
-    def test_nothing_happens_until_the_field_exists(self):
-        """The field is not in Zendesk yet. Until its id is configured the digest has
-        to behave exactly as it did before — no comment fetches, no Claude calls, no
-        writes."""
-        calls = []
-        with Patched(transcript, conversation_turns=lambda *a: calls.append(a),
-                     claude_cli_json=lambda *a, **k: calls.append(a)):
-            written = transcript.attach_english(object(), "acme", [{"id": 1}],
-                                                [{"id": 1, "language": "German"}],
-                                                "claude-sonnet-5", field_id=None)
-        self.assertEqual(written, 0)
-        self.assertEqual(calls, [])
-
-    def test_nothing_happens_without_a_zendesk_session(self):
-        """--findings never builds one: the findings already exist and no ticket was
-        ever fetched, so there is nothing to read comments from or write back to."""
-        self.assertEqual(
-            transcript.attach_english(None, "acme", [{"id": 1}],
-                                      [{"id": 1, "language": "German"}],
-                                      "claude-sonnet-5", field_id=42),
-            0)
-
-    def test_a_run_that_posts_no_card_writes_nothing(self):
-        """--no-discord is the flag CI runs with. No post means no Comment button,
-        so a transcript written on that path is a write to a production ticket for a
-        dialog nobody can open. Guarded at the call site by `needs_discord`."""
-        source = inspect.getsource(triage.main)
-        call = source.index("attach_english(")
-        guard = source.rindex("if needs_discord:", 0, call)
-        self.assertNotIn("\n    ", source[guard:call].rstrip())
-
-    def test_the_transcript_uses_the_same_model_as_the_classification(self):
-        seen = []
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "findings.json")
-            with open(path, "w", encoding="utf-8") as handle:
-                json.dump([finding(1)], handle)
-            with Patched(triage, attach_english=lambda *a: seen.append(a[4]),
-                         post_to_discord=lambda session, url, messages: len(messages)), \
-                    mock.patch.dict(os.environ, {"ZENDESK_SUBDOMAIN": "acme",
-                                                 "ZENDESK_DISCORD_WEBHOOK_URL": "https://x/y"}), \
-                    contextlib.redirect_stdout(io.StringIO()):
-                triage.main(["--findings", path])
-        self.assertEqual(seen, [claude_cli.MODEL])
-
-    def test_a_rehearsal_writes_no_transcript(self):
-        seen = []
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "findings.json")
-            with open(path, "w", encoding="utf-8") as handle:
-                json.dump([finding(1)], handle)
-            with Patched(triage, attach_english=lambda *a: seen.append(a[5]),
-                         post_to_discord=lambda session, url, messages: len(messages)), \
-                    mock.patch.dict(os.environ, {"ZENDESK_SUBDOMAIN": "acme",
-                                                 "ZENDESK_DISCORD_WEBHOOK_URL": "https://x/y",
-                                                 "ZENDESK_ENGLISH_FIELD_ID": "42",
-                                                 "SESSION_OPS_REHEARSAL": "1"}), \
-                    contextlib.redirect_stdout(io.StringIO()):
-                triage.main(["--findings", path])
-        self.assertEqual(seen, [None])
-
-    def said(self, **kwargs):
-        """attach_english's console output for one call."""
-        out = io.StringIO()
-        defaults = dict(session=object(), subdomain="acme", tickets=[], findings=[],
-                        model="claude-sonnet-5", field_id=42)
-        defaults.update(kwargs)
-        with contextlib.redirect_stdout(out):
-            transcript.attach_english(**defaults)
-        return out.getvalue()
-
-    def test_a_run_that_wrote_nothing_says_so(self):
-        """The count printed only when it was non-zero, so a run that wrote nothing
-        and a run that never reached this step read identically in the journal — the
-        one thing somebody checking whether the feature is on needs to tell apart."""
-        with Patched(transcript, conversation_turns=lambda *a: None):
-            said = self.said(tickets=[{"id": 1}],
-                             findings=[{"id": 1, "language": "German"}])
-        self.assertIn("0 of 1", said)
-
-    def test_an_unset_field_id_says_which_variable_is_missing(self):
-        said = self.said(field_id=None, findings=[{"id": 1, "language": "German"}])
-        self.assertIn(transcript.ENGLISH_FIELD_ENV, said)
-
-    def test_an_all_english_digest_says_so_rather_than_nothing(self):
-        said = self.said(findings=[{"id": 1, "language": "English"},
-                                   {"id": 2, "language": "English"}])
-        self.assertIn("No non-English tickets", said)
-        self.assertIn("2", said)
-
-    def test_a_ticket_that_was_classified_but_never_fetched_is_named(self):
-        said = self.said(tickets=[], findings=[{"id": 99, "language": "German"}])
-        self.assertIn("99", said)
-        self.assertIn("never fetched", said)
-
-    def test_a_ticket_with_no_public_comments_is_named(self):
-        with Patched(transcript, conversation_turns=lambda *a: None):
-            said = self.said(tickets=[{"id": 7}],
-                             findings=[{"id": 7, "language": "German"}])
-        self.assertIn("7", said)
-        self.assertIn("no public comments", said)
-
-    def test_one_ticket_that_cannot_be_rendered_does_not_stop_the_digest(self):
-        """claude_cli_json exits on a failed call, which is right for the
-        classification it was written for. Here it would take down a digest that is
-        otherwise ready to post over one ticket nobody can translate."""
-        def explode(*args, **kwargs):
-            raise SystemExit("claude exited 1")
-
-        written = []
-        with Patched(transcript,
-                     conversation_turns=lambda *a: [
-                         {"index": 0, "who": "Customer", "when": "", "body": "x"}],
-                     claude_cli_json=explode,
-                     write_english_field=lambda *a: written.append(a) or True):
-            got = transcript.attach_english(
-                object(), "acme", [{"id": 1}, {"id": 2}],
-                [{"id": 1, "language": "German"}, {"id": 2, "language": "German"}],
-                "claude-sonnet-5", field_id=42)
-        self.assertEqual(got, 0)
-        self.assertEqual(written, [])
-
-    def test_the_transcript_is_written_to_the_configured_field(self):
-        puts = []
-        with Patched(transcript,
-                     conversation_turns=lambda *a: [
-                         {"index": 0, "who": "Customer", "when": "2026-08-28 00:22 UTC",
-                          "body": "Es geht nicht."}],
-                     claude_cli_json=lambda *a, **k: {
-                         "turns": [{"index": 0, "english": "It does not work."}]},
-                     write_english_field=lambda *a: puts.append(a) or True):
-            got = transcript.attach_english(
-                object(), "acme", [{"id": 1}, {"id": 2}],
-                [{"id": 1, "language": "German"}, {"id": 2, "language": "English"}],
-                "claude-sonnet-5", field_id=42)
-        self.assertEqual(got, 1)
-        # The English ticket was never touched; the German one carries the transcript.
-        self.assertEqual([(p[2], p[3]) for p in puts], [(1, 42)])
-        self.assertIn("Customer:", puts[0][4])
-        self.assertIn("It does not work.", puts[0][4])
-
-    def test_a_ticket_with_no_matching_row_is_skipped(self):
-        """--findings and a partial fetch both leave findings whose ticket was never
-        loaded. There is nothing to read comments from, so there is nothing to do."""
-        with Patched(transcript,
-                     conversation_turns=lambda *a: [
-                         {"index": 0, "who": "Customer", "when": "", "body": "x"}],
-                     claude_cli_json=lambda *a, **k: {"turns": []},
-                     write_english_field=lambda *a: True):
-            self.assertEqual(
-                transcript.attach_english(object(), "acme", [],
-                                          [{"id": 99, "language": "German"}],
-                                          "claude-sonnet-5", field_id=42),
-                0)
 
 
 class TestCustomerSide(unittest.TestCase):

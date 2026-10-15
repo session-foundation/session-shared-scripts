@@ -17,6 +17,7 @@ sends the wrong thing to a real person:
 """
 import contextlib
 import html
+import json
 import io
 import os
 import re
@@ -124,6 +125,10 @@ class ParseCommand(unittest.TestCase):
             note_reply.comment_text(posted_note(note))))
 
 
+def writes(session):
+    return [call for call in session.calls if call[0] != "GET"]
+
+
 class EnglishTranscript(unittest.TestCase):
     def test_english_is_a_command(self):
         self.assertEqual(note_reply.parse_command("claude: english"), ("english", ""))
@@ -203,6 +208,25 @@ class EnglishTranscript(unittest.TestCase):
                  if m == "PUT" and "/tags.json" in u]
         self.assertEqual(added, [[note_reply.TAG_ERROR]])
 
+    def test_a_transcript_posted_meanwhile_is_not_posted_again(self):
+        """The model call takes minutes; a second `claude: english` can land in them."""
+        turns = [{"index": 0, "who": "Customer", "when": "t", "body": "Hallo"}]
+        landed = comment(f"transcript {note_reply.english_marker(3)}", author=API_USER, cid=4)
+        session = fake_session(FakeResponse({"comments": [landed]}))
+        with Patched(api, conversation_turns=lambda *a: turns), \
+                Patched(claude_cli, claude_cli_json=lambda *a, **k: {
+                    "turns": [{"index": 0, "english": "Hello"}]}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            note_reply.run_english(session, "sub", "model", {"id": 7},
+                                   [comment("claude: english", cid=9),
+                                    comment("Hallo", author=42, public=True, cid=3)],
+                                   {"id": 9, "author": AGENT, "action": "english",
+                                    "brief": ""}, dry_run=False)
+        bodies = [kw["json"]["ticket"]["comment"]["html_body"] for m, u, kw in writes(session)
+                  if "comment" in (kw.get("json") or {}).get("ticket", {})]
+        self.assertEqual(len(bodies), 1)
+        self.assertIn("already up to date", bodies[0])
+
     def test_unaccented_german_is_still_translated(self):
         """The reason this is checked after the call, not guessed before it:
         "Hallo, ich habe ein Problem" is pure ASCII, and a character test would have
@@ -224,8 +248,8 @@ class EnglishTranscript(unittest.TestCase):
             turns, [{"index": 0, "english": "my app crashes"}]))
 
     def test_a_turn_with_blank_lines_stays_one_turn(self):
-        """The first version split render_transcript's output on blank lines, which
-        tore a single multi-paragraph message into a row of disconnected boxes."""
+        """A multi-paragraph message is one turn with several paragraphs, never
+        several turns."""
         turns = [{"index": 0, "who": "Customer", "when": "2026-09-03 10:00 UTC",
                   "body": "Hallo,\n\nzweiter Absatz.\n\ndritter Absatz."}]
         blocks = note_reply.transcript_blocks(turns, [])
@@ -258,6 +282,17 @@ class EnglishTranscript(unittest.TestCase):
         self.assertIn("B", joined)          # translated turn used
         self.assertIn("a", joined)          # untranslated turn falls back to original
 
+    def test_a_scrambled_index_does_not_shift_every_later_turn(self):
+        """The model echoes indexes back. Matching by position instead would put one
+        speaker's words under another's name for the rest of the transcript."""
+        turns = [{"index": 0, "who": "Customer", "when": "", "body": "eins"},
+                 {"index": 1, "who": "Support", "when": "", "body": "zwei"}]
+        joined = "".join(note_reply.transcript_blocks(
+            turns, [{"index": 1, "english": "two"}, {"index": 0, "english": "one"}]))
+        self.assertLess(joined.index("Customer:"), joined.index("one"))
+        self.assertLess(joined.index("one"), joined.index("Support:"))
+        self.assertLess(joined.index("Support:"), joined.index("two"))
+
     def test_the_transcript_note_is_never_public(self):
         turns = [{"index": 0, "who": "Customer", "when": "2026-09-03 10:00 UTC",
                   "body": "Hallo"}]
@@ -269,10 +304,58 @@ class EnglishTranscript(unittest.TestCase):
                                    [dict(comment("Hallo", author=42, cid=3), public=True)],
                                    {"id": 9, "author": AGENT, "action": "english",
                                     "brief": ""}, dry_run=False)
-        ticket = session.calls[0][2]["json"]["ticket"]
+        ticket = writes(session)[0][2]["json"]["ticket"]
         self.assertIs(ticket["comment"]["public"], False)
         self.assertIn("Hello", ticket["comment"]["html_body"])
         self.assertIn(note_reply.english_marker(3), ticket["comment"]["html_body"])
+
+
+class FitTurns(unittest.TestCase):
+    def turns(self, *bodies):
+        return [{"index": i, "who": "Customer", "when": "", "body": b}
+                for i, b in enumerate(bodies)]
+
+    def test_a_short_conversation_is_sent_whole(self):
+        turns = self.turns("eins", "zwei")
+        self.assertEqual(note_reply.fit_turns(turns, 8000), (turns, 0))
+
+    def test_the_oldest_turns_go_first_and_whole(self):
+        turns = self.turns("a" * 3000, "b" * 3000, "c" * 3000)
+        kept, omitted = note_reply.fit_turns(turns, 8000)
+        self.assertEqual(([t["index"] for t in kept], omitted), ([1, 2], 1))
+        self.assertEqual(kept, turns[1:])
+        json.loads(note_reply.transcript_payload(kept))
+
+    def test_a_newest_turn_too_long_alone_is_clipped_to_fit(self):
+        turns = self.turns("old", 'neu "zitat"\n' * 2000)
+        kept, omitted = note_reply.fit_turns(turns, 8000)
+        self.assertEqual((len(kept), kept[0]["index"], omitted), (1, 1, 1))
+        payload = note_reply.transcript_payload(kept)
+        self.assertLessEqual(len(payload), 8000)
+        self.assertTrue(json.loads(payload)[0]["text"].endswith("…"))
+
+    def test_only_the_turns_that_fit_are_sent_and_judged(self):
+        """A turn the model never saw cannot be judged already English."""
+        turns = self.turns("a" * 7990, "Es geht nicht.")
+        sent = []
+
+        def translate(model, effort, system, schema, payload, *a):
+            sent.append(json.loads(payload))
+            return {"turns": [{"index": 1, "english": "It does not work."}]}
+
+        with Patched(api, conversation_turns=lambda *a: turns), \
+                Patched(claude_cli, claude_cli_json=translate):
+            outcome, detail = note_reply.translate_conversation(
+                None, "sub", "model", {"id": 7}, [comment("x", public=True, cid=3)])
+        self.assertEqual(outcome, "ready")
+        self.assertEqual([t["index"] for t in sent[0]], [1])
+        self.assertEqual(detail[3], 1)
+
+    def test_the_note_says_older_turns_were_left_out(self):
+        turns = self.turns("Es geht nicht.")
+        note = note_reply.english_note(turns, {"turns": []}, 3, 2, 9)
+        self.assertIn("2 earliest turn(s) are left out", note)
+        self.assertNotIn("left out", note_reply.english_note(turns, {"turns": []}, 3, 0, 9))
 
 
 BOOK = {
@@ -779,6 +862,170 @@ class Writes(unittest.TestCase):
         self.assertEqual([kw.get("attempts") for _, _, kw in session.calls], [1, None])
 
 
+CUSTOMER = 42
+TICKET = {"id": 7, "requester_id": CUSTOMER}
+
+
+def said(body, author=CUSTOMER, cid=1):
+    return comment(body, author=author, public=True, cid=cid)
+
+
+class FollowUps(unittest.TestCase):
+    """Once support has replied, a draft answers what the customer said since, and a
+    reply does not send a draft the customer has written past."""
+
+    def draft(self, comments, brief="still broken, ask for logs", lookups=()):
+        seen = {}
+        def fake(model, sample, brief, previous=None, precedent=None, thread=None):
+            seen.update(sample=sample, previous=previous, thread=thread)
+            return GERMAN
+        with Patched(note_reply, compose=fake):
+            session = fake_session(*lookups, FakeResponse({"ticket": {}}))
+            note_reply.run_draft(session, "sub", "model", TICKET,
+                                 [comment(f"claude: draft - {brief}", cid=20)] + comments,
+                                 {"id": 20, "author": AGENT, "action": "draft",
+                                  "brief": brief}, API_USER, dry_run=False)
+        return seen
+
+    def test_a_draft_already_sent_is_not_amended(self):
+        """Amending it carries its paragraphs into the next reply, so the customer
+        gets the first answer again."""
+        seen = self.draft([said("Anhänge werden 14 Tage gespeichert.", author=API_USER,
+                                cid=12),
+                           draft_note("Anhänge werden 14 Tage gespeichert.", cid=11),
+                           said("Meine Fotos sind weg", cid=10)])
+        self.assertIsNone(seen["previous"])
+
+    def test_a_draft_the_customer_wrote_after_is_not_amended(self):
+        seen = self.draft([said("Immer noch kaputt", cid=13),
+                           draft_note("Alter Entwurf", cid=11),
+                           said("Meine Fotos sind weg", cid=10)])
+        self.assertIsNone(seen["previous"])
+
+    def test_a_manual_agent_reply_leaves_the_draft_open_to_amend(self):
+        seen = self.draft([said("Wir schauen nach", author=AGENT, cid=12),
+                           draft_note("Entwurf", cid=11),
+                           said("Meine Fotos sind weg", cid=10)])
+        self.assertIn("Entwurf", seen["previous"])
+
+    def test_a_draft_newer_than_every_public_comment_is_still_amended(self):
+        seen = self.draft([draft_note("Zweiter Entwurf", cid=14),
+                           said("Immer noch kaputt", cid=13),
+                           said("Erste Antwort", author=AGENT, cid=12),
+                           said("Meine Fotos sind weg", cid=10)])
+        self.assertIn("Zweiter Entwurf", seen["previous"])
+
+    def test_the_newest_message_is_separated_from_what_was_answered(self):
+        seen = self.draft([said("Immer noch kaputt", cid=13),
+                           said("Erste Antwort", author=AGENT, cid=12),
+                           said("Meine Fotos sind weg", cid=10)])
+        self.assertEqual(seen["thread"], ("Customer: Meine Fotos sind weg\n\n"
+                                          "Support: Erste Antwort", "Immer noch kaputt"))
+
+    def test_a_channel_ticket_tells_the_sides_apart_by_role(self):
+        """On a DM the integration authors the customer's words, never the requester."""
+        seen = self.draft([said("Immer noch kaputt", author=77, cid=13),
+                           said("Erste Antwort", author=AGENT, cid=12),
+                           said("Meine Fotos sind weg", author=77, cid=10)],
+                          lookups=[FakeResponse({"user": {"role": "end-user"}}),
+                                   FakeResponse({"user": {"role": "agent"}})])
+        self.assertEqual(seen["thread"], ("Customer: Meine Fotos sind weg\n\n"
+                                          "Support: Erste Antwort", "Immer noch kaputt"))
+        self.assertIn("Immer noch kaputt", seen["sample"])
+        self.assertNotIn("Erste Antwort", seen["sample"])
+
+    def test_a_follow_up_nobody_asked_for_is_written_from_the_brief(self):
+        seen = self.draft([said("Erste Antwort", author=AGENT, cid=12),
+                           said("Meine Fotos sind weg", cid=10)])
+        self.assertEqual(seen["thread"][1], "")
+        built = note_reply.build_compose_prompt("x", "the fix shipped",
+                                                thread=seen["thread"])
+        self.assertIn("write the follow-up the brief describes", built)
+
+    def test_a_first_reply_has_no_thread(self):
+        seen = self.draft([said("Meine Fotos sind weg", cid=10)])
+        self.assertIsNone(seen["thread"])
+
+    def test_the_earlier_conversation_keeps_its_newest_end(self):
+        earlier, _ = note_reply.follow_up(
+            [said("x", cid=13), said("NEWEST " + "b" * 5000, author=AGENT, cid=12),
+             said("OLDEST " + "a" * 5000, cid=10)], {CUSTOMER})
+        self.assertLessEqual(len(earlier), note_reply.EARLIER_CHARS + 1)
+        self.assertNotIn("OLDEST", earlier)
+        self.assertTrue(earlier.endswith("b"))
+
+    def test_the_follow_up_prompt_leaves_out_the_pooled_customer_words(self):
+        built = note_reply.build_compose_prompt(
+            "EVERYTHING THEY EVER SAID", "ask for logs",
+            thread=("Customer: a\n\nSupport: b", "still broken"))
+        self.assertNotIn("EVERYTHING THEY EVER SAID", built)
+        self.assertLess(built.index("Support: b"), built.index("still broken"))
+        self.assertLess(built.index("still broken"), built.index("ask for logs"))
+
+    def reply(self, comments, brief="", lookups=()):
+        session = fake_session(*lookups,
+                               FakeResponse({"user": {"id": AGENT, "name": "Audric"}}),
+                               FakeResponse({"ticket": {}}), FakeResponse({"ticket": {}}))
+        note_reply.run_reply(session, "sub", TICKET,
+                             [comment(f"claude: reply {brief}", cid=20)] + comments,
+                             {"id": 20, "author": AGENT, "action": "reply", "brief": brief},
+                             API_USER, dry_run=False)
+        return [kw["json"]["ticket"]["comment"] for m, u, kw in session.calls
+                if m == "PUT" and "/tags.json" not in u], \
+               [kw["json"]["tags"] for m, u, kw in session.calls
+                if m == "PUT" and "/tags.json" in u]
+
+    def test_a_draft_the_customer_wrote_after_is_not_sent(self):
+        written, tags = self.reply([said("Immer noch kaputt", cid=13),
+                                    draft_note("Alter Entwurf", cid=12)])
+        self.assertEqual([c["public"] for c in written], [False])
+        self.assertIn("claude: reply anyway", written[0]["html_body"])
+        self.assertNotIn([note_reply.TAG_ERROR], tags)
+
+    def test_the_confirmation_names_the_option_asked_for(self):
+        written, _ = self.reply([said("Immer noch kaputt", cid=13),
+                                 draft_note("eins", "zwei", cid=12)], brief="2")
+        self.assertIn("claude: reply 2 anyway", written[0]["html_body"])
+
+    def test_anyway_sends_it(self):
+        written, _ = self.reply([said("Immer noch kaputt", cid=13),
+                                 draft_note("eins", "zwei", cid=12)], brief="2 anyway")
+        self.assertEqual(written[-1], {"body": "zwei", "public": True})
+
+    def test_anyway_only_counts_on_the_command_line(self):
+        """The brief runs to the end of the note, where "anyway" is ordinary prose."""
+        written, _ = self.reply([said("Immer noch kaputt", cid=13),
+                                 draft_note("eins", "zwei", cid=12)],
+                                brief="2\nanyway, they said thanks")
+        self.assertEqual([c["public"] for c in written], [False])
+
+    def test_a_draft_already_sent_is_not_sent_again(self):
+        written, _ = self.reply([said("Alter Entwurf", author=API_USER, cid=14),
+                                 draft_note("Alter Entwurf", cid=12)])
+        self.assertEqual([c["public"] for c in written], [False])
+        self.assertIn("already been sent", written[0]["html_body"])
+
+    def test_a_support_comment_after_the_draft_does_not_block_it(self):
+        written, _ = self.reply([said("Wir schauen nach", author=AGENT, cid=13),
+                                 draft_note("Entwurf", cid=12),
+                                 said("Meine Fotos sind weg", cid=10)])
+        self.assertEqual(written[-1], {"body": "Entwurf", "public": True})
+
+    def test_a_channel_customer_writing_after_the_draft_blocks_it(self):
+        written, _ = self.reply([said("Immer noch kaputt", author=77, cid=13),
+                                 draft_note("Entwurf", cid=12),
+                                 said("Erste Antwort", author=AGENT, cid=11)],
+                                lookups=[FakeResponse({"user": {"role": "end-user"}}),
+                                         FakeResponse({"user": {"role": "agent"}})])
+        self.assertEqual([c["public"] for c in written], [False])
+        self.assertIn("customer has written", written[0]["html_body"])
+
+    def test_a_draft_newer_than_the_customer_is_sent(self):
+        written, _ = self.reply([draft_note("Neuer Entwurf", cid=14),
+                                 said("Immer noch kaputt", cid=13)])
+        self.assertEqual(written[-1], {"body": "Neuer Entwurf", "public": True})
+
+
 class DraftNote(unittest.TestCase):
     def test_carries_the_back_translation_for_a_foreign_ticket(self):
         note = note_reply.build_draft_note(GERMAN, "keeps 14 days", 42)
@@ -849,7 +1096,7 @@ class Composition(unittest.TestCase):
         """An agent writing "also mention X" wants the draft they just read plus X.
         Regenerating from the new brief alone throws away wording they kept."""
         seen = {}
-        def fake(model, sample, brief, previous=None, precedent=None):
+        def fake(model, sample, brief, previous=None, precedent=None, thread=None):
             seen.update(brief=brief, previous=previous, precedent=precedent)
             return GERMAN
         with Patched(note_reply, compose=fake):
@@ -888,7 +1135,7 @@ class Composition(unittest.TestCase):
 
     def test_a_first_draft_has_nothing_to_amend(self):
         seen = {}
-        def fake(model, sample, brief, previous=None, precedent=None):
+        def fake(model, sample, brief, previous=None, precedent=None, thread=None):
             seen.update(previous=previous, precedent=precedent)
             return GERMAN
         with Patched(note_reply, compose=fake):

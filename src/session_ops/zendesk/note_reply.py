@@ -26,7 +26,9 @@ Two actions, both read from the ticket's own comments:
   draft    Compose the reply from the brief, translate it into the requester's
            language, and post it as a private note with a back-translation.
   reply    Send the most recent draft, verbatim. It never re-composes: what was
-           reviewed is what goes out, or the review means nothing.
+           reviewed is what goes out, or the review means nothing. If the customer
+           wrote after that draft, or it was already sent, it asks for
+           `claude: reply [n] anyway` first.
   english  Post the whole conversation, both sides, in English as a private note.
            Reads only; the customer never sees it.
   solve    Solve the ticket, writing nothing to the customer. For the ones that
@@ -73,6 +75,9 @@ PLACEMENT_TIMEOUT_SECONDS = 120
 # What Claude is given of the customer's own words, to answer in the right language
 # and at the right level of detail.
 CUSTOMER_SAMPLE_CHARS = 2000
+# What a follow-up draft is given of the conversation before the customer's newest
+# message: enough to know what support already said, newest end kept.
+EARLIER_CHARS = 4000
 # A brief is a sentence or two. Anything much longer is a reply somebody has already
 # written, which does not need composing.
 BRIEF_CHARS = 2000
@@ -291,11 +296,9 @@ def quoted_para(text):
 def transcript_blocks(turns, translated):
     """One turn at a time, as readable paragraphs.
 
-    Deliberately not transcript.render_transcript's output re-split on blank lines: a
-    turn whose own text contains a blank line gets torn into several pieces that
-    way, which is what made the first version render as a row of disconnected code
-    boxes. The speaker line leads each turn and the body follows as prose — nothing
-    extracts this text, so it wants readability, not byte fidelity.
+    One speaker line per turn; a turn's own blank lines split its paragraphs, never
+    the turn. The body is prose, not a code box: nothing extracts this text, so it
+    wants readability, not byte fidelity.
     """
     english = {}
     for item in translated or []:
@@ -630,13 +633,27 @@ COMPOSE_SYSTEM = textwrap.dedent(
 
     Where the precedent and the brief disagree, THE BRIEF WINS AND THE PRECEDENT IS
     DROPPED. The agent read this ticket; the precedent did not.
+
+    FOLLOW-UPS. When you are given THE CONVERSATION SO FAR, support has already
+    replied on this ticket. Answer only THE CUSTOMER'S NEWEST MESSAGE, or, when they
+    have not written since, write the follow-up the brief describes. Either way it is
+    the next message in a thread already under way. The customer has read every earlier
+    support reply: do not repeat its explanations, steps or apologies, and do not
+    acknowledge the original problem again. Refer back to an earlier point in a few
+    words, and only where the newest message needs it. A precedent describes a first
+    answer, so on a follow-up take from it only what the newest message asks about.
+    The conversation so far is context, not a fact source: repeat a fact from an
+    earlier support reply only if the brief gives it again.
     """
 ).strip()
 
 
-def build_compose_prompt(sample, brief, previous=None, precedent=None):
+def build_compose_prompt(sample, brief, previous=None, precedent=None, thread=None):
     """The customer's words, the brief, and — where they exist — the draft being
     amended and the precedent for this kind of ticket.
+
+    `thread` is (earlier, newest) from follow_up. It replaces the sample, which pools
+    every message the customer ever sent and so invites a reply to all of them.
 
     Order matters twice over. Precedent comes first because it is background; the
     brief comes last because it is the instruction, and what is nearest the end is
@@ -645,7 +662,14 @@ def build_compose_prompt(sample, brief, previous=None, precedent=None):
     parts = []
     if precedent:
         parts += [precedent, ""]
-    parts += ["THE CUSTOMER'S OWN WORDS FROM THE TICKET:", sample]
+    if thread:
+        earlier, newest = thread
+        parts += ["THE CONVERSATION SO FAR, ALREADY ANSWERED:", earlier, "",
+                  "THE CUSTOMER'S NEWEST MESSAGE, WHICH THIS REPLY ANSWERS:",
+                  newest or "(none: the customer has not written since support's "
+                            "last reply, so write the follow-up the brief describes)"]
+    else:
+        parts += ["THE CUSTOMER'S OWN WORDS FROM THE TICKET:", sample]
     if previous:
         parts += ["", "A PREVIOUS DRAFT, WHICH THE AGENT IS AMENDING:", previous,
                   "", "THE AGENT'S BRIEF, AS A CHANGE TO THAT DRAFT:", brief]
@@ -680,10 +704,10 @@ def validate_composition(result):
     return result
 
 
-def compose(model, sample, brief, previous=None, precedent=None):
+def compose(model, sample, brief, previous=None, precedent=None, thread=None):
     return validate_composition(claude_cli.claude_cli_json(
         model, "medium", COMPOSE_SYSTEM, COMPOSE_SCHEMA,
-        build_compose_prompt(sample, brief, previous, precedent),
+        build_compose_prompt(sample, brief, previous, precedent, thread),
         COMPOSE_TIMEOUT_SECONDS, "the reply draft"))
 
 
@@ -733,8 +757,9 @@ def build_draft_note(result, brief, comment_id, amended=False,
     return "".join(out)
 
 
-def find_draft(comments, api_user):
-    """The options carried by the newest draft note, as {number: text}. {} if none.
+def newest_draft(comments, api_user):
+    """(options, the comments newer than the draft note) for the newest draft note.
+    ({}, comments) if there is none. Options are {number: text}.
 
     Newest wins: an agent who did not like the first draft writes a new brief, and
     `reply` must offer what they last looked at. Restricted to notes this tool wrote,
@@ -743,15 +768,40 @@ def find_draft(comments, api_user):
 
     api.fetch_comments returns newest first, so this walks the list as it comes.
     """
-    for comment in comments:
+    for position, comment in enumerate(comments):
         if comment.get("public") or comment.get("author_id") != api_user:
             continue
         found = {int(number): body.strip()
                  for number, body in OPTION_BLOCK.findall(comment_text(comment))
                  if body.strip()}
         if found:
-            return found
-    return {}
+            return found, comments[:position]
+    return {}, comments
+
+
+def find_draft(comments, api_user):
+    """The options carried by the newest draft note, as {number: text}. {} if none."""
+    return newest_draft(comments, api_user)[0]
+
+
+def follow_up(comments, authors):
+    """(earlier, newest) once support has replied publicly on the ticket, else None.
+
+    `earlier` is the conversation up to support's last reply, both sides, labelled.
+    `newest` is what the customer wrote after it, or "" when they have not written.
+    """
+    public = [c for c in reversed(comments) if c.get("public")]   # oldest first
+    ours = [i for i, c in enumerate(public) if c.get("author_id") not in authors]
+    if not ours:
+        return None
+    body = lambda c: (c.get("body") or "").strip()
+    earlier = "\n\n".join(
+        f"{'Customer' if c.get('author_id') in authors else 'Support'}: {body(c)}"
+        for c in public[:ours[-1] + 1] if body(c))
+    if len(earlier) > EARLIER_CHARS:
+        earlier = "…" + earlier[-EARLIER_CHARS:]
+    newest = "\n\n".join(body(c) for c in public[ours[-1] + 1:] if body(c))
+    return earlier, clip(newest, CUSTOMER_SAMPLE_CHARS)
 
 
 def choose_option(options, asked):
@@ -775,6 +825,13 @@ def choose_option(options, asked):
 
 
 OPTION_NUMBER = re.compile(r"^\s*#?(\d+)\b")
+# `claude: reply anyway` or `claude: reply 2 anyway`, on the command line itself: the
+# brief runs to the end of the note, where "anyway" can be ordinary prose.
+CONFIRM = re.compile(r"^\s*(?:#?\d+\s+)?anyway\b", re.IGNORECASE)
+
+
+def confirmed(brief):
+    return bool(CONFIRM.match((brief or "").split("\n", 1)[0]))
 
 
 def asked_option(brief):
@@ -810,6 +867,8 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
     A second `draft` on a ticket that already has one is an amendment, not a fresh
     start: an agent writing "also mention X" wants the draft they just read plus X,
     and regenerating from the new brief alone would throw away the wording they kept.
+    Not once the draft was sent or the customer wrote after it: amending then would
+    send its paragraphs a second time. A manual reply by an agent leaves it open.
     """
     ticket_id = ticket["id"]
     comment_id, brief = command["id"], command["brief"]
@@ -818,11 +877,17 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
             "The brief was empty, so there was nothing to write. Add a private note "
             "reading claude: draft <what the answer is>", dry_run)
         return
-    shown = find_draft(comments, api_user)
+    authors = api.customer_authors(session, subdomain, ticket,
+                                   [c for c in comments if c.get("public")])
+    shown, newer = newest_draft(comments, api_user)
+    if any(c.get("public") and c.get("author_id") in authors | {api_user}
+           for c in newer):
+        shown = {}
     previous = "\n\n".join(f"Option {n}:\n{shown[n]}" for n in sorted(shown)) or None
+    thread = follow_up(comments, authors)
 
     sample = api.customer_text(session, subdomain, ticket, comments,
-                               CUSTOMER_SAMPLE_CHARS)
+                               CUSTOMER_SAMPLE_CHARS, authors)
     book = load_house()
     group, platform = tagged_placement(ticket)
     new_tags = []
@@ -842,7 +907,7 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
 
     try:
         result = compose(model, clip(sample, CUSTOMER_SAMPLE_CHARS), brief,
-                         previous, precedent)
+                         previous, precedent, thread)
     except SystemExit as exc:
         say(session, subdomain, ticket_id, comment_id,
             f"The draft could not be written: {exc} Nothing was sent. To try again, "
@@ -960,15 +1025,24 @@ def run_reply(session, subdomain, ticket, comments, command, api_user, dry_run):
     """
     ticket_id = ticket["id"]
     comment_id = command["id"]
-    options = find_draft(comments, api_user)
+    options, newer = newest_draft(comments, api_user)
     if not options:
         say(session, subdomain, ticket_id, comment_id,
             "There is no draft on this ticket to send. Add a private note reading "
             "claude: draft <what the answer is>", dry_run)
         return
-    sending, complaint = choose_option(options, asked_option(command["brief"]))
+    asked = asked_option(command["brief"])
+    sending, complaint = choose_option(options, asked)
     if complaint:
         say(session, subdomain, ticket_id, comment_id, complaint, dry_run, error=False)
+        return
+    stale = stale_draft(session, subdomain, ticket, comments, newer, api_user)
+    if stale and not confirmed(command["brief"]):
+        again = f"claude: reply {asked} anyway" if asked else "claude: reply anyway"
+        say(session, subdomain, ticket_id, comment_id,
+            f"{stale} Nothing was sent. To write a new reply, add a private note "
+            f"reading claude: draft <a new brief>. To send this draft as it is, add a "
+            f"private note reading {again}", dry_run, error=False)
         return
     author = api.fetch_user(session, subdomain, command["author"])
     who = author.get("name") or f"user {command['author']}"
@@ -988,6 +1062,25 @@ def run_reply(session, subdomain, ticket, comments, command, api_user, dry_run):
     write_to_ticket(session, subdomain, ticket_id, sending, public=True,
                     status=REPLIED_STATUS)
     print(f"#{ticket_id}: reply sent and status -> {REPLIED_STATUS}.")
+
+
+def stale_draft(session, subdomain, ticket, comments, newer, api_user):
+    """Why the draft should not go out unconfirmed, or None.
+
+    `newer` is the slice of `comments` after the draft. A public comment by the API
+    user there is a reply this tool sent, and the newest draft is the one it sent.
+    """
+    public = [c for c in newer if c.get("public")]
+    if any(c.get("author_id") == api_user for c in public):
+        return "This draft has already been sent to the customer."
+    if not public:
+        return None
+    authors = api.customer_authors(session, subdomain, ticket,
+                                   [c for c in comments if c.get("public")])
+    if any(c.get("author_id") in authors for c in public):
+        return ("The customer has written since this draft was made, so it may not "
+                "answer what they said last.")
+    return None
 
 
 def already_english(turns, translated):
@@ -1014,61 +1107,122 @@ def already_english(turns, translated):
                for turn in turns)
 
 
-def run_english(session, subdomain, model, ticket, comments, command, dry_run):
-    """Put the conversation on the ticket in English, as a private note.
+def transcript_payload(turns):
+    return json.dumps([{"index": t["index"], "speaker": t["who"], "text": t["body"]}
+                       for t in turns], ensure_ascii=False)
+
+
+def fit_turns(turns, limit):
+    """The newest turns whose payload fits `limit`, and how many older ones were left out.
+
+    Whole turns go from the oldest end, since the newest is what the customer just sent.
+    A newest turn too long on its own is clipped, never dropped.
+    """
+    kept = list(turns)
+    while len(kept) > 1 and len(transcript_payload(kept)) > limit:
+        kept.pop(0)
+    omitted = len(turns) - len(kept)
+    if len(transcript_payload(kept)) <= limit:
+        return kept, omitted
+    turn = kept[0]
+    room = limit - len(transcript_payload([dict(turn, body="")]))
+    while True:
+        clipped = dict(turn, body=clip(turn["body"], max(room, 1)))
+        # JSON escaping makes the payload longer than the text it carries.
+        excess = len(transcript_payload([clipped])) - limit
+        if excess <= 0 or room <= 1:
+            return [clipped], omitted
+        room -= excess
+
+
+def translate_conversation(session, subdomain, model, ticket, comments):
+    """The conversation on a ticket in English, or why there is none.
+
+    Returns (outcome, detail): ("current", None) when a transcript already covers the
+    newest public comment, ("empty", None), ("english", None) when the conversation
+    is already English, ("failed", the reason), or ("ready", (turns, rendered, latest,
+    omitted)): `turns` are the ones sent, newest last, and `omitted` the older ones that
+    did not fit.
 
     Reads both sides, not just the customer's: their second message is usually an
     answer to a reply, and without the reply it reads as a complaint about nothing.
 
-    Python owns the speaker labels and timestamps and the model only translates —
-    the same split transcript.py makes, for the same reason: a model asked to format the
-    transcript can drop a turn, merge two, or date one it was never given, and each
-    of those is invisible in the output.
+    Python owns the speaker labels and timestamps and the model only translates: a
+    model asked to format the transcript can drop a turn, merge two, or date one it
+    was never given, and each of those is invisible in the output.
     """
     ticket_id = ticket["id"]
     latest = next((c.get("id") for c in comments if c.get("public")), None)
     if latest is not None and api.has_marker(comments, english_marker(latest)):
-        say(session, subdomain, ticket_id, command["id"],
-            "The English transcript on this ticket is already up to date — nothing "
-            "has been said since it was written.", dry_run, error=False)
-        return
+        return "current", None
     turns = api.conversation_turns(session, subdomain, ticket)
     if not turns:
-        say(session, subdomain, ticket_id, command["id"],
-            "There are no public comments on this ticket to translate.", dry_run,
-            error=False)
-        return
-
-    payload = json.dumps([{"index": t["index"], "speaker": t["who"], "text": t["body"]}
-                          for t in turns], ensure_ascii=False)
+        return "empty", None
+    turns, omitted = fit_turns(turns, transcript.TRANSCRIPT_INPUT_CHARS)
     try:
         rendered = claude_cli.claude_cli_json(
             model, "medium", transcript.TRANSCRIPT_SYSTEM_PROMPT, transcript.TRANSCRIPT_SCHEMA,
-            clip(payload, transcript.TRANSCRIPT_INPUT_CHARS),
+            transcript_payload(turns),
             transcript.ENGLISH_TIMEOUT_SECONDS, f"the English transcript of #{ticket_id}")
     except SystemExit as exc:
+        return "failed", str(exc)
+    # A transcript of English text repeats what is already a few comments above it.
+    if already_english(turns, rendered.get("turns")):
+        return "english", None
+    return "ready", (turns, rendered, latest, omitted)
+
+
+def english_note(turns, rendered, latest, omitted, command_id):
+    """The private note carrying the transcript. Its english_marker is what stops a
+    second `claude: english` writing the same transcript before anything new is said."""
+    left_out = ([para(f"The {omitted} earliest turn(s) are left out: the conversation is "
+                      "too long to translate whole.")] if omitted else [])
+    return "".join(
+        [para(f"This conversation in English — {len(turns)} turn(s), both sides."),
+         para("Translated for reading; the customer has not seen this.")]
+        + left_out
+        + transcript_blocks(turns, rendered.get("turns"))
+        + [para(f"{done_marker(command_id)} {english_marker(latest)}")])
+
+
+def transcript_landed(session, subdomain, ticket_id, latest):
+    """Whether another run posted this transcript while the model was translating."""
+    comments = api.fetch_comments(session, subdomain, ticket_id, optional=True)
+    return bool(comments) and api.has_marker(comments, english_marker(latest))
+
+
+def run_english(session, subdomain, model, ticket, comments, command, dry_run):
+    """Put the conversation on the ticket in English, as a private note."""
+    ticket_id = ticket["id"]
+    outcome, detail = translate_conversation(session, subdomain, model, ticket, comments)
+    answers = {
+        "current": "The English transcript on this ticket is already up to date — nothing "
+                   "has been said since it was written.",
+        "empty": "There are no public comments on this ticket to translate.",
+        "english": "This conversation is already in English, so there is nothing to "
+                   "translate.",
+    }
+    if outcome in answers:
+        say(session, subdomain, ticket_id, command["id"], answers[outcome], dry_run,
+            error=False)
+        return
+    if outcome == "failed":
         say(session, subdomain, ticket_id, command["id"],
-            f"The English transcript could not be produced: {exc} To try again, add "
+            f"The English transcript could not be produced: {detail} To try again, add "
             "a new private note reading claude: english.", dry_run)
         return
-    if already_english(turns, rendered.get("turns")):
-        # A transcript of English text repeats what is already a few comments above
-        # it. Say so rather than posting the same words back.
-        say(session, subdomain, ticket_id, command["id"],
-            "This conversation is already in English, so there is nothing to "
-            "translate.", dry_run, error=False)
-        return
+    turns, rendered, latest, omitted = detail
     print(f"#{ticket_id}: rendered {len(turns)} turn(s) in English.")
     if dry_run:
         print(f"#{ticket_id}: dry run, nothing written.")
         return
-    note = "".join(
-        [para(f"This conversation in English — {len(turns)} turn(s), both sides."),
-         para("Translated for reading; the customer has not seen this.")]
-        + transcript_blocks(turns, rendered.get("turns"))
-        + [para(f"{done_marker(command['id'])} {english_marker(latest)}")])
-    write_to_ticket(session, subdomain, ticket_id, note, public=False, as_html=True,
-                    drop_tags=[TAG_QUEUED, TAG_ERROR])
+    if transcript_landed(session, subdomain, ticket_id, latest):
+        say(session, subdomain, ticket_id, command["id"], answers["current"], dry_run,
+            error=False)
+        return
+    write_to_ticket(session, subdomain, ticket_id,
+                    english_note(turns, rendered, latest, omitted, command["id"]),
+                    public=False, as_html=True, drop_tags=[TAG_QUEUED, TAG_ERROR])
 
 
 def say(session, subdomain, ticket_id, comment_id, text, dry_run, error=True):

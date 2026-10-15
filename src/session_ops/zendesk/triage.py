@@ -69,6 +69,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 import textwrap
 from datetime import datetime, timedelta, timezone
@@ -78,7 +79,7 @@ import requests
 
 from session_ops.shared import discord, http, state as dedup
 from session_ops.shared.discord import clip, post_to_discord
-from session_ops.shared.env import get_env, rehearsing
+from session_ops.shared.env import get_env
 from session_ops.shared.text import squash
 from session_ops.zendesk.api import (REVIEW_CHANNEL, SEARCH_RESULT_LIMIT, fetch_comments,
                                      fetch_tickets,
@@ -86,7 +87,6 @@ from session_ops.zendesk.api import (REVIEW_CHANNEL, SEARCH_RESULT_LIMIT, fetch_
                                      review_platform, review_stars, ticket_url,
                                      zendesk_session)
 from session_ops.zendesk.claude_cli import MODEL, claude_cli_json
-from session_ops.zendesk.transcript import ENGLISH_FIELD_ENV, attach_english
 
 # Never analyzed. A store review cannot be answered the way a ticket can: it takes
 # one developer response, replacing any previous one, with no way to ask a follow-up
@@ -506,7 +506,7 @@ def hydrate_descriptions(session, subdomain, tickets):
     return hydrated
 
 
-# ---- English transcript, for the reply dialog -------------------------------
+# ---- The classification request ---------------------------------------------
 
 
 def compact_ticket(ticket):
@@ -670,6 +670,9 @@ COLLAPSED_CATEGORY = "abuse_report"
 # Character budget for the links on that line, so a day of nothing but abuse reports
 # can't push it past MAX_MESSAGE_CHARS. Past it the rest are counted, not linked.
 COLLAPSED_LINKS_CHARS = 900
+# Every other classified ticket, linked once, one line per category under it.
+UNFLAGGED_MARKER = "💤"
+NON_ENGLISH_MARKER = "🌐"
 
 # ---- Components V2 ---------------------------------------------------------
 #
@@ -754,6 +757,72 @@ def build_collapsed_line(collapsed, subdomain):
     return (f"{CATEGORY_EMOJI[COLLAPSED_CATEGORY]} **{len(collapsed)}** abuse report"
             f"{'' if len(collapsed) == 1 else 's'} — reported Session IDs, nothing "
             f"actionable ({', '.join(links)})")
+
+
+def build_unflagged_lines(unflagged, subdomain):
+    """The tickets nobody is asked to look at: one (line, linked ids) per category,
+    most common first, under the abuse reports.
+
+        💤 🔑 **2** not flagged — #28891, #28880
+
+    Each category has its own COLLAPSED_LINKS_CHARS, so a busy category cannot push
+    a rarer one off the digest. Only linked tickets are returned as covered: one past
+    the budget stays eligible for the next run rather than being recorded unseen.
+    Oldest first, so the overflow is the newest, which has the most runs left.
+    """
+    by_category = {}
+    for f in unflagged:
+        by_category.setdefault(f.get("category"), []).append(f)
+    out = []
+    for category, members in sorted(by_category.items(), key=lambda kv: -len(kv[1])):
+        links, linked, used = [], set(), 0
+        for f in sorted(members, key=lambda f: f.get("id") or 0):
+            link = f"[#{f.get('id')}]({ticket_url(subdomain, f.get('id'))})"
+            used += len(link) + 2
+            if used > COLLAPSED_LINKS_CHARS:
+                break
+            links.append(link)
+            linked.add(f.get("id"))
+        unlisted = len(members) - len(links)
+        if unlisted:
+            links.append(f"+{unlisted} more")
+        out.append((f"{UNFLAGGED_MARKER} {CATEGORY_EMOJI.get(category, '•')} "
+                    f"**{len(members)}** not flagged — {', '.join(links)}", linked))
+    return out
+
+
+def is_english(finding):
+    """Unknown counts as English: a thin classification is likelier than a ticket
+    nobody here can read."""
+    language = (finding.get("language") or "").strip().lower()
+    return (language in ("", "unknown", "en") or language.startswith("english")
+            or re.match(r"en[-_]", language) is not None)
+
+
+def build_non_english_line(findings, subdomain, updated_ids):
+    """The tickets reported for the first time that are not in English, for an agent to
+    answer `claude: english` on. None when there are none.
+
+        🌐 **2** new, not in English — #28891 German, #28880 Russian
+
+    Covers no ticket: each is accounted for by its own line elsewhere in the digest.
+    """
+    members = [f for f in findings if f.get("id") not in updated_ids and not is_english(f)]
+    if not members:
+        return None
+    links, used = [], 0
+    for f in members:
+        link = (f"[#{f.get('id')}]({ticket_url(subdomain, f.get('id'))}) "
+                f"{clip(f.get('language'), 20)}")
+        used += len(link) + 2
+        if used > COLLAPSED_LINKS_CHARS:
+            break
+        links.append(link)
+    unlisted = len(members) - len(links)
+    if unlisted:
+        links.append(f"+{unlisted} more")
+    return (f"{NON_ENGLISH_MARKER} **{len(members)}** new, not in English — "
+            f"{', '.join(links)}", set())
 
 
 def build_header(findings, highlights, stats=None):
@@ -861,18 +930,18 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
     omitted_ids = {f.get("id") for f in omitted}
     collapsed = [f for f in findings if is_collapsed(f)]
     collapsed_ids = {f.get("id") for f in collapsed}
+    unflagged = [f for f in findings if f.get("id") not in shown_ids | omitted_ids | collapsed_ids]
 
-    # The header accounts for every classified ticket except the highlights that
-    # didn't fit; those are covered by no message and stay eligible next run. The
-    # collapsed line accounts for the abuse reports, links or not — its count covers
-    # every one of them, so re-reporting them next run would be noise.
-    header_ids = ({f.get("id") for f in findings}
-                  - shown_ids - omitted_ids - collapsed_ids)
+    # The highlights that didn't fit are covered by no message and stay eligible next
+    # run. The abuse-report line accounts for every report it counts, links or not.
     header = build_header(findings, shown + omitted, stats)
     if omitted:
         header += (f"\nShowing the top **{len(shown)}** of "
                    f"**{len(shown) + len(omitted)}** worth looking into.")
-    entries = [
+    non_english = build_non_english_line(findings, subdomain, updated_ids)
+    # First, under the header: it is the run's to-do list for `claude: english`.
+    entries = [non_english] if non_english else []
+    entries += [
         (build_ticket_line(f, subdomain, is_update=f.get("id") in updated_ids),
          {f.get("id")})
         for f in shown
@@ -880,11 +949,10 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
     # Last, under the individual tickets: lowest position for the lowest priority.
     if collapsed:
         entries.append((build_collapsed_line(collapsed, subdomain), collapsed_ids))
+    entries += build_unflagged_lines(unflagged, subdomain)
 
-    messages, coverage = discord.messages_from_entries(
+    return discord.messages_from_entries(
         header, entries, MAX_ENTRIES_PER_MESSAGE, MAX_COMPONENT_CHARS)
-    coverage[0] |= header_ids
-    return messages, coverage
 
 
 def main(argv=None):
@@ -1079,18 +1147,6 @@ def main(argv=None):
     shown, omitted = select_highlights(findings)
     print(f"{len(findings)} tickets classified; {len(shown) + len(omitted)} worth looking into"
           + (f" ({len(omitted)} beyond the display cap)." if omitted else "."))
-
-    # Before the post, never after: the Comment button only exists on a digest card,
-    # so writing the rendering first is what guarantees every ticket that can reach
-    # the dialog already carries one.
-    #
-    # Gated on the post actually happening, not just on --dry-run. --no-discord is
-    # the flag CI runs with, and a run that posts no card creates no button — so a
-    # rendering written there would be a write to a production ticket for a dialog
-    # that can never be opened. A rehearsal passes no field, so it writes nothing.
-    if needs_discord:
-        attach_english(zd, subdomain, classified, shown, MODEL,
-                       None if rehearsing() else get_env(ENGLISH_FIELD_ENV, required=False))
 
     messages, coverage = build_messages(findings, subdomain, stats, updated_ids)
     if args.dry_run:

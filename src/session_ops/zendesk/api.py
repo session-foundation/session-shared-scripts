@@ -281,7 +281,7 @@ def customer_authors(session, subdomain, ticket, comments):
     return customers or {requester}
 
 
-def customer_text(session, subdomain, ticket, comments, limit):
+def customer_text(session, subdomain, ticket, comments, limit, authors=None):
     """What the customer wrote, as the signal for which language to reply in.
 
     Their words only. An agent's earlier English reply is still text on the ticket,
@@ -291,7 +291,8 @@ def customer_text(session, subdomain, ticket, comments, limit):
     # Public only. A private note is internal annotation — including the `claude:`
     # commands and the drafts this tool writes — and never the customer speaking.
     comments = [c for c in comments if c.get("public")]
-    authors = customer_authors(session, subdomain, ticket, comments)
+    if authors is None:
+        authors = customer_authors(session, subdomain, ticket, comments)
     subject = squash(ticket.get("subject"))
     parts = []
     description = (ticket.get("description") or "").strip()
