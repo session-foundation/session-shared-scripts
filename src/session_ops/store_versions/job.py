@@ -48,10 +48,11 @@ HOUR = 3600
 REMINDER_SECONDS = 12 * HOUR
 FAILING_AFTER_SECONDS = HOUR
 USER_AGENT = "session-ops store-versions (+https://github.com/session-foundation)"
-# Short, so a host that stops answering costs under a minute of the unit's 4.
+# A request takes at most ~110 s: two 25 s attempts and a 60 s Retry-After between them.
 HTTP_ATTEMPTS, HTTP_TIMEOUT = 2, (5, 20)
-# Messages still unposted by then wait for the next run rather than for systemd's kill.
-POST_DEADLINE_SECONDS = 150
+# Messages still unposted by then wait for the next run: a post started by 100 s ends
+# inside the unit's 4-minute timeout.
+POST_DEADLINE_SECONDS = 100
 EMBED_FIELD_CHARS = 1024
 
 ANDROID_REPO, IOS_REPO, DESKTOP_REPO = "session-android", "session-ios", "session-desktop"
@@ -172,17 +173,19 @@ def event_message(platform, event, github_url, store_url, tags):
         suffix = {WARNING: " (first check)" if event.initial else "",
                   WARNING_UPDATE: " — divergence grew",
                   WARNING_REMINDER: " — still unresolved"}[event.kind]
-        if event.kind == WARNING_REMINDER:
-            description += f"\nStill out of sync after ~{REMINDER_SECONDS // HOUR}h."
         embed.update(color=RED, title=f"⚠️ {platform.display}: {direction}{suffix}",
                      description=description)
         ids = tags.get(platform.name, [])
         if ids:
             message["content"] = " ".join(f"<@{i}>" for i in ids)
             message["allowed_mentions"] = {"users": ids}
-    elif event.kind == ALL_CLEAR:
+    elif event.kind == ALL_CLEAR and sources.compare(event.store, event.github) == 0:
         embed.update(color=GREEN, title=f"✅ {platform.display}: back in sync",
                      description=f"{store} and GitHub are back in sync at **{event.github}**.")
+    elif event.kind == ALL_CLEAR:
+        embed.update(color=GREEN, title=f"✅ {platform.display}: no longer ahead of GitHub",
+                     description=f"GitHub has published **{event.github}**; {store} is at "
+                                 f"**{event.store}**.")
     elif event.kind == INFO_GITHUB:
         embed.update(color=BLUE, title=f"ℹ️ {platform.display}: new GitHub release",
                      description=f"GitHub advanced to **{event.github}** "
@@ -334,7 +337,8 @@ def main(argv=None):
     if args.state:
         write_json(args.state, state)
     if refused:
-        sys.exit(f"Posted {posted} of {len(messages)} messages to Discord.")
+        # Without counts: the runner repeats an alert only when its text changes.
+        sys.exit("Discord refused a post; it is retried next run.")
     if deferred:
         print(f"Posted {posted} of {len(messages)} message(s); the rest go next run.")
     else:

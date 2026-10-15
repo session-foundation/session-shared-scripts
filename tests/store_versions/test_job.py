@@ -126,6 +126,24 @@ class TestJob(unittest.TestCase):
         self.assertEqual([embed["title"] for embed in message["embeds"]],
                          ["ℹ️ Session iOS: new GitHub release", "ℹ️ Session iOS: App Store updated"])
 
+    def test_an_all_clear_says_what_is_true(self):
+        run = Run({"session-ios": "2.15.5", "session-desktop": "1.18.2"},
+                  {"appstore": "2.15.6", "deb": "1.18.2"})
+        run()
+        run.github["session-ios"] = "2.15.7"
+        run()
+        self.assertEqual(titles(run.posted)[1], "✅ Session iOS: no longer ahead of GitHub")
+
+    def test_a_refused_post_fails_with_the_same_text_however_many_wait(self):
+        failures = []
+        for stores in ({"appstore": "2.15.6", "deb": "1.18.2"},
+                       {"appstore": "2.15.6", "deb": "1.18.1"}):
+            run = Run({"session-ios": "2.15.5", "session-desktop": "1.18.2"}, stores, accept=0)
+            with self.assertRaises(SystemExit) as raised:
+                run()
+            failures.append(str(raised.exception))
+        self.assertEqual(failures[0], failures[1])
+
     def test_past_the_deadline_messages_wait_for_the_next_run(self):
         run = Run({"session-ios": "2.15.5", "session-desktop": "1.18.3"},
                   {"appstore": "2.15.6", "deb": "1.18.2"})
