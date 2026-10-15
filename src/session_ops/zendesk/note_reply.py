@@ -27,7 +27,8 @@ Two actions, both read from the ticket's own comments:
            language, and post it as a private note with a back-translation.
   reply    Send the most recent draft, verbatim. It never re-composes: what was
            reviewed is what goes out, or the review means nothing. If the customer
-           wrote after that draft, it asks for `claude: reply anyway` first.
+           wrote after that draft, or it was already sent, it asks for
+           `claude: reply [n] anyway` first.
   english  Post the whole conversation, both sides, in English as a private note.
            Reads only; the customer never sees it.
   solve    Solve the ticket, writing nothing to the customer. For the ones that
@@ -634,12 +635,15 @@ COMPOSE_SYSTEM = textwrap.dedent(
     DROPPED. The agent read this ticket; the precedent did not.
 
     FOLLOW-UPS. When you are given THE CONVERSATION SO FAR, support has already
-    replied on this ticket. Answer only THE CUSTOMER'S NEWEST MESSAGE, as the next
-    message in a thread already under way. The customer has read every earlier
+    replied on this ticket. Answer only THE CUSTOMER'S NEWEST MESSAGE, or, when they
+    have not written since, write the follow-up the brief describes. Either way it is
+    the next message in a thread already under way. The customer has read every earlier
     support reply: do not repeat its explanations, steps or apologies, and do not
     acknowledge the original problem again. Refer back to an earlier point in a few
     words, and only where the newest message needs it. A precedent describes a first
     answer, so on a follow-up take from it only what the newest message asks about.
+    The conversation so far is context, not a fact source: repeat a fact from an
+    earlier support reply only if the brief gives it again.
     """
 ).strip()
 
@@ -663,7 +667,7 @@ def build_compose_prompt(sample, brief, previous=None, precedent=None, thread=No
         parts += ["THE CONVERSATION SO FAR, ALREADY ANSWERED:", earlier, "",
                   "THE CUSTOMER'S NEWEST MESSAGE, WHICH THIS REPLY ANSWERS:",
                   newest or "(none: the customer has not written since support's "
-                            "last reply)"]
+                            "last reply, so write the follow-up the brief describes)"]
     else:
         parts += ["THE CUSTOMER'S OWN WORDS FROM THE TICKET:", sample]
     if previous:
@@ -780,14 +784,13 @@ def find_draft(comments, api_user):
     return newest_draft(comments, api_user)[0]
 
 
-def follow_up(session, subdomain, ticket, comments):
+def follow_up(comments, authors):
     """(earlier, newest) once support has replied publicly on the ticket, else None.
 
     `earlier` is the conversation up to support's last reply, both sides, labelled.
     `newest` is what the customer wrote after it, or "" when they have not written.
     """
     public = [c for c in reversed(comments) if c.get("public")]   # oldest first
-    authors = api.customer_authors(session, subdomain, ticket, public)
     ours = [i for i, c in enumerate(public) if c.get("author_id") not in authors]
     if not ours:
         return None
@@ -822,9 +825,13 @@ def choose_option(options, asked):
 
 
 OPTION_NUMBER = re.compile(r"^\s*#?(\d+)\b")
-# `claude: reply anyway`, or `claude: reply 2 anyway`: send a draft the customer has
-# written after.
-CONFIRM = re.compile(r"\banyway\b", re.IGNORECASE)
+# `claude: reply anyway` or `claude: reply 2 anyway`, on the command line itself: the
+# brief runs to the end of the note, where "anyway" can be ordinary prose.
+CONFIRM = re.compile(r"^\s*(?:#?\d+\s+)?anyway\b", re.IGNORECASE)
+
+
+def confirmed(brief):
+    return bool(CONFIRM.match((brief or "").split("\n", 1)[0]))
 
 
 def asked_option(brief):
@@ -874,10 +881,12 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
     if any(c.get("public") for c in newer):
         shown = {}
     previous = "\n\n".join(f"Option {n}:\n{shown[n]}" for n in sorted(shown)) or None
-    thread = follow_up(session, subdomain, ticket, comments)
+    authors = api.customer_authors(session, subdomain, ticket,
+                                   [c for c in comments if c.get("public")])
+    thread = follow_up(comments, authors)
 
     sample = api.customer_text(session, subdomain, ticket, comments,
-                               CUSTOMER_SAMPLE_CHARS)
+                               CUSTOMER_SAMPLE_CHARS, authors)
     book = load_house()
     group, platform = tagged_placement(ticket)
     new_tags = []
@@ -1026,12 +1035,11 @@ def run_reply(session, subdomain, ticket, comments, command, api_user, dry_run):
     if complaint:
         say(session, subdomain, ticket_id, comment_id, complaint, dry_run, error=False)
         return
-    if customer_wrote_since(session, subdomain, ticket, comments, newer) \
-            and not CONFIRM.search(command["brief"] or ""):
+    stale = stale_draft(session, subdomain, ticket, comments, newer, api_user)
+    if stale and not confirmed(command["brief"]):
         again = f"claude: reply {asked} anyway" if asked else "claude: reply anyway"
         say(session, subdomain, ticket_id, comment_id,
-            "The customer has written since this draft was made, so it may not answer "
-            "what they said last. Nothing was sent. To answer them, add a private note "
+            f"{stale} Nothing was sent. To write a new reply, add a private note "
             f"reading claude: draft <a new brief>. To send this draft as it is, add a "
             f"private note reading {again}", dry_run, error=False)
         return
@@ -1055,13 +1063,23 @@ def run_reply(session, subdomain, ticket, comments, command, api_user, dry_run):
     print(f"#{ticket_id}: reply sent and status -> {REPLIED_STATUS}.")
 
 
-def customer_wrote_since(session, subdomain, ticket, comments, newer):
-    """Whether any of `newer`, a slice of `comments`, is the customer writing."""
-    if not any(c.get("public") for c in newer):
-        return False
+def stale_draft(session, subdomain, ticket, comments, newer, api_user):
+    """Why the draft should not go out unconfirmed, or None.
+
+    `newer` is the slice of `comments` after the draft. A public comment by the API
+    user there is a reply this tool sent, and the newest draft is the one it sent.
+    """
+    public = [c for c in newer if c.get("public")]
+    if any(c.get("author_id") == api_user for c in public):
+        return "This draft has already been sent to the customer."
+    if not public:
+        return None
     authors = api.customer_authors(session, subdomain, ticket,
                                    [c for c in comments if c.get("public")])
-    return any(c.get("public") and c.get("author_id") in authors for c in newer)
+    if any(c.get("author_id") in authors for c in public):
+        return ("The customer has written since this draft was made, so it may not "
+                "answer what they said last.")
+    return None
 
 
 def already_english(turns, translated):

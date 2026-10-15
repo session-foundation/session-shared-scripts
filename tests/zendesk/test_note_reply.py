@@ -874,13 +874,13 @@ class FollowUps(unittest.TestCase):
     """Once support has replied, a draft answers what the customer said since, and a
     reply does not send a draft the customer has written past."""
 
-    def draft(self, comments, brief="still broken, ask for logs"):
+    def draft(self, comments, brief="still broken, ask for logs", lookups=()):
         seen = {}
         def fake(model, sample, brief, previous=None, precedent=None, thread=None):
             seen.update(sample=sample, previous=previous, thread=thread)
             return GERMAN
         with Patched(note_reply, compose=fake):
-            session = fake_session(*[FakeResponse({"ticket": {}})])
+            session = fake_session(*lookups, FakeResponse({"ticket": {}}))
             note_reply.run_draft(session, "sub", "model", TICKET,
                                  [comment(f"claude: draft - {brief}", cid=20)] + comments,
                                  {"id": 20, "author": AGENT, "action": "draft",
@@ -910,15 +910,34 @@ class FollowUps(unittest.TestCase):
         self.assertEqual(seen["thread"], ("Customer: Meine Fotos sind weg\n\n"
                                           "Support: Erste Antwort", "Immer noch kaputt"))
 
+    def test_a_channel_ticket_tells_the_sides_apart_by_role(self):
+        """On a DM the integration authors the customer's words, never the requester."""
+        seen = self.draft([said("Immer noch kaputt", author=77, cid=13),
+                           said("Erste Antwort", author=AGENT, cid=12),
+                           said("Meine Fotos sind weg", author=77, cid=10)],
+                          lookups=[FakeResponse({"user": {"role": "end-user"}}),
+                                   FakeResponse({"user": {"role": "agent"}})])
+        self.assertEqual(seen["thread"], ("Customer: Meine Fotos sind weg\n\n"
+                                          "Support: Erste Antwort", "Immer noch kaputt"))
+        self.assertIn("Immer noch kaputt", seen["sample"])
+        self.assertNotIn("Erste Antwort", seen["sample"])
+
+    def test_a_follow_up_nobody_asked_for_is_written_from_the_brief(self):
+        seen = self.draft([said("Erste Antwort", author=AGENT, cid=12),
+                           said("Meine Fotos sind weg", cid=10)])
+        self.assertEqual(seen["thread"][1], "")
+        built = note_reply.build_compose_prompt("x", "the fix shipped",
+                                                thread=seen["thread"])
+        self.assertIn("write the follow-up the brief describes", built)
+
     def test_a_first_reply_has_no_thread(self):
         seen = self.draft([said("Meine Fotos sind weg", cid=10)])
         self.assertIsNone(seen["thread"])
 
     def test_the_earlier_conversation_keeps_its_newest_end(self):
         earlier, _ = note_reply.follow_up(
-            None, "sub", TICKET, [said("x", cid=13),
-                                  said("NEWEST " + "b" * 5000, author=AGENT, cid=12),
-                                  said("OLDEST " + "a" * 5000, cid=10)])
+            [said("x", cid=13), said("NEWEST " + "b" * 5000, author=AGENT, cid=12),
+             said("OLDEST " + "a" * 5000, cid=10)], {CUSTOMER})
         self.assertLessEqual(len(earlier), note_reply.EARLIER_CHARS + 1)
         self.assertNotIn("OLDEST", earlier)
         self.assertTrue(earlier.endswith("b"))
@@ -931,14 +950,10 @@ class FollowUps(unittest.TestCase):
         self.assertLess(built.index("Support: b"), built.index("still broken"))
         self.assertLess(built.index("still broken"), built.index("ask for logs"))
 
-    def test_the_prompt_answers_only_the_newest_message(self):
-        prompt = " ".join(note_reply.COMPOSE_SYSTEM.lower().split())
-        self.assertIn("answer only the customer's newest message", prompt)
-        self.assertIn("do not repeat its explanations", prompt)
-
-    def reply(self, comments, brief=""):
-        session = fake_session(*[FakeResponse({"user": {"id": AGENT, "name": "Audric"}}),
-                               FakeResponse({"ticket": {}}), FakeResponse({"ticket": {}})])
+    def reply(self, comments, brief="", lookups=()):
+        session = fake_session(*lookups,
+                               FakeResponse({"user": {"id": AGENT, "name": "Audric"}}),
+                               FakeResponse({"ticket": {}}), FakeResponse({"ticket": {}}))
         note_reply.run_reply(session, "sub", TICKET,
                              [comment(f"claude: reply {brief}", cid=20)] + comments,
                              {"id": 20, "author": AGENT, "action": "reply", "brief": brief},
@@ -964,6 +979,34 @@ class FollowUps(unittest.TestCase):
         written, _ = self.reply([said("Immer noch kaputt", cid=13),
                                  draft_note("eins", "zwei", cid=12)], brief="2 anyway")
         self.assertEqual(written[-1], {"body": "zwei", "public": True})
+
+    def test_anyway_only_counts_on_the_command_line(self):
+        """The brief runs to the end of the note, where "anyway" is ordinary prose."""
+        written, _ = self.reply([said("Immer noch kaputt", cid=13),
+                                 draft_note("eins", "zwei", cid=12)],
+                                brief="2\nanyway, they said thanks")
+        self.assertEqual([c["public"] for c in written], [False])
+
+    def test_a_draft_already_sent_is_not_sent_again(self):
+        written, _ = self.reply([said("Alter Entwurf", author=API_USER, cid=14),
+                                 draft_note("Alter Entwurf", cid=12)])
+        self.assertEqual([c["public"] for c in written], [False])
+        self.assertIn("already been sent", written[0]["html_body"])
+
+    def test_a_support_comment_after_the_draft_does_not_block_it(self):
+        written, _ = self.reply([said("Wir schauen nach", author=AGENT, cid=13),
+                                 draft_note("Entwurf", cid=12),
+                                 said("Meine Fotos sind weg", cid=10)])
+        self.assertEqual(written[-1], {"body": "Entwurf", "public": True})
+
+    def test_a_channel_customer_writing_after_the_draft_blocks_it(self):
+        written, _ = self.reply([said("Immer noch kaputt", author=77, cid=13),
+                                 draft_note("Entwurf", cid=12),
+                                 said("Erste Antwort", author=AGENT, cid=11)],
+                                lookups=[FakeResponse({"user": {"role": "end-user"}}),
+                                         FakeResponse({"user": {"role": "agent"}})])
+        self.assertEqual([c["public"] for c in written], [False])
+        self.assertIn("customer has written", written[0]["html_body"])
 
     def test_a_draft_newer_than_the_customer_is_sent(self):
         written, _ = self.reply([draft_note("Neuer Entwurf", cid=14),
