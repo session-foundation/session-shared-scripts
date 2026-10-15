@@ -10,8 +10,6 @@ Claude reviews the Zendesk tickets awaiting a reply — `new` and `open`, no app
 | Re-run | `systemctl start session-ops@zendesk-digest.service` |
 | Logs | `journalctl -u session-ops@zendesk-digest -n 50 --no-pager` |
 
-Every non-English ticket it classifies gets the private note `claude: english` writes: the whole conversation, both sides, in English. The two share a marker, so a conversation is translated once per new public comment whichever writes first. `--no-discord`, `--dry-run` and rehearsals write nothing to Zendesk.
-
 ## Categories
 
 `CATEGORY_SPECS` in [triage.py](../../src/session_ops/zendesk/triage.py) is the single source of truth — the schema enum, the Discord labels and emoji, which categories count as urgent, and the prompt guidance are all derived from it, so adding a category is one edit.
@@ -45,7 +43,7 @@ The star-floor machinery (`partition_reviews`, `--review-star-floor`, `--include
 ## What else is out of scope
 
 - **`pending` tickets.** Somebody already replied and the ball is with the customer; the "Pending to Solved" automation resolves them after 72h. The query is `status<pending`, so `new` and `open` only.
-- **Tickets only we touched.** The window is on `updated>`, and `updated_at` moves on any change — a tag edit, the hourly automation, and every private note the `claude:` commands and the digest's own English notes write. So the run drops anything whose `requester_updated_at` falls outside the window. Measured on a real 72h window: 79 fetched, 23 the requester had actually touched.
+- **Tickets only we touched.** The window is on `updated>`, and `updated_at` moves on any change — a tag edit, the hourly automation, and every private note the relay writes, the automatic English transcripts included. So the run drops anything whose `requester_updated_at` falls outside the window. Measured on a real 72h window: 79 fetched, 23 the requester had actually touched.
 
 ## Content-free tickets
 

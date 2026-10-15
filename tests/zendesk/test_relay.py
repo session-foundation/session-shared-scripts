@@ -80,7 +80,7 @@ class TestZendeskWebhook(unittest.TestCase):
 
     def run_with(self, **env):
         with Env(ZENDESK_WEBHOOK_SECRET=ZENDESK_SECRET, **env), \
-                Patched(relay, run_note_reply=self.ran.append):
+                Patched(relay, run_note_reply=lambda tid, extra=(): self.ran.append(tid)):
             return zendesk_post(**self.kwargs)
 
     def test_a_signed_webhook_queues_the_ticket(self):
@@ -165,6 +165,43 @@ class TestZendeskWebhook(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(self.ran, [])
 
+
+
+class TestEvents(unittest.TestCase):
+    """The `claude:` note trigger sends no event; the customer trigger sends
+    "customer" and must never reach the command path."""
+
+    def post(self, body):
+        ran = []
+        with Env(ZENDESK_WEBHOOK_SECRET=ZENDESK_SECRET), \
+                Patched(relay, run_note_reply=lambda tid, extra=(): ran.append((tid, list(extra)))):
+            return zendesk_post(body), ran
+
+    def test_no_event_runs_the_commands(self):
+        response, ran = self.post({"ticket_id": "27603"})
+        self.assertEqual((response.status_code, ran), (200, [("27603", [])]))
+
+    def test_a_customer_event_only_translates(self):
+        response, ran = self.post({"ticket_id": "27603", "event": "customer"})
+        self.assertEqual((response.status_code, ran),
+                         (200, [("27603", ["--english-if-needed"])]))
+
+    def test_an_unknown_event_is_refused(self):
+        """An unrecognised trigger must not fall through to the command path."""
+        for event in ("draft", "Customer", 1, ["customer"]):
+            with self.subTest(event=event):
+                response, ran = self.post({"ticket_id": "27603", "event": event})
+                self.assertEqual((response.status_code, ran), (400, []))
+
+    def test_the_mode_reaches_the_subprocess(self):
+        seen = []
+
+        class Done:
+            returncode, stdout, stderr = 0, "", ""
+
+        with Env(), Patched(relay.subprocess, run=lambda cmd, **k: seen.append(cmd) or Done()):
+            relay.run_note_reply("27603", ["--english-if-needed"])
+        self.assertEqual(seen[0][-3:], ["--ticket", "27603", "--english-if-needed"])
 
 
 class TestSignatureTimestamps(unittest.TestCase):

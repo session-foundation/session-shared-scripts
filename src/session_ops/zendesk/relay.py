@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Webhook endpoint for acting on `claude:` private notes in Zendesk.
+Webhook endpoint for acting on `claude:` private notes in Zendesk, and for putting a
+conversation into English when the customer writes.
 
 Serves POST /zendesk/notes — vendor-namespaced so the same host and certificate can
 carry other integrations later. Run it behind a TLS terminator; see
@@ -105,7 +106,12 @@ def dry_run_requested():
     return bool(value) and value.split()[0] not in ("0", "false", "no", "off")
 
 
-def run_note_reply(ticket_id):
+# The `event` a trigger may send, and the note_reply.py mode it runs. Absent is the
+# `claude:` note trigger; "customer" is the trigger on the customer writing.
+EVENT_ARGS = {None: [], "customer": ["--english-if-needed"]}
+
+
+def run_note_reply(ticket_id, extra_args=()):
     """Run note_reply.py over one ticket. Never raises.
 
     A subprocess because its error paths are sys.exit
@@ -115,7 +121,7 @@ def run_note_reply(ticket_id):
     ticket, not at an open dialog — so the outcome goes to the journal and, where
     note_reply.py got far enough to write one, to the ticket itself.
     """
-    command = [sys.executable, "-m", NOTE_MODULE, "--ticket", str(ticket_id)]
+    command = [sys.executable, "-m", NOTE_MODULE, "--ticket", str(ticket_id), *extra_args]
     if dry_run_requested():
         command.append("--dry-run")
     try:
@@ -170,10 +176,13 @@ def healthz():
 
 @app.post("/zendesk/notes")
 async def zendesk_notes(request: Request, background: BackgroundTasks):
-    """A private note on a ticket asked Claude to do something.
+    """A private note on a ticket asked Claude to do something, or, with
+    `"event": "customer"`, the customer wrote and the ticket may need an English
+    transcript.
 
-    The Zendesk trigger that calls this is the first gate — it fires only on private
-    comments, and must exclude the API user so a draft cannot trigger another draft.
+    The Zendesk trigger that calls this is the first gate — the note trigger fires
+    only on private comments, and both must exclude the API user so a note Claude
+    wrote cannot trigger another run.
     This is the second: without ZENDESK_WEBHOOK_SECRET set, nothing is accepted, so
     an unconfigured relay refuses rather than trusting anything that reaches the URL.
     Which Zendesk user may command it is note_reply.py's decision, on the note.
@@ -199,7 +208,11 @@ async def zendesk_notes(request: Request, background: BackgroundTasks):
                  if isinstance(body, dict) else None)
     if not ticket_id:
         return Response("no ticket id", status_code=400)
-    background.add_task(run_in_threadpool, run_note_reply, ticket_id)
+    event = body.get("event")
+    # An unhashable value, a list say, would raise in the lookup and answer 500.
+    if not (event is None or isinstance(event, str)) or event not in EVENT_ARGS:
+        return Response("unknown event", status_code=400)
+    background.add_task(run_in_threadpool, run_note_reply, ticket_id, EVENT_ARGS[event])
     return {"ok": True}
 
 

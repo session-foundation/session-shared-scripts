@@ -62,8 +62,6 @@ import re
 import sys
 import textwrap
 
-import requests
-
 from session_ops.shared.discord import clip
 from session_ops.shared.env import get_env
 from session_ops.shared.text import undash_english
@@ -1091,60 +1089,33 @@ def run_english(session, subdomain, model, ticket, comments, command, dry_run):
                     public=False, as_html=True, drop_tags=[TAG_QUEUED, TAG_ERROR])
 
 
-def post_english_note(session, subdomain, model, ticket):
-    """One ticket's note, if it needs one. Returns 1 if a note was written, else 0."""
-    comments = api.fetch_comments(session, subdomain, ticket["id"], optional=True)
-    if comments is None:
-        return 0
+def run_auto_english(session, subdomain, model, ticket, comments, dry_run):
+    """`claude: english`, unasked, after the customer writes: the same private note,
+    posted only when the conversation is not English and no transcript covers it yet.
+
+    The note's marker is shared with the command, so whichever writes first stops the
+    other repeating it until there is a new public comment. Nobody asked, so there is
+    no one to answer: every outcome other than a note goes to the journal only, and
+    nothing is tagged.
+    """
+    ticket_id = ticket["id"]
+    # App-store reviews take one developer response, not a conversation, and they
+    # are most of the account: refused here whatever the trigger's conditions say.
+    if api.is_store_review(ticket):
+        print(f"#{ticket_id}: an app-store review; no English note.")
+        return
     outcome, detail = translate_conversation(session, subdomain, model, ticket, comments)
     if outcome != "ready":
-        print(f"#{ticket['id']}: no English note ({outcome}"
+        print(f"#{ticket_id}: no English note ({outcome}"
               + (f": {detail})" if outcome == "failed" else ")"))
-        return 0
+        return
     turns, rendered, latest = detail
-    write_to_ticket(session, subdomain, ticket["id"], english_note(turns, rendered, latest),
+    print(f"#{ticket_id}: rendered {len(turns)} turn(s) in English.")
+    if dry_run:
+        print(f"#{ticket_id}: dry run, nothing written.")
+        return
+    write_to_ticket(session, subdomain, ticket_id, english_note(turns, rendered, latest),
                     public=False, as_html=True)
-    return 1
-
-
-def post_english_notes(session, subdomain, tickets, findings, model):
-    """The digest's `claude: english`, unasked: the same private note on every ticket
-    in the run the classifier did not call English.
-
-    The digest only classifies tickets that are new or changed, and the note's marker
-    is shared with the command, so a conversation is translated once per new public
-    comment whichever of the two gets there first.
-
-    Never raises: a digest that fails to post because one translation failed is a
-    worse trade than one ticket left untranslated.
-    """
-    if not session:
-        return 0
-    candidates = [f for f in findings if not transcript.is_english(f)]
-    if not candidates:
-        print(f"No non-English tickets among the {len(findings)} classified; "
-              f"no English notes to post.")
-        return 0
-    by_id = {t.get("id"): t for t in tickets}
-    written = 0
-    for finding in candidates:
-        ticket = by_id.get(finding.get("id"))
-        if not ticket:
-            print(f"Note: #{finding.get('id')} was classified {finding.get('language')!r} "
-                  f"but never fetched; no English note.")
-            continue
-        try:
-            written += post_english_note(session, subdomain, model, ticket)
-        except (SystemExit, requests.RequestException) as exc:
-            print(f"Note: could not post the English note on #{ticket['id']} ({exc}).")
-        except Exception as exc:  # noqa: BLE001 - one ticket must not take the digest down
-            # The type only: the message of an unexpected error may carry ticket text.
-            print(f"Note: the English note on #{ticket['id']} failed "
-                  f"({type(exc).__name__}).")
-    # Printed even at zero, so a run that wrote nothing reads differently in the
-    # journal from one that never reached this step.
-    print(f"Posted an English note on {written} of {len(candidates)} non-English ticket(s).")
-    return written
 
 
 def say(session, subdomain, ticket_id, comment_id, text, dry_run, error=True):
@@ -1208,6 +1179,9 @@ def main(argv=None):
     parser.add_argument("--ticket", type=int, required=True)
     parser.add_argument("--dry-run", action="store_true",
                         help="do everything except write to Zendesk")
+    parser.add_argument("--english-if-needed", action="store_true",
+                        help="ignore commands; post the English transcript if the "
+                             "conversation needs one (the customer just wrote)")
     args = parser.parse_args(argv)
     model = claude_cli.MODEL
 
@@ -1223,6 +1197,10 @@ def main(argv=None):
         print(f"#{args.ticket}: closed, so Zendesk takes no comments. Nothing done.")
         return
     comments = api.fetch_comments(session, subdomain, args.ticket)
+
+    if args.english_if_needed:
+        run_auto_english(session, subdomain, model, ticket, comments, args.dry_run)
+        return
 
     command = latest_command(comments, api_user, session, subdomain)
     if not command:

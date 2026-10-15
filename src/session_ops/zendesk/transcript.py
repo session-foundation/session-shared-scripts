@@ -47,16 +47,3 @@ TRANSCRIPT_SYSTEM_PROMPT = (
     "paraphrase it and do not 'improve' it.\n\n"
     "Leave Session IDs, version numbers, URLs and error strings exactly as written."
 )
-
-
-def is_english(finding):
-    """Whether the classifier called this ticket English.
-
-    Unknown counts as English: the note is only worth posting when it says
-    something the agent cannot already read, and a blank `language` is far more
-    likely to be a classification that came back thin than a ticket nobody could
-    read. Guessing wrong this way costs a missing transcript; the other way puts a
-    machine translation over the top of words everyone could already read.
-    """
-    language = (finding.get("language") or "").strip().lower()
-    return not language or language.startswith(("english", "en"))

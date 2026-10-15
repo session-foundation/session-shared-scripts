@@ -8,19 +8,16 @@ Stdlib unittest so the repo needs no test dependency. Run from anywhere:
 Everything here is offline — no Zendesk, Claude, or Discord calls. The fetch
 tests drive fetch_tickets with a stub session instead.
 """
-import contextlib
-import io
 import json
 import os
 import tempfile
 import unittest
-from unittest import mock
 from datetime import datetime, timedelta, timezone
 
 import requests
 
 from session_ops.shared import discord
-from session_ops.zendesk import api, claude_cli, note_reply, transcript, triage
+from session_ops.zendesk import api, claude_cli, triage
 from session_ops.shared.testing import (
     FakeResponse, FakeSession, NonJsonResponse, Patched)
 
@@ -1846,25 +1843,7 @@ if __name__ == "__main__":
 
 
 class TestEnglishTranscript(unittest.TestCase):
-    """The digest posts `claude: english`'s private note on every non-English ticket
-    it classifies, so nobody has to ask for one."""
-
-    def test_a_ticket_the_classifier_called_english_is_left_alone(self):
-        """Translating English into English would put a machine's wording in front of
-        the agent in place of the words everyone could already read."""
-        for language in ("English", "english", "en", "EN"):
-            self.assertTrue(transcript.is_english({"language": language}), language)
-
-    def test_an_unknown_language_counts_as_english(self):
-        """A blank `language` is far more likely to be a thin classification than a
-        ticket nobody could read. Guessing this way wastes nothing; the other way
-        overwrites words everyone could read with a translation of them."""
-        for language in ("", None, "   "):
-            self.assertTrue(transcript.is_english({"language": language}), repr(language))
-
-    def test_a_non_english_ticket_is_translated(self):
-        for language in ("German", "Spanish", "Japanese"):
-            self.assertFalse(transcript.is_english({"language": language}), language)
+    """What the English transcript is built from: the language call and the turns."""
 
     # ---- turns -------------------------------------------------------------
 
@@ -1929,210 +1908,6 @@ class TestEnglishTranscript(unittest.TestCase):
         front of every paragraph."""
         self.assertEqual(api.stamp_minutes("2026-08-28T01:31:09Z"),
                          "2026-08-28 01:31 UTC")
-
-    # ---- the run -----------------------------------------------------------
-
-    GERMAN_TURNS = [{"index": 0, "who": "Customer", "when": "2026-08-28 00:22 UTC",
-                     "body": "Es geht nicht."}]
-
-    def run_notes(self, tickets, findings, comments=(), translated=None, session=object()):
-        """post_english_notes with Zendesk and Claude faked. Returns (count, notes, out)."""
-        notes, out = [], io.StringIO()
-        translated = translated or (lambda *a, **k: {
-            "turns": [{"index": 0, "english": "It does not work."}]})
-        with Patched(api, fetch_comments=lambda *a, **k: list(comments),
-                     conversation_turns=lambda *a: self.GERMAN_TURNS), \
-                Patched(claude_cli, claude_cli_json=translated), \
-                Patched(note_reply, write_to_ticket=lambda *a, **k: notes.append((a, k))), \
-                contextlib.redirect_stdout(out):
-            got = note_reply.post_english_notes(session, "acme", tickets, findings,
-                                                "claude-sonnet-5")
-        return got, notes, out.getvalue()
-
-    def run_main(self, findings, env):
-        """triage.main over --findings, recording post_english_notes' arguments."""
-        seen = []
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "findings.json")
-            with open(path, "w", encoding="utf-8") as handle:
-                json.dump(findings, handle)
-            with Patched(triage, post_english_notes=lambda *a: seen.append(a),
-                         post_to_discord=lambda session, url, messages: len(messages)), \
-                    mock.patch.dict(os.environ, {"ZENDESK_SUBDOMAIN": "acme",
-                                                 "ZENDESK_DISCORD_WEBHOOK_URL": "https://x/y",
-                                                 **env}), \
-                    contextlib.redirect_stdout(io.StringIO()):
-                triage.main(["--findings", path])
-        return seen
-
-    def test_a_run_that_posts_nothing_writes_nothing(self):
-        """--no-discord is the flag CI runs with, and CI must not write to production
-        tickets: the notes come after the post, past every early return."""
-        for flag in ("--no-discord", "--dry-run"):
-            with self.subTest(flag=flag):
-                seen = []
-                with tempfile.TemporaryDirectory() as directory:
-                    path = os.path.join(directory, "findings.json")
-                    with open(path, "w", encoding="utf-8") as handle:
-                        json.dump([finding(1, language="German")], handle)
-                    with Patched(triage, post_english_notes=lambda *a: seen.append(a)), \
-                            mock.patch.dict(os.environ, {"ZENDESK_SUBDOMAIN": "acme"}), \
-                            contextlib.redirect_stdout(io.StringIO()):
-                        triage.main(["--findings", path, flag])
-                self.assertEqual(seen, [])
-
-    def test_the_notes_come_after_the_post(self):
-        """A slow translation must never hold up, or time out, the digest."""
-        order = []
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "findings.json")
-            with open(path, "w", encoding="utf-8") as handle:
-                json.dump([finding(1, language="German")], handle)
-            with Patched(triage, post_english_notes=lambda *a: order.append("notes"),
-                         post_to_discord=lambda s, u, m: order.append("post") or len(m)), \
-                    mock.patch.dict(os.environ, {"ZENDESK_SUBDOMAIN": "acme",
-                                                 "ZENDESK_DISCORD_WEBHOOK_URL": "https://x/y"}), \
-                    contextlib.redirect_stdout(io.StringIO()):
-                triage.main(["--findings", path])
-        self.assertEqual(order, ["post", "notes"])
-
-    def test_abuse_reports_are_not_translated(self):
-        seen = self.run_main([finding(1, language="German"),
-                              finding(2, category="abuse_report", language="German")], {})
-        self.assertEqual([f["id"] for f in seen[0][3]], [1])
-
-    def test_the_transcript_uses_the_same_model_as_the_classification(self):
-        seen = self.run_main([finding(1)], {})
-        self.assertEqual([a[4] for a in seen], [claude_cli.MODEL])
-
-    def test_a_rehearsal_writes_no_transcript(self):
-        self.assertEqual(self.run_main([finding(1)], {"SESSION_OPS_REHEARSAL": "1"}), [])
-
-    def test_unflagged_tickets_are_translated_too(self):
-        """A ticket with no card of its own is still opened from the digest or the
-        queue, and whoever opens it should read it in English."""
-        seen = self.run_main([finding(1), finding(2, worth_looking_into=False,
-                                                  language="German")], {})
-        self.assertEqual(sorted(f["id"] for f in seen[0][3]), [1, 2])
-
-    def test_a_non_english_ticket_gets_a_private_note(self):
-        got, notes, _ = self.run_notes([{"id": 1}, {"id": 2}],
-                                       [{"id": 1, "language": "German"},
-                                        {"id": 2, "language": "English"}])
-        self.assertEqual(got, 1)
-        (args, kwargs), = notes
-        self.assertEqual(args[2], 1)
-        self.assertIs(kwargs["public"], False)
-        self.assertIn("It does not work.", args[3])
-        self.assertIn("Customer:", args[3])
-
-    def test_the_note_is_the_one_claude_english_writes(self):
-        """Same note, same marker: a transcript either one wrote stops the other
-        repeating it until somebody writes again."""
-        _, notes, _ = self.run_notes([{"id": 1}], [{"id": 1, "language": "German"}],
-                                     comments=[{"id": 5, "public": True, "body": "x"}])
-        self.assertIn(note_reply.english_marker(5), notes[0][0][3])
-
-    def test_a_ticket_already_transcribed_is_not_re_rendered(self):
-        calls = []
-        comments = [{"id": 6, "public": False, "body": note_reply.english_marker(5)},
-                    {"id": 5, "public": True, "body": "x"}]
-        got, notes, _ = self.run_notes([{"id": 1}], [{"id": 1, "language": "German"}],
-                                       comments=comments,
-                                       translated=lambda *a, **k: calls.append(a))
-        self.assertEqual((got, notes, calls), (0, [], []))
-
-    def test_a_conversation_that_turns_out_english_gets_no_note(self):
-        got, notes, _ = self.run_notes(
-            [{"id": 1}], [{"id": 1, "language": "German"}],
-            translated=lambda *a, **k: {"turns": [{"index": 0, "english": "Es geht nicht."}]})
-        self.assertEqual((got, notes), (0, []))
-
-    def test_nothing_happens_without_a_zendesk_session(self):
-        """--findings never builds one: the findings already exist and no ticket was
-        ever fetched, so there is nothing to read comments from or write back to."""
-        got, notes, _ = self.run_notes([{"id": 1}], [{"id": 1, "language": "German"}],
-                                       session=None)
-        self.assertEqual((got, notes), (0, []))
-
-    def test_one_ticket_that_cannot_be_rendered_does_not_stop_the_digest(self):
-        """claude_cli_json exits on a failed call, which is right for the
-        classification it was written for. Here it would take down a digest that is
-        otherwise ready to post over one ticket nobody can translate."""
-        def explode(*args, **kwargs):
-            raise SystemExit("claude exited 1")
-
-        got, notes, out = self.run_notes([{"id": 1}, {"id": 2}],
-                                         [{"id": 1, "language": "German"},
-                                          {"id": 2, "language": "German"}],
-                                         translated=explode)
-        self.assertEqual((got, notes), (0, []))
-        self.assertIn("claude exited 1", out)
-
-    def test_a_rejected_note_does_not_stop_the_digest(self):
-        def reject(*a, **k):
-            raise SystemExit("Zendesk rejected the note on #1 (422).")
-
-        with Patched(note_reply, write_to_ticket=reject), \
-                Patched(api, fetch_comments=lambda *a, **k: [],
-                        conversation_turns=lambda *a: self.GERMAN_TURNS), \
-                Patched(claude_cli, claude_cli_json=lambda *a, **k: {
-                    "turns": [{"index": 0, "english": "It does not work."}]}), \
-                contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(note_reply.post_english_notes(
-                object(), "acme", [{"id": 1}], [{"id": 1, "language": "German"}], "m"), 0)
-
-    def test_comments_that_cannot_be_fetched_skip_the_ticket(self):
-        calls = []
-        with Patched(api, fetch_comments=lambda *a, **k: None), \
-                Patched(claude_cli, claude_cli_json=lambda *a, **k: calls.append(a)), \
-                contextlib.redirect_stdout(io.StringIO()):
-            got = note_reply.post_english_notes(object(), "acme", [{"id": 1}],
-                                                [{"id": 1, "language": "German"}], "m")
-        self.assertEqual((got, calls), (0, []))
-
-    def test_no_failure_on_one_ticket_reaches_the_digest(self):
-        """A network error on the write, and anything unforeseen, are both logged and
-        skipped; the next ticket is still translated."""
-        for error in (requests.ConnectionError("down"), KeyError("turns")):
-            with self.subTest(error=type(error).__name__):
-                writes = []
-
-                def write(*a, **k):
-                    writes.append(a[2])
-                    if a[2] == 1:
-                        raise error
-
-                with Patched(note_reply, write_to_ticket=write), \
-                        Patched(api, fetch_comments=lambda *a, **k: [],
-                                conversation_turns=lambda *a: self.GERMAN_TURNS), \
-                        Patched(claude_cli, claude_cli_json=lambda *a, **k: {
-                            "turns": [{"index": 0, "english": "It does not work."}]}), \
-                        contextlib.redirect_stdout(io.StringIO()):
-                    got = note_reply.post_english_notes(
-                        object(), "acme", [{"id": 1}, {"id": 2}],
-                        [{"id": 1, "language": "German"}, {"id": 2, "language": "German"}], "m")
-                self.assertEqual((got, writes), (1, [1, 2]))
-
-    def test_a_run_that_wrote_nothing_says_so(self):
-        """A run that wrote nothing and a run that never reached this step must read
-        differently in the journal."""
-        _, _, out = self.run_notes([{"id": 1}], [{"id": 1, "language": "German"}],
-                                   translated=lambda *a, **k: {
-                                       "turns": [{"index": 0, "english": "Es geht nicht."}]})
-        self.assertIn("0 of 1", out)
-
-    def test_an_all_english_digest_says_so_rather_than_nothing(self):
-        _, _, out = self.run_notes([], [{"id": 1, "language": "English"},
-                                        {"id": 2, "language": "English"}])
-        self.assertIn("No non-English tickets", out)
-        self.assertIn("2", out)
-
-    def test_a_ticket_that_was_classified_but_never_fetched_is_named(self):
-        _, notes, out = self.run_notes([], [{"id": 99, "language": "German"}])
-        self.assertEqual(notes, [])
-        self.assertIn("99", out)
-        self.assertIn("never fetched", out)
 
 
 class TestCustomerSide(unittest.TestCase):

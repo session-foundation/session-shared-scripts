@@ -109,6 +109,20 @@ class TestUnreachableRoom(unittest.TestCase):
         self.assertEqual([t for t, _ in unread], ['a'])
 
 
+class TestMalformedRoom(unittest.TestCase):
+    def test_a_room_with_malformed_messages_is_reported_not_raised(self):
+        for messages in ([post(BLINDED_ABS, None, message_data('x')), post(BLINDED_ABS, 5, message_data('y'))],
+                         [{'session_id': BLINDED_ABS, 'data': message_data('x')}],
+                         ['not a message']):
+            with self.subTest(messages=messages):
+                client = FakeClient({'a': (200, messages)})
+                _, unread = names.recent_names(client, [{'token': 'a'}], owners(SESSION_ID))
+                self.assertEqual([t for t, _ in unread], ['a'])
+
+    def test_non_text_data_is_no_name(self):
+        self.assertIsNone(names.display_name(12345))
+
+
 class TestDescribePoster(unittest.TestCase):
     def test_each_case_reads_differently(self):
         self.assertEqual(ban.describe_poster(SESSION_ID, {}), "no recent posts")

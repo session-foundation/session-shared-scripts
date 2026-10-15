@@ -78,7 +78,7 @@ import requests
 
 from session_ops.shared import discord, http, state as dedup
 from session_ops.shared.discord import clip, post_to_discord
-from session_ops.shared.env import get_env, rehearsing
+from session_ops.shared.env import get_env
 from session_ops.shared.text import squash
 from session_ops.zendesk.api import (REVIEW_CHANNEL, SEARCH_RESULT_LIMIT, fetch_comments,
                                      fetch_tickets,
@@ -86,7 +86,6 @@ from session_ops.zendesk.api import (REVIEW_CHANNEL, SEARCH_RESULT_LIMIT, fetch_
                                      review_platform, review_stars, ticket_url,
                                      zendesk_session)
 from session_ops.zendesk.claude_cli import MODEL, claude_cli_json
-from session_ops.zendesk.note_reply import post_english_notes
 
 # Never analyzed. A store review cannot be answered the way a ticket can: it takes
 # one developer response, replacing any previous one, with no way to ask a follow-up
@@ -1142,13 +1141,6 @@ def main(argv=None):
         kept, pruned = save_state(args.state, state, recorded, args.state_retention_days)
         print(f"Recorded {len(recorded)} tickets; state now tracks {kept} "
               f"({pruned} pruned beyond {args.state_retention_days} days).")
-
-    # After the post and the state, so a slow translation can never hold up or lose
-    # the digest. Abuse reports are left out: nobody acts on them. Only on a run that
-    # posts: neither CI (--no-discord) nor a rehearsal may write to production tickets.
-    if not rehearsing():
-        post_english_notes(zd, subdomain, classified,
-                           [f for f in findings if not is_collapsed(f)], MODEL)
 
     if posted < len(messages):
         sys.exit(f"Aborted after {posted}/{len(messages)} messages; "

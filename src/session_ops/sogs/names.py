@@ -59,7 +59,7 @@ def display_name(data_b64):
     not parse."""
     try:
         raw = b64decode(data_b64)
-    except ValueError:
+    except (TypeError, ValueError):
         return None
     # Clients pad the Content with 0x80 and then zeros.
     raw = raw.rstrip(b'\x00')
@@ -97,11 +97,14 @@ def recent_names(client, rooms, owners):
         if code != 200 or not isinstance(messages, list):
             unread.append((token, code))
             continue
-        for m in messages:
-            sid = owners.get(m.get('session_id'))
-            # A deleted message stays in the list with its data nulled.
-            if not sid or not m.get('data'):
-                continue
-            if sid not in newest or m['posted'] > newest[sid][0]:
-                newest[sid] = (m['posted'], display_name(m['data']))
+        try:
+            for m in messages:
+                sid = owners.get(m.get('session_id'))
+                # A deleted message stays in the list with its data nulled.
+                if not sid or not m.get('data'):
+                    continue
+                if sid not in newest or m['posted'] > newest[sid][0]:
+                    newest[sid] = (m['posted'], display_name(m['data']))
+        except (AttributeError, KeyError, TypeError) as e:
+            unread.append((token, f"unexpected message shape ({type(e).__name__})"))
     return {sid: name for sid, (_, name) in newest.items()}, unread
