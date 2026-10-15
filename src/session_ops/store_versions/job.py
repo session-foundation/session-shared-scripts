@@ -226,6 +226,11 @@ def http_session():
     return session
 
 
+def source_keys(platform):
+    """(GitHub's, the store's) names for `platform`'s sources, as state["sources"] keys them."""
+    return f"GitHub {platform.repo}", f"{store_name(platform)} ({platform.name})"
+
+
 def fetch_all(wanted):
     """{key: (Release, None) or (None, error)} for {key: (fetch, args)}, all at once and
     each on its own session, so one host that stops answering holds up no other."""
@@ -251,9 +256,7 @@ def check(state, tags, now):
     Each source is fetched once, keyed by name: three platforms share each of
     session-android's and session-desktop's releases, and unauthenticated GitHub allows
     60 requests an hour."""
-    keys = {platform.name: (f"GitHub {platform.repo}",
-                            f"{store_name(platform)} ({platform.name})")
-            for platform in PLATFORMS}
+    keys = {platform.name: source_keys(platform) for platform in PLATFORMS}
     wanted = {}
     for platform in PLATFORMS:
         github_key, store_key = keys[platform.name]
