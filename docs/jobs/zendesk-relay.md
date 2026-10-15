@@ -40,7 +40,7 @@ there are several.
 
 | Command | What it does | Touches the customer |
 | --- | --- | --- |
-| `claude: draft - <brief>` | Compose the reply from the brief, in the requester's language. A second `draft` amends the one already there rather than starting over, unless a public comment came after it. Once support has replied, the draft answers only the customer's newest message | no |
+| `claude: draft - <brief>` | Compose the reply from the brief, in the requester's language. A second `draft` amends the one already there rather than starting over, unless it was sent or the customer wrote after it. Once support has replied, the draft answers only the customer's newest message | no |
 | `claude: reply [n] [anyway]` | Publish the chosen option verbatim, status -> `pending`. If the customer wrote after the draft, or it was already sent, it sends nothing until asked again with `anyway` | **yes** |
 | `claude: english` | Post the conversation, both sides, in English. Says so and writes nothing when the ticket is already English. Too long to send whole, it drops the oldest turns and says how many | no |
 | `claude: explain` | Post what support usually replied to this kind of ticket, what was actually done about it, and the caveats | no |

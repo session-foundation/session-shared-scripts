@@ -867,8 +867,8 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
     A second `draft` on a ticket that already has one is an amendment, not a fresh
     start: an agent writing "also mention X" wants the draft they just read plus X,
     and regenerating from the new brief alone would throw away the wording they kept.
-    Only while no public comment is newer than that draft: after one, the draft was
-    sent or overtaken, and amending it would send its paragraphs a second time.
+    Not once the draft was sent or the customer wrote after it: amending then would
+    send its paragraphs a second time. A manual reply by an agent leaves it open.
     """
     ticket_id = ticket["id"]
     comment_id, brief = command["id"], command["brief"]
@@ -877,12 +877,13 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
             "The brief was empty, so there was nothing to write. Add a private note "
             "reading claude: draft <what the answer is>", dry_run)
         return
-    shown, newer = newest_draft(comments, api_user)
-    if any(c.get("public") for c in newer):
-        shown = {}
-    previous = "\n\n".join(f"Option {n}:\n{shown[n]}" for n in sorted(shown)) or None
     authors = api.customer_authors(session, subdomain, ticket,
                                    [c for c in comments if c.get("public")])
+    shown, newer = newest_draft(comments, api_user)
+    if any(c.get("public") and c.get("author_id") in authors | {api_user}
+           for c in newer):
+        shown = {}
+    previous = "\n\n".join(f"Option {n}:\n{shown[n]}" for n in sorted(shown)) or None
     thread = follow_up(comments, authors)
 
     sample = api.customer_text(session, subdomain, ticket, comments,

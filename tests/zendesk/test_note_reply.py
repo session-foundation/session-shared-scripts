@@ -890,11 +890,23 @@ class FollowUps(unittest.TestCase):
     def test_a_draft_already_sent_is_not_amended(self):
         """Amending it carries its paragraphs into the next reply, so the customer
         gets the first answer again."""
-        seen = self.draft([said("Immer noch kaputt", cid=13),
-                           said("Anhänge werden 14 Tage gespeichert.", author=AGENT, cid=12),
+        seen = self.draft([said("Anhänge werden 14 Tage gespeichert.", author=API_USER,
+                                cid=12),
                            draft_note("Anhänge werden 14 Tage gespeichert.", cid=11),
                            said("Meine Fotos sind weg", cid=10)])
         self.assertIsNone(seen["previous"])
+
+    def test_a_draft_the_customer_wrote_after_is_not_amended(self):
+        seen = self.draft([said("Immer noch kaputt", cid=13),
+                           draft_note("Alter Entwurf", cid=11),
+                           said("Meine Fotos sind weg", cid=10)])
+        self.assertIsNone(seen["previous"])
+
+    def test_a_manual_agent_reply_leaves_the_draft_open_to_amend(self):
+        seen = self.draft([said("Wir schauen nach", author=AGENT, cid=12),
+                           draft_note("Entwurf", cid=11),
+                           said("Meine Fotos sind weg", cid=10)])
+        self.assertIn("Entwurf", seen["previous"])
 
     def test_a_draft_newer_than_every_public_comment_is_still_amended(self):
         seen = self.draft([draft_note("Zweiter Entwurf", cid=14),
