@@ -270,7 +270,11 @@ class Trickle:
         self.sock.listen(5)
         self.url = f"http://127.0.0.1:{self.sock.getsockname()[1]}/"
         self.size, self.gap = size, gap
-        threading.Thread(target=self.serve, daemon=True).start()
+        # Event.wait, not time.sleep: TestSession's NoSleep patches time.sleep globally, and
+        # a thread still trickling into a later test would land in its recorded sleeps.
+        self.stop = threading.Event()
+        self.threads = [threading.Thread(target=self.serve, daemon=True)]
+        self.threads[0].start()
 
     def serve(self):
         while True:
@@ -278,21 +282,31 @@ class Trickle:
                 conn, _ = self.sock.accept()
             except OSError:
                 return
-            threading.Thread(target=self.answer, args=(conn,), daemon=True).start()
+            worker = threading.Thread(target=self.answer, args=(conn,), daemon=True)
+            self.threads.append(worker)
+            worker.start()
 
     def answer(self, conn):
         with conn:
             conn.recv(4096)
             conn.sendall(f"HTTP/1.1 200 OK\r\nContent-Length: {self.size}\r\n\r\n".encode())
             for _ in range(self.size):
-                time.sleep(self.gap)
+                if self.stop.wait(self.gap):
+                    return
                 try:
                     conn.sendall(b"x")
                 except OSError:
                     return
 
     def close(self):
+        self.stop.set()
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)  # wakes the accept(); close() alone may not
+        except OSError:
+            pass
         self.sock.close()
+        for thread in self.threads:
+            thread.join(timeout=5)
 
 
 class TestDeadline(unittest.TestCase):
