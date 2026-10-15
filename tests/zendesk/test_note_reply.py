@@ -17,6 +17,7 @@ sends the wrong thing to a real person:
 """
 import contextlib
 import html
+import json
 import io
 import os
 import re
@@ -122,6 +123,10 @@ class ParseCommand(unittest.TestCase):
         note = note_reply.build_draft_note(GERMAN, "keeps 14 days", 42)
         self.assertIsNone(note_reply.parse_command(
             note_reply.comment_text(posted_note(note))))
+
+
+def writes(session):
+    return [call for call in session.calls if call[0] != "GET"]
 
 
 class EnglishTranscript(unittest.TestCase):
@@ -280,10 +285,58 @@ class EnglishTranscript(unittest.TestCase):
                                    [dict(comment("Hallo", author=42, cid=3), public=True)],
                                    {"id": 9, "author": AGENT, "action": "english",
                                     "brief": ""}, dry_run=False)
-        ticket = session.calls[0][2]["json"]["ticket"]
+        ticket = writes(session)[0][2]["json"]["ticket"]
         self.assertIs(ticket["comment"]["public"], False)
         self.assertIn("Hello", ticket["comment"]["html_body"])
         self.assertIn(note_reply.english_marker(3), ticket["comment"]["html_body"])
+
+
+class FitTurns(unittest.TestCase):
+    def turns(self, *bodies):
+        return [{"index": i, "who": "Customer", "when": "", "body": b}
+                for i, b in enumerate(bodies)]
+
+    def test_a_short_conversation_is_sent_whole(self):
+        turns = self.turns("eins", "zwei")
+        self.assertEqual(note_reply.fit_turns(turns, 8000), (turns, 0))
+
+    def test_the_oldest_turns_go_first_and_whole(self):
+        turns = self.turns("a" * 3000, "b" * 3000, "c" * 3000)
+        kept, omitted = note_reply.fit_turns(turns, 8000)
+        self.assertEqual(([t["index"] for t in kept], omitted), ([1, 2], 1))
+        self.assertEqual(kept, turns[1:])
+        json.loads(note_reply.transcript_payload(kept))
+
+    def test_a_newest_turn_too_long_alone_is_clipped_to_fit(self):
+        turns = self.turns("old", 'neu "zitat"\n' * 2000)
+        kept, omitted = note_reply.fit_turns(turns, 8000)
+        self.assertEqual((len(kept), kept[0]["index"], omitted), (1, 1, 1))
+        payload = note_reply.transcript_payload(kept)
+        self.assertLessEqual(len(payload), 8000)
+        self.assertTrue(json.loads(payload)[0]["text"].endswith("…"))
+
+    def test_only_the_turns_that_fit_are_sent_and_judged(self):
+        """A turn the model never saw cannot be judged already English."""
+        turns = self.turns("a" * 7990, "Es geht nicht.")
+        sent = []
+
+        def translate(model, effort, system, schema, payload, *a):
+            sent.append(json.loads(payload))
+            return {"turns": [{"index": 1, "english": "It does not work."}]}
+
+        with Patched(api, conversation_turns=lambda *a: turns), \
+                Patched(claude_cli, claude_cli_json=translate):
+            outcome, detail = note_reply.translate_conversation(
+                None, "sub", "model", {"id": 7}, [comment("x", public=True, cid=3)])
+        self.assertEqual(outcome, "ready")
+        self.assertEqual([t["index"] for t in sent[0]], [1])
+        self.assertEqual(detail[3], 1)
+
+    def test_the_note_says_older_turns_were_left_out(self):
+        turns = self.turns("Es geht nicht.")
+        note = note_reply.english_note(turns, {"turns": []}, 3, omitted=2)
+        self.assertIn("2 earliest turn(s) are left out", note)
+        self.assertNotIn("left out", note_reply.english_note(turns, {"turns": []}, 3))
 
 
 BOOK = {
@@ -1055,8 +1108,9 @@ class AutoEnglish(unittest.TestCase):
 
     GERMAN_TURNS = [{"index": 0, "who": "Customer", "when": "t", "body": "Es geht nicht."}]
 
-    def run_auto(self, ticket=None, comments=(), translated=None, dry_run=False):
-        session = fake_session(FakeResponse({"ticket": {}}))
+    def run_auto(self, ticket=None, comments=(), translated=None, dry_run=False,
+                 landed=()):
+        session = fake_session(FakeResponse({"comments": list(landed)}))
         calls = []
 
         def translate(*a, **k):
@@ -1069,7 +1123,7 @@ class AutoEnglish(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()) as out:
             note_reply.run_auto_english(session, "sub", "model", ticket or {"id": 7},
                                         list(comments), dry_run)
-        return session.calls, calls, out.getvalue()
+        return writes(session), calls, out.getvalue()
 
     def test_a_foreign_conversation_gets_the_private_note(self):
         writes, _, _ = self.run_auto(comments=[comment("Hallo", author=42, public=True, cid=3)])
@@ -1106,6 +1160,14 @@ class AutoEnglish(unittest.TestCase):
             note_reply.run_auto_english(session, "sub", "model", {"id": 7}, [], False)
         self.assertEqual(session.calls, [])
         self.assertIn("claude exited 1", out.getvalue())
+
+    def test_a_transcript_posted_meanwhile_is_not_posted_again(self):
+        """The model call takes minutes; a `claude: english` run can land in them."""
+        landed = comment(f"transcript {note_reply.english_marker(3)}", author=API_USER, cid=4)
+        writes, calls, out = self.run_auto(
+            comments=[comment("Hallo", author=42, public=True, cid=3)], landed=[landed])
+        self.assertEqual((writes, len(calls)), ([], 1))
+        self.assertIn("another run", out)
 
     def test_an_app_store_review_is_never_translated(self):
         writes, calls, _ = self.run_auto(ticket={"id": 7, "via": {"channel": "any_channel"}})

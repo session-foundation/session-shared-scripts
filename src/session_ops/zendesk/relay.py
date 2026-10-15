@@ -19,7 +19,12 @@ and keeps its own test suite testing exactly what runs in production.
 
 Nothing is stored. A ticket is read when its webhook fires and forgotten; the draft
 awaiting review lives in a private note on the ticket, so a restart mid-review loses
-nothing.
+nothing. A restart does drop a customer event still waiting out its debounce: that
+ticket gets its transcript on the customer's next message, or from `claude: english`.
+
+One ticket's runs never overlap, so two runs cannot both find no transcript and both
+post one. A customer event waits ENGLISH_DEBOUNCE_SECONDS, restarted by each further
+event on that ticket, so a burst of messages costs one translation.
 
 This used to serve a second route, POST /discord/interactions, behind a Comment button
 on each digest card. Replies are written on the ticket now — the digest is read-only,
@@ -42,10 +47,12 @@ an endpoint that refuses everything whenever this host's clock trails Zendesk's.
 Usage:
     uvicorn session_ops.zendesk.relay:app --host 127.0.0.1 --port 8080
 """
+import asyncio
 import base64
 import datetime
 import hashlib
 import hmac
+import itertools
 import json
 import os
 import subprocess
@@ -68,6 +75,8 @@ MAX_CLOCK_SKEW_SECONDS = 60
 # Zendesk gets its 200 immediately and the outcome is written to the ticket whenever
 # it lands.
 NOTE_TIMEOUT_SECONDS = 420
+# Customers on messaging channels send several short messages in a row.
+ENGLISH_DEBOUNCE_SECONDS = 60
 # Zendesk signs a webhook over the timestamp followed by the raw body.
 ZENDESK_SIGNATURE_HEADER = "x-zendesk-webhook-signature"
 ZENDESK_TIMESTAMP_HEADER = "x-zendesk-webhook-signature-timestamp"
@@ -135,6 +144,44 @@ def run_note_reply(ticket_id, extra_args=()):
     if done.returncode != 0:
         print(f"note_reply.py exited {done.returncode} on #{ticket_id}: "
               f"{(done.stderr or '').strip()[:300]}", flush=True)
+
+
+async def run_in_thread(ticket_id, extra_args):
+    await run_in_threadpool(run_note_reply, ticket_id, extra_args)
+
+
+class TicketRuns:
+    """note_reply.py runs, one at a time per ticket, with customer events debounced."""
+
+    def __init__(self, run, debounce_seconds, sleep=asyncio.sleep):
+        self.run, self.debounce_seconds, self.sleep = run, debounce_seconds, sleep
+        self.locks = {}
+        self.latest_event = {}
+        self.events = itertools.count()
+
+    async def now(self, ticket_id, extra_args):
+        lock, users = self.locks.get(ticket_id, (asyncio.Lock(), 0))
+        self.locks[ticket_id] = (lock, users + 1)
+        try:
+            async with lock:
+                await self.run(ticket_id, extra_args)
+        finally:
+            lock, users = self.locks[ticket_id]
+            if users == 1:
+                del self.locks[ticket_id]
+            else:
+                self.locks[ticket_id] = (lock, users - 1)
+
+    async def customer_wrote(self, ticket_id):
+        event = self.latest_event[ticket_id] = next(self.events)
+        await self.sleep(self.debounce_seconds)
+        if self.latest_event.get(ticket_id) != event:
+            return
+        del self.latest_event[ticket_id]
+        await self.now(ticket_id, EVENT_ARGS["customer"])
+
+
+runs = TicketRuns(run_in_thread, ENGLISH_DEBOUNCE_SECONDS)
 
 
 def zendesk_signature_ok(raw, signature, timestamp, secret):
@@ -212,7 +259,10 @@ async def zendesk_notes(request: Request, background: BackgroundTasks):
     # An unhashable value, a list say, would raise in the lookup and answer 500.
     if not (event is None or isinstance(event, str)) or event not in EVENT_ARGS:
         return Response("unknown event", status_code=400)
-    background.add_task(run_in_threadpool, run_note_reply, ticket_id, EVENT_ARGS[event])
+    if event == "customer":
+        background.add_task(runs.customer_wrote, ticket_id)
+    else:
+        background.add_task(runs.now, ticket_id, EVENT_ARGS[event])
     return {"ok": True}
 
 

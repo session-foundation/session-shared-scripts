@@ -1012,12 +1012,42 @@ def already_english(turns, translated):
                for turn in turns)
 
 
+def transcript_payload(turns):
+    return json.dumps([{"index": t["index"], "speaker": t["who"], "text": t["body"]}
+                       for t in turns], ensure_ascii=False)
+
+
+def fit_turns(turns, limit):
+    """The newest turns whose payload fits `limit`, and how many older ones were left out.
+
+    Whole turns go from the oldest end, since the newest is what the customer just sent.
+    A newest turn too long on its own is clipped, never dropped.
+    """
+    kept = list(turns)
+    while len(kept) > 1 and len(transcript_payload(kept)) > limit:
+        kept.pop(0)
+    omitted = len(turns) - len(kept)
+    if len(transcript_payload(kept)) <= limit:
+        return kept, omitted
+    turn = kept[0]
+    room = limit - len(transcript_payload([dict(turn, body="")]))
+    while True:
+        clipped = dict(turn, body=clip(turn["body"], max(room, 1)))
+        # JSON escaping makes the payload longer than the text it carries.
+        excess = len(transcript_payload([clipped])) - limit
+        if excess <= 0 or room <= 1:
+            return [clipped], omitted
+        room -= excess
+
+
 def translate_conversation(session, subdomain, model, ticket, comments):
     """The conversation on a ticket in English, or why there is none.
 
     Returns (outcome, detail): ("current", None) when a transcript already covers the
     newest public comment, ("empty", None), ("english", None) when the conversation
-    is already English, ("failed", the reason), or ("ready", (turns, rendered, latest)).
+    is already English, ("failed", the reason), or ("ready", (turns, rendered, latest,
+    omitted)): `turns` are the ones sent, newest last, and `omitted` the older ones that
+    did not fit.
 
     Reads both sides, not just the customer's: their second message is usually an
     answer to a reply, and without the reply it reads as a complaint about nothing.
@@ -1033,30 +1063,38 @@ def translate_conversation(session, subdomain, model, ticket, comments):
     turns = api.conversation_turns(session, subdomain, ticket)
     if not turns:
         return "empty", None
-    payload = json.dumps([{"index": t["index"], "speaker": t["who"], "text": t["body"]}
-                          for t in turns], ensure_ascii=False)
+    turns, omitted = fit_turns(turns, transcript.TRANSCRIPT_INPUT_CHARS)
     try:
         rendered = claude_cli.claude_cli_json(
             model, "medium", transcript.TRANSCRIPT_SYSTEM_PROMPT, transcript.TRANSCRIPT_SCHEMA,
-            clip(payload, transcript.TRANSCRIPT_INPUT_CHARS),
+            transcript_payload(turns),
             transcript.ENGLISH_TIMEOUT_SECONDS, f"the English transcript of #{ticket_id}")
     except SystemExit as exc:
         return "failed", str(exc)
     # A transcript of English text repeats what is already a few comments above it.
     if already_english(turns, rendered.get("turns")):
         return "english", None
-    return "ready", (turns, rendered, latest)
+    return "ready", (turns, rendered, latest, omitted)
 
 
-def english_note(turns, rendered, latest, command_id=None):
+def english_note(turns, rendered, latest, omitted=0, command_id=None):
     """The private note carrying the transcript. Its english_marker is what stops
-    either the command or the digest writing the same transcript twice."""
+    either the command or the customer trigger writing the same transcript twice."""
     markers = ([done_marker(command_id)] if command_id is not None else []) + [english_marker(latest)]
+    left_out = ([para(f"The {omitted} earliest turn(s) are left out: the conversation is "
+                      "too long to translate whole.")] if omitted else [])
     return "".join(
         [para(f"This conversation in English — {len(turns)} turn(s), both sides."),
          para("Translated for reading; the customer has not seen this.")]
+        + left_out
         + transcript_blocks(turns, rendered.get("turns"))
         + [para(" ".join(markers))])
+
+
+def transcript_landed(session, subdomain, ticket_id, latest):
+    """Whether another run posted this transcript while the model was translating."""
+    comments = api.fetch_comments(session, subdomain, ticket_id, optional=True)
+    return bool(comments) and api.has_marker(comments, english_marker(latest))
 
 
 def run_english(session, subdomain, model, ticket, comments, command, dry_run):
@@ -1079,13 +1117,17 @@ def run_english(session, subdomain, model, ticket, comments, command, dry_run):
             f"The English transcript could not be produced: {detail} To try again, add "
             "a new private note reading claude: english.", dry_run)
         return
-    turns, rendered, latest = detail
+    turns, rendered, latest, omitted = detail
     print(f"#{ticket_id}: rendered {len(turns)} turn(s) in English.")
     if dry_run:
         print(f"#{ticket_id}: dry run, nothing written.")
         return
+    if transcript_landed(session, subdomain, ticket_id, latest):
+        say(session, subdomain, ticket_id, command["id"], answers["current"], dry_run,
+            error=False)
+        return
     write_to_ticket(session, subdomain, ticket_id,
-                    english_note(turns, rendered, latest, command["id"]),
+                    english_note(turns, rendered, latest, omitted, command["id"]),
                     public=False, as_html=True, drop_tags=[TAG_QUEUED, TAG_ERROR])
 
 
@@ -1109,12 +1151,16 @@ def run_auto_english(session, subdomain, model, ticket, comments, dry_run):
         print(f"#{ticket_id}: no English note ({outcome}"
               + (f": {detail})" if outcome == "failed" else ")"))
         return
-    turns, rendered, latest = detail
+    turns, rendered, latest, omitted = detail
     print(f"#{ticket_id}: rendered {len(turns)} turn(s) in English.")
     if dry_run:
         print(f"#{ticket_id}: dry run, nothing written.")
         return
-    write_to_ticket(session, subdomain, ticket_id, english_note(turns, rendered, latest),
+    if transcript_landed(session, subdomain, ticket_id, latest):
+        print(f"#{ticket_id}: another run posted this transcript first; nothing written.")
+        return
+    write_to_ticket(session, subdomain, ticket_id,
+                    english_note(turns, rendered, latest, omitted),
                     public=False, as_html=True)
 
 

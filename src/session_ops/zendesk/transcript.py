@@ -1,6 +1,6 @@
 """The prompt and schema that put a ticket's conversation into English.
 
-Shared by `claude: english` and the digest, which post the same private note.
+Shared by `claude: english` and the customer trigger, which post the same private note.
 """
 ENGLISH_TIMEOUT_SECONDS = 180
 

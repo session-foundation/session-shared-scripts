@@ -51,8 +51,17 @@ is not in English (see the second trigger below). It shares `claude: english`'s 
 so whichever gets there first stops the other repeating it until there is a new public
 comment. It answers nobody: an English conversation, a failed translation or an
 app-store review leaves only a line in the journal, and nothing is tagged. It costs one
-Claude call per customer message, English ones included: the language is judged from
-the translation, because a character test calls unaccented German English.
+Claude call per burst of customer messages, English ones included: the language is
+judged from the translation, because a character test calls unaccented German English.
+
+The relay waits 60 seconds after a customer message, restarted by each further one on
+that ticket, before translating, and never runs two jobs on one ticket at once: a
+message arriving mid-run gets one more run after it. A relay restart drops a wait in
+progress; that ticket is translated on the customer's next message, or by
+`claude: english`.
+
+A conversation too long to send whole loses its oldest turns, never its newest, and
+the note says how many were left out.
 
 ## Why a draft is always reviewed
 

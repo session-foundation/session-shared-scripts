@@ -12,6 +12,7 @@ so the tests are about the gate: that an unsigned, tampered, stale or wrongly-si
 request is refused, and that an unconfigured relay refuses everything rather than
 trusting whatever reaches the URL.
 """
+import asyncio
 import base64
 import datetime
 import hashlib
@@ -174,7 +175,8 @@ class TestEvents(unittest.TestCase):
     def post(self, body):
         ran = []
         with Env(ZENDESK_WEBHOOK_SECRET=ZENDESK_SECRET), \
-                Patched(relay, run_note_reply=lambda tid, extra=(): ran.append((tid, list(extra)))):
+                Patched(relay, run_note_reply=lambda tid, extra=(): ran.append((tid, list(extra))),
+                        runs=relay.TicketRuns(relay.run_in_thread, 0)):
             return zendesk_post(body), ran
 
     def test_no_event_runs_the_commands(self):
@@ -202,6 +204,98 @@ class TestEvents(unittest.TestCase):
         with Env(), Patched(relay.subprocess, run=lambda cmd, **k: seen.append(cmd) or Done()):
             relay.run_note_reply("27603", ["--english-if-needed"])
         self.assertEqual(seen[0][-3:], ["--ticket", "27603", "--english-if-needed"])
+
+
+class Clock:
+    """asyncio.sleep's stand-in: sleepers wake only when the test advances time."""
+
+    def __init__(self):
+        self.now, self.sleepers = 0, []
+
+    async def sleep(self, seconds):
+        wake = asyncio.get_running_loop().create_future()
+        self.sleepers.append((self.now + seconds, wake))
+        await wake
+
+    async def advance(self, seconds):
+        self.now += seconds
+        for due, wake in list(self.sleepers):
+            if due <= self.now:
+                self.sleepers.remove((due, wake))
+                wake.set_result(None)
+        await settle()
+
+
+async def settle():
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+
+class TestTicketRuns(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.clock, self.ran, self.running, self.overlapped = Clock(), [], set(), False
+        self.gates = {}
+        self.runs = relay.TicketRuns(self.fake_run, 60, sleep=self.clock.sleep)
+
+    async def fake_run(self, ticket_id, extra_args):
+        self.overlapped |= ticket_id in self.running
+        self.running.add(ticket_id)
+        self.ran.append((ticket_id, list(extra_args)))
+        gate = self.gates.get(len(self.ran))
+        if gate:
+            await gate.wait()
+        self.running.discard(ticket_id)
+
+    async def customer(self, ticket_id="1"):
+        task = asyncio.create_task(self.runs.customer_wrote(ticket_id))
+        await settle()
+        return task
+
+    async def test_a_burst_of_messages_translates_once_after_the_last(self):
+        await self.customer()
+        await self.clock.advance(30)
+        await self.customer()
+        await self.clock.advance(59)
+        self.assertEqual(self.ran, [])
+        await self.clock.advance(1)
+        self.assertEqual(self.ran, [("1", ["--english-if-needed"])])
+
+    async def test_a_message_during_a_run_translates_again_after_it(self):
+        self.gates[1] = gate = asyncio.Event()
+        await self.customer()
+        await self.clock.advance(60)
+        await self.customer()
+        await self.clock.advance(60)
+        self.assertEqual(len(self.ran), 1)
+        gate.set()
+        await settle()
+        self.assertEqual(len(self.ran), 2)
+        self.assertFalse(self.overlapped)
+
+    async def test_a_command_waits_for_the_tickets_translation(self):
+        self.gates[1] = gate = asyncio.Event()
+        await self.customer()
+        await self.clock.advance(60)
+        command = asyncio.create_task(self.runs.now("1", []))
+        await settle()
+        self.assertEqual(len(self.ran), 1)
+        gate.set()
+        await command
+        self.assertEqual(self.ran[1], ("1", []))
+        self.assertFalse(self.overlapped)
+
+    async def test_other_tickets_are_not_held_up(self):
+        self.gates[1] = asyncio.Event()
+        asyncio.create_task(self.runs.now("1", []))
+        await settle()
+        await self.runs.now("2", [])
+        self.assertEqual([ticket for ticket, _ in self.ran], ["1", "2"])
+
+    async def test_nothing_is_kept_once_a_ticket_is_done(self):
+        await self.customer()
+        await self.clock.advance(60)
+        await self.runs.now("1", [])
+        self.assertEqual((self.runs.locks, self.runs.latest_event), ({}, {}))
 
 
 class TestSignatureTimestamps(unittest.TestCase):
