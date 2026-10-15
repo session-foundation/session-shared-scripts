@@ -69,6 +69,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 import textwrap
 from datetime import datetime, timedelta, timezone
@@ -767,6 +768,7 @@ def build_unflagged_lines(unflagged, subdomain):
     Each category has its own COLLAPSED_LINKS_CHARS, so a busy category cannot push
     a rarer one off the digest. Only linked tickets are returned as covered: one past
     the budget stays eligible for the next run rather than being recorded unseen.
+    Oldest first, so the overflow is the newest, which has the most runs left.
     """
     by_category = {}
     for f in unflagged:
@@ -774,7 +776,7 @@ def build_unflagged_lines(unflagged, subdomain):
     out = []
     for category, members in sorted(by_category.items(), key=lambda kv: -len(kv[1])):
         links, linked, used = [], set(), 0
-        for f in members:
+        for f in sorted(members, key=lambda f: f.get("id") or 0):
             link = f"[#{f.get('id')}]({ticket_url(subdomain, f.get('id'))})"
             used += len(link) + 2
             if used > COLLAPSED_LINKS_CHARS:
@@ -793,7 +795,8 @@ def is_english(finding):
     """Unknown counts as English: a thin classification is likelier than a ticket
     nobody here can read."""
     language = (finding.get("language") or "").strip().lower()
-    return language in ("", "unknown") or language.startswith("english")
+    return (language in ("", "unknown", "en") or language.startswith("english")
+            or re.match(r"en[-_]", language) is not None)
 
 
 def build_non_english_line(findings, subdomain, updated_ids):

@@ -758,6 +758,13 @@ class TestUnflaggedLine(unittest.TestCase):
         self.assertIn("**200** not flagged", text)
         self.assertRegex(text, r"\+\d+ more")
 
+    def test_the_oldest_are_linked_when_a_category_overflows(self):
+        findings = [self.quiet(27000 + i) for i in range(200)]
+        messages, coverage = triage.build_messages(list(reversed(findings)), "acme")
+        covered = set().union(*coverage)
+        self.assertIn(27000, covered)
+        self.assertNotIn(27199, covered)
+
     def test_abuse_reports_and_highlights_are_not_repeated_on_it(self):
         findings = [finding(1), finding(2, category="abuse_report", severity="not_applicable"),
                     self.quiet(3)]
@@ -801,7 +808,7 @@ class TestNonEnglishLine(unittest.TestCase):
         self.assertIsNone(self.line([finding(2, language="German")], updated_ids={2}))
 
     def test_unknown_or_english_variants_are_not_listed(self):
-        for language in ("", "unknown", "ENGLISH", "English (US)"):
+        for language in ("", "unknown", "ENGLISH", "English (US)", "en", "EN-us", "en_GB"):
             with self.subTest(language=language):
                 self.assertIsNone(self.line([finding(1, language=language)]))
 
