@@ -156,6 +156,46 @@ class TestStoreHigh(unittest.TestCase):
         self.assertEqual(kinds(result), [])
 
 
+class TestWatermark(unittest.TestCase):
+    HOURS = 3600
+
+    def run_sequence(self, steps, strict_sync=False):
+        state, posted = None, []
+        for at_hour, github, store in steps:
+            result = evaluate(state, github, store, strict_sync=strict_sync,
+                              now=at_hour * self.HOURS)
+            posted.append(kinds(result))
+            state = result.state
+        return posted, state
+
+    def test_a_pulled_release_warns_once_the_store_has_served_lower_for_six_hours(self):
+        posted, state = self.run_sequence(
+            [(0, "1.15", "1.15"), (1, "1.15", "1.16"), (2, "1.15", "1.15"),
+             (3, "1.16", "1.15"), (7.9, "1.16", "1.15"), (8, "1.16", "1.15")],
+            strict_sync=True)
+        self.assertEqual(posted, [[], [WARNING], [], [ALL_CLEAR], [], [WARNING]])
+        self.assertEqual(state["store_high"], "1.15")
+
+    def test_a_bad_read_clears_after_six_hours_back_at_the_real_version(self):
+        posted, state = self.run_sequence(
+            [(0, "1.20", "1.20"), (1, "1.20", "8.0"), (2, "1.20", "1.20"),
+             (8, "1.20", "1.20")])
+        self.assertEqual(posted, [[], [WARNING], [], [ALL_CLEAR]])
+        self.assertEqual((state["store_high"], state["low_since"]), ("1.20", None))
+
+    def test_a_short_dip_stays_quiet_and_resets_the_clock(self):
+        posted, state = self.run_sequence(
+            [(0, "2.15.5", "2.15.5"), (1, "2.15.5", "2.15.4"), (2, "2.15.5", "2.15.5"),
+             (3, "2.15.5", "2.15.4"), (8, "2.15.5", "2.15.4")])
+        self.assertEqual(posted, [[], [], [], [], []])
+        self.assertEqual((state["store_high"], state["low_since"]), ("2.15.5", 3 * self.HOURS))
+
+    def test_a_state_from_before_the_clock_loads(self):
+        result = evaluate(seen("2.15.4", "2.15.4", store_high="2.15.4"), "2.15.4", "2.15.3",
+                          now=100.0)
+        self.assertEqual(result.state["low_since"], 100.0)
+
+
 class TestPrereleases(unittest.TestCase):
     def test_a_store_shipping_a_prerelease_is_in_sync(self):
         result = evaluate(None, "1.32.2", "1.33.0", prereleases=["1.33.0"])

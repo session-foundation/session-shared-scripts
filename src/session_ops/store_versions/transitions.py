@@ -1,8 +1,8 @@
 """What to post, given a platform's last state and this run's versions: no IO.
 
 A platform's state is a dict: the GitHub and store versions last seen, the store's
-highest ever (`store_high`), whether a warning is out (`warning`) and when it was last
-posted (`warned_at`, epoch seconds).
+recent highest (`store_high`) and since when it has served lower (`low_since`), whether
+a warning is out (`warning`) and when it was last posted (`warned_at`, epoch seconds).
 """
 from dataclasses import dataclass, field
 
@@ -15,6 +15,9 @@ ALL_CLEAR = "all_clear"
 INFO_GITHUB = "info_github"
 INFO_STORE = "info_store"
 WARNINGS = (WARNING, WARNING_UPDATE, WARNING_REMINDER)
+
+# Longer than the hours iTunes and Flathub's CDN take to stop re-serving an old version.
+WATERMARK_SECONDS = 6 * 3600
 
 SOURCE_FAILING = "source_failing"
 SOURCE_RECOVERED = "source_recovered"
@@ -36,7 +39,7 @@ class Result:
 
 
 def evaluate(prev, github, store, *, prereleases=(), strict_sync=False, now=0.0,
-             reminder_seconds=None):
+             reminder_seconds=None, watermark_seconds=WATERMARK_SECONDS):
     """The events for this run, and the state to keep once they are posted.
 
     App stores warn only when the store is ahead of GitHub: a public build whose source
@@ -47,17 +50,22 @@ def evaluate(prev, github, store, *, prereleases=(), strict_sync=False, now=0.0,
     """
     # Store APIs are eventually consistent: iTunes and Flathub's CDN re-serve the
     # previous version for hours after a release. Every comparison uses the highest
-    # version the store has served, so a dip and recovery stays quiet.
+    # version the store has served, so a dip and recovery stays quiet, until the store
+    # has served lower for `watermark_seconds`: a rollback or a bad read, not a lag.
     prev_high = prev and (prev.get("store_high") or prev["store"])
     new_high = prev_high is None or compare(store, prev_high) > 0
-    high = store if new_high else prev_high
+    high, low_since = (store if new_high else prev_high), None
+    if not new_high and compare(store, prev_high) < 0:
+        low_since = now if prev.get("low_since") is None else prev["low_since"]
+        if now - low_since >= watermark_seconds:
+            high, low_since = store, None
     if compare(high, github) > 0 and any(compare(high, p) == 0 for p in prereleases):
         github = high
 
     order = compare(high, github)
     store_ahead, store_behind = order > 0, order < 0
     out_of_sync = order != 0 if strict_sync else store_ahead
-    state = {"github": github, "store": store, "store_high": high,
+    state = {"github": github, "store": store, "store_high": high, "low_since": low_since,
              "warning": out_of_sync, "warned_at": None}
 
     if prev is None:
