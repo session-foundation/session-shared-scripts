@@ -35,6 +35,8 @@ class SourceError(RuntimeError):
 class Release:
     version: str
     url: str = ""
+    # GitHub only: the published prereleases above `version`.
+    prereleases: tuple = ()
 
 
 def normalize(version):
@@ -89,8 +91,19 @@ def checked(resp, what):
 
 
 def fetch_github(session, repo):
-    tag, url = github.latest_release(session, f"{github.ORG}/{repo}")
-    return checked_version(Release(normalize(tag), url), f"GitHub {repo}")
+    """The highest release, rather than GitHub's "latest": that is the most recently
+    created one, which goes backwards when an older line gets a hotfix."""
+    found = [(Release(normalize(tag), url), prerelease)
+             for tag, url, prerelease in github.releases(session, f"{github.ORG}/{repo}")]
+    released = [release for release, prerelease in found if not prerelease]
+    if not released:
+        raise SourceError(f"none of GitHub {repo}'s last {github.RELEASES_PAGE} releases "
+                          "is a full release")
+    by_version = functools.cmp_to_key(lambda a, b: compare(a.version, b.version))
+    latest = checked_version(max(released, key=by_version), f"GitHub {repo}")
+    above = tuple(release for release, prerelease in found
+                  if prerelease and compare(release.version, latest.version) > 0)
+    return Release(latest.version, latest.url, above)
 
 
 def fetch_play(session, app_id, country="us", lang="en"):

@@ -1,7 +1,7 @@
 # Store Versions Against GitHub Releases
 
-Every 5 minutes, compares each store's latest Session release with the platform's latest
-GitHub release, and posts as they diverge and come back.
+Every 5 minutes, compares each store's latest Session release with the platform's
+highest GitHub release, and posts as they diverge and come back.
 
 | | |
 | --- | --- |
@@ -24,15 +24,19 @@ GitHub release, and posts as they diverge and come back.
 A store ahead of GitHub is a public build whose source is not published. The channels
 warned on either way are ours: each GitHub release opens a pull request on
 session-fdroid and on flathub/network.loki.Session that has to be merged, and the APT
-repo is published with the release.
+repo is published with the release. A store shipping a published prerelease above
+that release is in sync with it.
 
 | Post | When |
 | --- | --- |
 | ⚠️ warning, tagging the platform's people | it diverges; on a platform's first check, if it already has |
 | ⚠️ again | every 12 hours while unresolved, and at once if the gap grows |
 | ✅ back in sync | after a warning only |
-| ℹ️ new GitHub release, store updated | either moves without a warning; a store returning to a version it already reached stays quiet, since iTunes and Flathub's CDN re-serve the previous one for hours |
+| ℹ️ new GitHub release, store updated | either moves without a warning |
 | ⚠️ source failing, untagged | a source has failed for an hour, then every 12 hours, and ✅ once it reads again |
+
+A store is held at the highest version it has served: iTunes and the CDNs re-serve the
+previous one for hours after a release, so a store returning to it changes nothing.
 
 State is `/var/lib/session-ops/store-versions/state.json`. Losing it makes the next run
 a first check. A message Discord refuses is posted again on the next run, as is one

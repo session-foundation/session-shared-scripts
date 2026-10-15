@@ -23,6 +23,7 @@ APP_KEY_CREDENTIAL = "github-app.pem"
 APP_KEY_PATH = "/etc/session-ops/github-app.pem"
 
 ORG = "session-foundation"
+RELEASES_PAGE = 20
 REHEARSAL_PREFIX = "rehearsal/"
 BOT, DIRECT = "bot", "direct"
 # Every branch the App may write, and how: a BOT branch is the job's own, rebuilt and
@@ -116,11 +117,14 @@ def check(resp, what):
     return resp.json() if resp.content else None
 
 
-def latest_release(api, repo):
-    """(tag, page URL) of `repo`'s latest release: published, neither draft nor prerelease."""
-    release = check(api.request("GET", f"{API}/repos/{repo}/releases/latest"),
-                    f"reading {repo}'s latest release")
-    return release["tag_name"], release.get("html_url", "")
+def releases(api, repo, count=RELEASES_PAGE):
+    """[(tag, page URL, prerelease)] of `repo`'s `count` most recently created
+    releases, drafts left out."""
+    found = check(api.request("GET", f"{API}/repos/{repo}/releases",
+                              params={"per_page": count}),
+                  f"reading {repo}'s releases")
+    return [(release["tag_name"], release.get("html_url", ""), bool(release.get("prerelease")))
+            for release in found if not release.get("draft")]
 
 
 def app_jwt(app_id, private_key, now=None):

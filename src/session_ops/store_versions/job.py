@@ -267,9 +267,13 @@ def check(state, tags, now):
             continue
         print(f"{platform.name}: github={github.version} {platform.store['kind']}={store.version}")
         result = evaluate(state["platforms"].get(platform.name), github.version, store.version,
+                          prereleases=[release.version for release in github.prereleases],
                           strict_sync=platform.strict_sync, now=now,
                           reminder_seconds=REMINDER_SECONDS)
-        messages = combined([event_message(platform, event, github.url, store.url, tags)
+        github_urls = {release.version: release.url for release in github.prereleases}
+        messages = combined([event_message(platform, event,
+                                           github_urls.get(event.github, github.url),
+                                           store.url, tags)
                              for event in result.events])
         steps.append((messages, lambda name=platform.name, new=result.state:
                       state["platforms"].__setitem__(name, new)))

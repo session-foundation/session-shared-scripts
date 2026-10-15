@@ -135,6 +135,42 @@ class TestStoreHigh(unittest.TestCase):
             state = result.state
         self.assertEqual(posted.count(INFO_STORE), 1)
 
+    def test_store_flapping_ahead_warns_once(self):
+        state, posted = None, []
+        for store in ("2.15.6", "2.15.5", "2.15.6", "2.15.5", "2.15.6"):
+            result = evaluate(state, "2.15.5", store)
+            posted += kinds(result)
+            state = result.state
+        self.assertEqual(posted, [WARNING])
+
+    def test_store_flapping_two_ahead_does_not_update_the_warning(self):
+        state = evaluate(None, "2.15.5", "2.15.7").state
+        for store in ("2.15.6", "2.15.7", "2.15.6"):
+            result = evaluate(state, "2.15.5", store)
+            self.assertEqual(kinds(result), [])
+            state = result.state
+
+    def test_strict_sync_dip_after_a_merge_stays_in_sync(self):
+        state = evaluate(seen("1.18.1", "1.18.1"), "1.18.2", "1.18.2", strict_sync=True).state
+        result = evaluate(state, "1.18.2", "1.18.1", strict_sync=True)
+        self.assertEqual(kinds(result), [])
+
+
+class TestPrereleases(unittest.TestCase):
+    def test_a_store_shipping_a_prerelease_is_in_sync(self):
+        result = evaluate(None, "1.32.2", "1.33.0", prereleases=["1.33.0"])
+        self.assertEqual(kinds(result), [])
+        self.assertEqual(result.state["github"], "1.33.0")
+
+    def test_strict_sync_on_the_release_below_a_prerelease_is_in_sync(self):
+        result = evaluate(None, "1.17.12", "1.17.12", prereleases=["1.17.13"], strict_sync=True)
+        self.assertEqual(kinds(result), [])
+
+    def test_a_store_past_every_prerelease_warns(self):
+        result = evaluate(None, "1.32.2", "1.33.1", prereleases=["1.33.0"])
+        self.assertEqual(kinds(result), [WARNING])
+        self.assertEqual(result.events[0].github, "1.32.2")
+
 
 class TestSourceEvents(unittest.TestCase):
     def call(self, prev, error, now):

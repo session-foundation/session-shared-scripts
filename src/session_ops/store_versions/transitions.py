@@ -35,55 +35,59 @@ class Result:
     state: dict = field(default_factory=dict)
 
 
-def evaluate(prev, github, store, *, strict_sync=False, now=0.0, reminder_seconds=None):
+def evaluate(prev, github, store, *, prereleases=(), strict_sync=False, now=0.0,
+             reminder_seconds=None):
     """The events for this run, and the state to keep once they are posted.
 
     App stores warn only when the store is ahead of GitHub: a public build whose source
     is not published. A `strict_sync` channel is ours and must match GitHub, so it
     warns in either direction. An unresolved warning repeats every `reminder_seconds`,
-    and at once if the leading side pulls further ahead.
+    and at once if the leading side pulls further ahead. `prereleases` are the
+    published prereleases above `github`: a store shipping one of them is in sync.
     """
-    order = compare(store, github)
-    store_ahead, store_behind = order > 0, order < 0
-    out_of_sync = order != 0 if strict_sync else store_ahead
-
     # Store APIs are eventually consistent: iTunes and Flathub's CDN re-serve the
-    # previous version for hours after a release. The true version is kept, but only a
-    # new high is announced, so a dip and recovery stays quiet.
+    # previous version for hours after a release. Every comparison uses the highest
+    # version the store has served, so a dip and recovery stays quiet.
     prev_high = prev and (prev.get("store_high") or prev["store"])
     new_high = prev_high is None or compare(store, prev_high) > 0
-    state = {"github": github, "store": store, "store_high": store if new_high else prev_high,
+    high = store if new_high else prev_high
+    if compare(high, github) > 0 and any(compare(high, p) == 0 for p in prereleases):
+        github = high
+
+    order = compare(high, github)
+    store_ahead, store_behind = order > 0, order < 0
+    out_of_sync = order != 0 if strict_sync else store_ahead
+    state = {"github": github, "store": store, "store_high": high,
              "warning": out_of_sync, "warned_at": None}
 
     if prev is None:
         if out_of_sync:
             state["warned_at"] = now
-            return Result([Event(WARNING, github, store, initial=True)], state)
+            return Result([Event(WARNING, github, high, initial=True)], state)
         return Result([], state)
 
     github_advanced = compare(github, prev["github"]) > 0
-    store_advanced = compare(store, prev["store"]) > 0
     warned_at = now if prev.get("warned_at") is None else prev["warned_at"]
     events = []
 
     if out_of_sync and not prev["warning"]:
-        events.append(Event(WARNING, github, store))
+        events.append(Event(WARNING, github, high))
         warned_at = now
     elif out_of_sync:
-        if (store_ahead and store_advanced) or (store_behind and github_advanced):
-            events.append(Event(WARNING_UPDATE, github, store))
+        if (store_ahead and new_high) or (store_behind and github_advanced):
+            events.append(Event(WARNING_UPDATE, github, high))
             warned_at = now
         elif reminder_seconds is not None and now - warned_at >= reminder_seconds:
-            events.append(Event(WARNING_REMINDER, github, store))
+            events.append(Event(WARNING_REMINDER, github, high))
             warned_at = now
     elif prev["warning"]:
-        events.append(Event(ALL_CLEAR, github, store))
+        events.append(Event(ALL_CLEAR, github, high))
 
     if not events:
         if github_advanced:
-            events.append(Event(INFO_GITHUB, github, store))
+            events.append(Event(INFO_GITHUB, github, high))
         if new_high:
-            events.append(Event(INFO_STORE, github, store))
+            events.append(Event(INFO_STORE, github, high))
 
     state["warned_at"] = warned_at if out_of_sync else None
     return Result(events, state)

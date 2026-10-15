@@ -108,11 +108,33 @@ class TestFetchers(unittest.TestCase):
         self.assertEqual(release.url, "https://flathub.org/apps/network.loki.Session")
 
     def test_github_strips_the_v(self):
-        session = FakeSession([FakeResponse({"tag_name": "v1.18.2", "html_url": "u"})])
+        session = FakeSession([FakeResponse([{"tag_name": "v1.18.2", "html_url": "u"}])])
         release = sources.fetch_github(session, "session-desktop")
-        self.assertEqual(release.version, "1.18.2")
+        self.assertEqual((release.version, release.url), ("1.18.2", "u"))
         self.assertTrue(session.calls[0][1].endswith(
-            "/repos/session-foundation/session-desktop/releases/latest"))
+            "/repos/session-foundation/session-desktop/releases"))
+
+    def test_github_takes_the_highest_release_not_the_newest(self):
+        session = FakeSession([FakeResponse([
+            {"tag_name": "v1.32.3", "html_url": "hotfix"},
+            {"tag_name": "v1.33.1", "html_url": "latest"},
+            {"tag_name": "v1.32.2", "html_url": "old"}])])
+        self.assertEqual(sources.fetch_github(session, "session-android").url, "latest")
+
+    def test_github_keeps_the_prereleases_above_the_release(self):
+        session = FakeSession([FakeResponse([
+            {"tag_name": "v1.34.0", "html_url": "draft", "draft": True},
+            {"tag_name": "v1.33.0", "html_url": "pre", "prerelease": True},
+            {"tag_name": "v1.32.2", "html_url": "latest"},
+            {"tag_name": "v1.32.0", "html_url": "old pre", "prerelease": True}])])
+        release = sources.fetch_github(session, "session-android")
+        self.assertEqual(release.version, "1.32.2")
+        self.assertEqual(release.prereleases, (sources.Release("1.33.0", "pre"),))
+
+    def test_github_without_a_full_release_fails_the_source(self):
+        session = FakeSession([FakeResponse([{"tag_name": "v1.33.0", "prerelease": True}])])
+        with self.assertRaises(sources.SourceError):
+            sources.fetch_github(session, "session-android")
 
     def test_http_error_fails_the_source(self):
         with self.assertRaises(sources.SourceError):
