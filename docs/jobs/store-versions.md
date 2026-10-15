@@ -35,7 +35,10 @@ repo is published with the release.
 | ⚠️ source failing, untagged | a source has failed for an hour, then every 12 hours, and ✅ once it reads again |
 
 State is `/var/lib/session-ops/store-versions/state.json`. Losing it makes the next run
-a first check. A message Discord refuses is posted again on the next run.
+a first check. A message Discord refuses is posted again on the next run, as is one
+still unposted 150 seconds into a run. A version that does not start with a digit, or
+runs past 64 characters, fails its source. A failed run is reported once, then every
+12 hours until one succeeds.
 
 GitHub is read unauthenticated: one request per repository a run, 36 an hour of the 60
 allowed. The organisation refuses fine-grained tokens that live longer than 366 days.

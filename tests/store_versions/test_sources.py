@@ -15,6 +15,19 @@ class TestVersions(unittest.TestCase):
         self.assertEqual(sources.compare("2.15.3", "2.15.3"), 0)
         self.assertEqual(sources.compare("1.2", "1.2.0"), 0)
 
+    def test_a_suffixed_version_is_below_its_release(self):
+        self.assertEqual(sources.compare("1.2.3-beta1", "1.2.3"), -1)
+        self.assertEqual(sources.compare("1.2.3rc1", "1.2.3"), -1)
+        self.assertEqual(sources.compare("1.2.3-beta1", "1.2.3-beta2"), -1)
+        self.assertEqual(sources.compare("1.2.3-beta1", "1.2.2"), 1)
+        self.assertEqual(sources.newest(["1.34.0-rc1", "1.34.0"]), "1.34.0")
+
+    def test_an_unusable_version_fails_the_source(self):
+        for version in ("", "v", "beta", "1" * 65):
+            with self.subTest(version=version), self.assertRaises(sources.SourceError):
+                sources.checked_version(sources.Release(version), "test")
+        self.assertEqual(sources.checked_version(sources.Release("1.2.3"), "test").version, "1.2.3")
+
     def test_normalize_and_deb_upstream(self):
         self.assertEqual(sources.normalize(" v1.18.1 "), "1.18.1")
         self.assertEqual(sources.deb_upstream("1:1.17.17-2"), "1.17.17")
@@ -80,6 +93,12 @@ class TestFetchers(unittest.TestCase):
             FakeSession([Raw(content=packages)]),
             {"kind": "deb", "base_url": "https://deb.example/", "package": "session-desktop"})
         self.assertEqual(release.version, "1.18.2")
+
+    def test_an_empty_fdroid_version_fails_the_source(self):
+        index = {"packages": {"a": [{"versionCode": 1, "versionName": ""}]}}
+        with self.assertRaises(sources.SourceError):
+            sources.fetch_store(FakeSession([FakeResponse(index)]),
+                                {"kind": "fdroid", "base_url": "https://f.example", "app_id": "a"})
 
     def test_flathub_appstream(self):
         session = FakeSession([FakeResponse({"releases": [{"version": "1.18.1"},

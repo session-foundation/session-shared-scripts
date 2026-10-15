@@ -23,6 +23,8 @@ FLATHUB_METAINFO = "https://raw.githubusercontent.com/{repo}/{branch}/{app_id}.m
 PLAY_VERSION = re.compile(r'\[\[\["(\d+(?:\.\d+)+)"\]\]')
 DEB_EPOCH = re.compile(r"^\d+:")
 DEB_REVISION = re.compile(r"-[^-]+$")
+RELEASE = re.compile(r"(\d+(?:\.\d+)*)(.*)", re.DOTALL)
+MAX_VERSION_CHARS = 64
 
 
 class SourceError(RuntimeError):
@@ -40,11 +42,17 @@ def normalize(version):
 
 
 def version_key(version):
-    """Orders dotted versions numerically, so 1.10.0 sorts after 1.9.0 and 1.2 equals 1.2.0."""
-    parts = [int(part) for part in re.findall(r"\d+", version)]
+    """Orders dotted versions numerically, so 1.10.0 sorts after 1.9.0 and 1.2 equals
+    1.2.0, and ranks a suffixed one (1.2.3-beta1, 1.2.3rc1) below its bare release."""
+    match = RELEASE.match(version)
+    if not match:
+        return ((), 0, ())
+    parts = [int(part) for part in match.group(1).split(".")]
     while parts and parts[-1] == 0:
         parts.pop()
-    return tuple(parts)
+    suffix = match.group(2)
+    return (tuple(parts), 0 if suffix else 1,
+            tuple(int(part) for part in re.findall(r"\d+", suffix)))
 
 
 def compare(a, b):
@@ -67,6 +75,13 @@ def deb_upstream(version):
     return normalize(DEB_REVISION.sub("", version) if "-" in version else version)
 
 
+def checked_version(release, what):
+    """`release`, if its version is one an embed can carry and compare() can order."""
+    if not RELEASE.match(release.version) or len(release.version) > MAX_VERSION_CHARS:
+        raise SourceError(f"{what} gave an unusable version: {release.version[:MAX_VERSION_CHARS]!r}")
+    return release
+
+
 def checked(resp, what):
     if resp.status_code >= 400:
         raise SourceError(f"{what}: HTTP {resp.status_code}")
@@ -75,7 +90,7 @@ def checked(resp, what):
 
 def fetch_github(session, repo):
     tag, url = github.latest_release(session, f"{github.ORG}/{repo}")
-    return Release(normalize(tag), url)
+    return checked_version(Release(normalize(tag), url), f"GitHub {repo}")
 
 
 def fetch_play(session, app_id, country="us", lang="en"):
@@ -183,4 +198,5 @@ FETCHERS = {
 def fetch_store(session, store):
     """`store` is a platform's store spec: its `kind`, and that fetcher's arguments."""
     arguments = dict(store)
-    return FETCHERS[arguments.pop("kind")](session, **arguments)
+    kind = arguments.pop("kind")
+    return checked_version(FETCHERS[kind](session, **arguments), kind)

@@ -31,6 +31,7 @@ import json
 import sys
 import time
 import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from session_ops.shared import discord, http
@@ -43,10 +44,17 @@ from session_ops.store_versions.transitions import (
 
 TAGS_FILE = "/etc/session-ops/store-versions.toml"
 STATE_VERSION = 1
-REMINDER_SECONDS = 12 * 3600
-FAILING_AFTER_SECONDS = 3600
+HOUR = 3600
+REMINDER_SECONDS = 12 * HOUR
+FAILING_AFTER_SECONDS = HOUR
 USER_AGENT = "session-ops store-versions (+https://github.com/session-foundation)"
+# Short, so a host that stops answering costs under a minute of the unit's 4.
+HTTP_ATTEMPTS, HTTP_TIMEOUT = 2, (5, 20)
+# Messages still unposted by then wait for the next run rather than for systemd's kill.
+POST_DEADLINE_SECONDS = 150
+EMBED_FIELD_CHARS = 1024
 
+ANDROID_REPO, IOS_REPO, DESKTOP_REPO = "session-android", "session-ios", "session-desktop"
 ANDROID_ID = "network.loki.messenger"
 FLATHUB_ID = "network.loki.Session"
 
@@ -61,32 +69,32 @@ class Platform:
 
 
 PLATFORMS = (
-    Platform("android", "Session Android", "session-android",
+    Platform("android", "Session Android", ANDROID_REPO,
              {"kind": "play", "app_id": ANDROID_ID}),
     # Each Android release opens a "Release X.Y.Z" pull request on session-fdroid, which
     # has to be merged; the merged index is what this checks.
-    Platform("android-fdroid-merged", "Session Android (F-Droid, merged)", "session-android",
+    Platform("android-fdroid-merged", "Session Android (F-Droid, merged)", ANDROID_REPO,
              {"kind": "fdroid", "app_id": ANDROID_ID,
               "base_url": "https://raw.githubusercontent.com/session-foundation/"
                           "session-fdroid/master/fdroid/repo"},
              strict_sync=True),
     # What F-Droid clients pull: behind is deploy lag, so app-store rules.
-    Platform("android-fdroid-live", "Session Android (F-Droid, live)", "session-android",
+    Platform("android-fdroid-live", "Session Android (F-Droid, live)", ANDROID_REPO,
              {"kind": "fdroid", "app_id": ANDROID_ID,
               "base_url": "https://fdroid.getsession.org/fdroid/repo"}),
-    Platform("ios", "Session iOS", "session-ios",
+    Platform("ios", "Session iOS", IOS_REPO,
              {"kind": "appstore", "bundle_id": "com.loki-project.loki-messenger"}),
     # session-desktop, not session-messenger-desktop: that one is an old transitional package.
-    Platform("desktop", "Session Desktop", "session-desktop",
+    Platform("desktop", "Session Desktop", DESKTOP_REPO,
              {"kind": "deb", "base_url": "https://deb.session.foundation",
               "package": "session-desktop"},
              strict_sync=True),
     # flathubbot opens an update pull request on flathub/network.loki.Session per
     # release, which has to be merged.
-    Platform("desktop-flathub-merged", "Session Desktop (Flathub, merged)", "session-desktop",
+    Platform("desktop-flathub-merged", "Session Desktop (Flathub, merged)", DESKTOP_REPO,
              {"kind": "flathub_manifest", "app_id": FLATHUB_ID}, strict_sync=True),
     # Behind is Flathub's build and publish lag after the merge.
-    Platform("desktop-flathub-live", "Session Desktop (Flathub, live)", "session-desktop",
+    Platform("desktop-flathub-live", "Session Desktop (Flathub, live)", DESKTOP_REPO,
              {"kind": "flathub", "app_id": FLATHUB_ID}),
 )
 
@@ -108,6 +116,8 @@ def load_tags(path):
             data = tomllib.load(handle)
     except FileNotFoundError:
         return {}
+    except OSError as exc:
+        sys.exit(f"{path}: {exc.strerror}; it has to be readable by the job (mode 644)")
     except tomllib.TOMLDecodeError as exc:
         sys.exit(f"{path}: {exc}")
     tags = data.get("tag", {})
@@ -152,7 +162,8 @@ def event_message(platform, event, github_url, store_url, tags):
     fields = [{"name": f"{store} version", "value": event.store, "inline": True},
               {"name": "GitHub version", "value": event.github, "inline": True}]
     fields += [{"name": name, "value": url} for name, url in
-               ((f"{store} link", store_url), ("GitHub release", github_url)) if url]
+               ((f"{store} link", store_url), ("GitHub release", github_url))
+               if url and len(url) <= EMBED_FIELD_CHARS]
     embed = {"fields": fields}
     message = {"embeds": [embed], "allowed_mentions": {"parse": []}}
 
@@ -162,7 +173,7 @@ def event_message(platform, event, github_url, store_url, tags):
                   WARNING_UPDATE: " — divergence grew",
                   WARNING_REMINDER: " — still unresolved"}[event.kind]
         if event.kind == WARNING_REMINDER:
-            description += f"\nStill out of sync after ~{REMINDER_SECONDS // 3600}h."
+            description += f"\nStill out of sync after ~{REMINDER_SECONDS // HOUR}h."
         embed.update(color=RED, title=f"⚠️ {platform.display}: {direction}{suffix}",
                      description=description)
         ids = tags.get(platform.name, [])
@@ -183,44 +194,74 @@ def event_message(platform, event, github_url, store_url, tags):
     return message
 
 
+def combined(messages):
+    """A platform's events as one message, so they land or fail together."""
+    if len(messages) < 2:
+        return messages
+    merged = {"embeds": [embed for message in messages for embed in message["embeds"]],
+              "allowed_mentions": {"parse": []}}
+    for message in messages:
+        if "content" in message:
+            merged.update(content=message["content"],
+                          allowed_mentions=message["allowed_mentions"])
+    return [merged]
+
+
 def source_message(source, kind, failure, now):
     if kind == SOURCE_RECOVERED:
         embed = {"color": GREEN, "title": f"✅ {source}: readable again"}
     else:
-        hours = max(1, round((now - failure["since"]) / 3600))
+        hours = max(1, round((now - failure["since"]) / HOUR))
         embed = {"color": RED, "title": f"⚠️ {source}: failing for ~{hours}h",
                  "description": discord.clip(failure["error"], 1000)}
     return {"embeds": [embed], "allowed_mentions": {"parse": []}}
 
 
-class Fetcher:
-    """Each source's Release or error, fetched once per run: three platforms share
-    session-android's release, and unauthenticated GitHub allows 60 requests an hour."""
-
-    def __init__(self, session):
-        self.session = session
-        self.results = {}
-
-    def get(self, key, fetch, *args):
-        if key not in self.results:
-            try:
-                self.results[key] = (fetch(self.session, *args), None)
-            except Exception as exc:  # one source down must not stop the others
-                self.results[key] = (None, f"{type(exc).__name__}: {exc}")
-                print(f"{key}: {self.results[key][1]}", file=sys.stderr)
-        return self.results[key]
+def http_session():
+    session = http.Session(attempts=HTTP_ATTEMPTS, timeout=HTTP_TIMEOUT)
+    session.headers["User-Agent"] = USER_AGENT
+    return session
 
 
-def check(state, tags, session, now):
+def fetch_all(wanted):
+    """{key: (Release, None) or (None, error)} for {key: (fetch, args)}, all at once and
+    each on its own session, so one host that stops answering holds up no other."""
+    def one(fetch, args):
+        try:
+            return fetch(http_session(), *args), None
+        except Exception as exc:  # one source down must not stop the others
+            return None, f"{type(exc).__name__}: {exc}"
+
+    with ThreadPoolExecutor(max_workers=max(1, len(wanted))) as pool:
+        futures = {key: pool.submit(one, fetch, args) for key, (fetch, args) in wanted.items()}
+    results = {key: future.result() for key, future in futures.items()}
+    for key, (_, error) in results.items():
+        if error:
+            print(f"{key}: {error}", file=sys.stderr)
+    return results
+
+
+def check(state, tags, now):
     """[(messages, apply)]: `apply` records a step's state once its messages are posted,
-    so a failed post is retried on the next run rather than lost."""
-    fetcher = Fetcher(session)
+    so a failed post is retried on the next run rather than lost.
+
+    Each source is fetched once, keyed by name: three platforms share each of
+    session-android's and session-desktop's releases, and unauthenticated GitHub allows
+    60 requests an hour."""
+    keys = {platform.name: (f"GitHub {platform.repo}",
+                            f"{store_name(platform)} ({platform.name})")
+            for platform in PLATFORMS}
+    wanted = {}
+    for platform in PLATFORMS:
+        github_key, store_key = keys[platform.name]
+        wanted[github_key] = (sources.fetch_github, (platform.repo,))
+        wanted[store_key] = (sources.fetch_store, (platform.store,))
+    results = fetch_all(wanted)
+
     steps = []
     for platform in PLATFORMS:
-        github, github_error = fetcher.get(f"GitHub {platform.repo}", sources.fetch_github,
-                                           platform.repo)
-        store, store_error = fetcher.get(f"{store_name(platform)} ({platform.name})",
-                                         sources.fetch_store, platform.store)
+        github_key, store_key = keys[platform.name]
+        (github, github_error), (store, store_error) = results[github_key], results[store_key]
         if github_error or store_error:
             print(f"{platform.name}: skipped")
             continue
@@ -228,13 +269,13 @@ def check(state, tags, session, now):
         result = evaluate(state["platforms"].get(platform.name), github.version, store.version,
                           strict_sync=platform.strict_sync, now=now,
                           reminder_seconds=REMINDER_SECONDS)
-        messages = [event_message(platform, event, github.url, store.url, tags)
-                    for event in result.events]
+        messages = combined([event_message(platform, event, github.url, store.url, tags)
+                             for event in result.events])
         steps.append((messages, lambda name=platform.name, new=result.state:
                       state["platforms"].__setitem__(name, new)))
 
-    for source in sorted(set(fetcher.results) | set(state["sources"])):
-        error = fetcher.results.get(source, (None, None))[1]
+    for source in sorted(set(results) | set(state["sources"])):
+        error = results.get(source, (None, None))[1]
         kind, failure = source_events(state["sources"].get(source), error, now=now,
                                       after_seconds=FAILING_AFTER_SECONDS,
                                       reminder_seconds=REMINDER_SECONDS)
@@ -260,9 +301,8 @@ def main(argv=None):
                       required=not args.dry_run)
     tags = load_tags(args.tags)
     state = load_state(args.state)
-    session = http.Session(attempts=3)
-    session.headers["User-Agent"] = USER_AGENT
-    steps = check(state, tags, session, time.time())
+    started = time.monotonic()
+    steps = check(state, tags, time.time())
     messages = [message for step_messages, _ in steps for message in step_messages]
 
     if args.dry_run:
@@ -271,17 +311,30 @@ def main(argv=None):
         print(f"Would post {len(messages)} message(s).")
         return
 
-    posted = discord.post_to_discord(http.Session(), webhook, messages) if messages else 0
-    reached = 0
+    session = http.Session(attempts=HTTP_ATTEMPTS, timeout=HTTP_TIMEOUT)
+    posted, refused, deferred = 0, False, False
     for step_messages, apply in steps:
-        reached += len(step_messages)
-        if reached <= posted:
-            apply()
+        if step_messages:
+            if time.monotonic() - started > POST_DEADLINE_SECONDS:
+                deferred = True
+                continue
+            landed = discord.post_to_discord(session, webhook, step_messages)
+            posted += landed
+            if landed < len(step_messages):
+                refused = True
+                continue
+        apply()
+        # Saved per step: a run killed mid-way reposts at most the step it was on.
+        if args.state and step_messages:
+            write_json(args.state, state)
     if args.state:
         write_json(args.state, state)
-    if posted < len(messages):
+    if refused:
         sys.exit(f"Posted {posted} of {len(messages)} messages to Discord.")
-    print(f"Posted {len(messages)} message(s).")
+    if deferred:
+        print(f"Posted {posted} of {len(messages)} message(s); the rest go next run.")
+    else:
+        print(f"Posted {len(messages)} message(s).")
 
 
 if __name__ == "__main__":

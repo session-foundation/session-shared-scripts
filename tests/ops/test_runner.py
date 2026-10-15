@@ -154,6 +154,38 @@ class TestRun(unittest.TestCase):
             self.assertEqual(self.run_job(job("optional_failure")), 1)
         self.assertIsNone(self.marker())
 
+    def test_a_repeated_failure_is_reported_once_until_its_interval_passes(self):
+        throttled = job("exits", repeat_alert_hours=12)
+        with mock.patch.object(runner.time, "time", return_value=0.0):
+            self.assertEqual(self.run_job(throttled), 1)
+        os.environ["INVOCATION_ID"] = "inv-2"
+        with mock.patch.object(runner.time, "time", return_value=11 * 3600.0):
+            self.assertEqual(self.run_job(throttled), 1)
+        self.assertEqual(len(self.posted), 1)
+        self.assertEqual(self.marker(), "inv-2")
+        with mock.patch.object(runner.time, "time", return_value=12 * 3600.0):
+            self.run_job(throttled)
+        self.assertEqual(len(self.posted), 2)
+
+    def test_a_success_resets_the_repeat_interval(self):
+        with mock.patch.object(runner.time, "time", return_value=0.0):
+            self.run_job(job("exits", repeat_alert_hours=12))
+            self.run_job(job("succeeds", repeat_alert_hours=12))
+            self.run_job(job("exits", repeat_alert_hours=12))
+        self.assertEqual(len(self.posted), 2)
+
+    def test_a_different_failure_is_reported_at_once(self):
+        with mock.patch.object(runner.time, "time", return_value=0.0):
+            self.run_job(job("exits", repeat_alert_hours=12))
+            self.run_job(job("raises", args=("x",), repeat_alert_hours=12))
+        self.assertEqual(len(self.posted), 2)
+
+    def test_without_an_interval_every_failure_is_reported(self):
+        self.run_job(job("exits"))
+        self.run_job(job("exits"))
+        self.assertEqual(len(self.posted), 2)
+        self.assertFalse(os.path.exists(os.path.join(self.state, runner.LAST_ALERT)))
+
     def test_a_dry_run_prints_the_alert_instead(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):

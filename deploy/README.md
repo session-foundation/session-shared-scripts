@@ -58,6 +58,8 @@ Each `/etc/session-ops/<name>.env` has a commented `<name>.env.example` beside i
 installed from [`env/`](env/), saying what goes in it.
 `/etc/session-ops/expiry.toml` is not a secret: the expiry dates
 [token-expiry](../docs/jobs/token-expiry.md) cannot read from an API, from `expiry.toml.example`.
+`/etc/session-ops/store-versions.toml` is not a secret either, and has to be mode 644: who
+[store-versions](../docs/jobs/store-versions.md) tags, from `store-versions.toml.example`.
 
 ## Checking
 

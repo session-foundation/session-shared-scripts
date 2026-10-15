@@ -10,6 +10,8 @@
 #   channel_env    where it posts, and where its own failures are reported; a job
 #                  without one reports to ALERT_DISCORD_WEBHOOK_URL
 #   unit           further [Service] lines, over the template's hardening
+#   repeat_alert_hours  report the same failure again only this often until a run
+#                  succeeds, for a schedule short enough to repeat it every few minutes
 #
 #   max_age_hours  for a queued job, its queue's: the weekend's 72 h (73 h across
 #                  April's DST change), plus every job ahead of it running to its timeout
@@ -113,6 +115,7 @@ channel_env = "STORE_VERSIONS_DISCORD_WEBHOOK_URL"
 schedule = "*:0/5"
 max_age_hours = 1
 timeout = "4min"
+repeat_alert_hours = 12
 
 [[job]]
 name = "crowdin-sync"

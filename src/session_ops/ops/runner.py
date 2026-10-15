@@ -14,23 +14,30 @@ Having alerted, a run records its systemd invocation id, so the OnFailure= backs
 (session-ops-alert) knows this failure was already reported and stays quiet. The
 backstop is for the failures a run cannot report itself: killed, timed out, or
 Discord unreachable.
+
+A job with `repeat_alert_hours` reports the same failure again only that often,
+until a run succeeds.
 """
 import argparse
 import importlib
+import json
 import os
 import re
 import shutil
 import socket
 import sys
 import tempfile
+import time
 import traceback
 from dataclasses import dataclass, field
 
 from session_ops.ops import registry
 from session_ops.shared import discord, http
+from session_ops.shared.state import write_json
 from session_ops.zendesk import claude_cli
 
 ALERTED_MARKER = "alerted"
+LAST_ALERT = "last-alert.json"
 # Present on a host rehearsing production: jobs publish beside it (env.rehearsing).
 REHEARSAL_MARKER = "/etc/session-ops/rehearsal"
 
@@ -147,6 +154,35 @@ def mark_alerted(state_dir):
               file=sys.stderr)
 
 
+def repeated_alert(state_dir, message, hours, now):
+    """Whether `message` was reported less than `hours` ago; records it when not.
+
+    Recorded whether or not the post lands: the backstop reports what it cannot."""
+    path = os.path.join(state_dir, LAST_ALERT)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            last = json.load(handle)
+        if last["message"] == message and now - last["at"] < hours * 3600:
+            return True
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    try:
+        write_json(path, {"message": message, "at": now})
+    except OSError as exc:
+        print(f"Could not record the alert ({exc}); the next failure alerts again.",
+              file=sys.stderr)
+    return False
+
+
+def forget_alert(state_dir):
+    try:
+        os.remove(os.path.join(state_dir, LAST_ALERT))
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        print(f"Could not clear {LAST_ALERT} ({exc}).", file=sys.stderr)
+
+
 def call_target(function, argv):
     """Run one entry point, returning None, or its failure as one sentence.
 
@@ -203,12 +239,19 @@ def run(job, dry_run=False, extra=()):
     if outcome.summary:
         print(outcome.summary)
     if not error and not outcome.failures():
+        if job.repeat_alert_hours and not dry_run:
+            forget_alert(state_dir)
         return 0
 
     message = scrub(alert_message(job, socket.gethostname(), _step, error, outcome))
     code = 1 if error or outcome.fatal() else 0
     if dry_run:
         print(message)
+        return code
+    if (code and job.repeat_alert_hours
+            and repeated_alert(state_dir, message, job.repeat_alert_hours, time.time())):
+        print(f"{message}\nAlready reported within {job.repeat_alert_hours:g}h; not posted.")
+        mark_alerted(state_dir)
         return code
     if not post_alert(job, message):
         # Even an optional target's failure then fails the unit: OnFailure= is all

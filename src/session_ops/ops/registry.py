@@ -30,6 +30,7 @@ class Job:
     unit: tuple = field(default=())
     queued: bool = False
     after: tuple = ()
+    repeat_alert_hours: float = None
 
     @property
     def scheduled(self):

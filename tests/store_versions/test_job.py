@@ -41,6 +41,8 @@ class Run:
 
     def post(self, session, url, messages):
         taken = messages if self.accept is None else messages[:self.accept]
+        if self.accept is not None:
+            self.accept -= len(taken)
         self.posted += taken
         return len(taken)
 
@@ -98,6 +100,43 @@ class TestJob(unittest.TestCase):
         self.assertEqual(len(run.posted), 2)
         self.assertIn("APT repo is behind GitHub", titles(run.posted)[1])
 
+    def test_a_refused_platform_does_not_hold_back_the_others(self):
+        run = Run({"session-ios": "2.15.5", "session-desktop": "1.18.3"},
+                  {"appstore": "2.15.6", "deb": "1.18.2"})
+        accept = run.post
+
+        def refuse_the_app_store(session, url, messages):
+            if "App Store" in messages[0]["embeds"][0]["title"]:
+                return 0
+            return accept(session, url, messages)
+
+        run.post = refuse_the_app_store
+        with self.assertRaises(SystemExit):
+            run()
+        self.assertEqual(set(run.saved()["platforms"]), {"desktop"})
+        self.assertIn("APT repo is behind GitHub", titles(run.posted)[0])
+
+    def test_a_platforms_events_go_as_one_message(self):
+        run = Run({"session-ios": "2.15.5", "session-desktop": "1.18.2"},
+                  {"appstore": "2.15.5", "deb": "1.18.2"})
+        run()
+        run.github["session-ios"], run.stores["appstore"] = "2.15.6", "2.15.6"
+        run()
+        [message] = run.posted
+        self.assertEqual([embed["title"] for embed in message["embeds"]],
+                         ["ℹ️ Session iOS: new GitHub release", "ℹ️ Session iOS: App Store updated"])
+
+    def test_past_the_deadline_messages_wait_for_the_next_run(self):
+        run = Run({"session-ios": "2.15.5", "session-desktop": "1.18.3"},
+                  {"appstore": "2.15.6", "deb": "1.18.2"})
+        clock = iter([0.0, job.POST_DEADLINE_SECONDS + 1])
+        with Patched(job.time, monotonic=lambda: next(clock, 10_000.0)):
+            run()
+        self.assertEqual(run.posted, [])
+        self.assertEqual(set(run.saved()["platforms"]), set())
+        run()
+        self.assertEqual(len(run.posted), 2)
+
     def test_failing_source_is_posted_after_an_hour_then_recovery(self):
         run = Run({"session-ios": "2.15.5", "session-desktop": "1.18.2"},
                   {"appstore": RuntimeError("boom"), "deb": "1.18.2"})
@@ -116,6 +155,15 @@ class TestJob(unittest.TestCase):
         run("--dry-run")
         self.assertEqual(run.posted, [])
         self.assertFalse(os.path.exists(run.state))
+
+    def test_unreadable_tags_fail_the_run_saying_why(self):
+        run = Run({}, {})
+        os.chmod(run.tags, 0)
+        if os.access(run.tags, os.R_OK):
+            self.skipTest("running as root")
+        with self.assertRaises(SystemExit) as raised:
+            job.load_tags(run.tags)
+        self.assertIn("mode 644", str(raised.exception))
 
     def test_tags_must_name_a_platform(self):
         run = Run({}, {}, tags="[tag]\nandroind = [1]\n")
