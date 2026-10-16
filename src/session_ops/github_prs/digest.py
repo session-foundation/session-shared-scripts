@@ -236,7 +236,7 @@ def window_start(state, now, window_hours, retention_days=DEFAULT_RETENTION_DAYS
     the state says reporting is complete.
 
     A fixed window alone drops whatever moved in a gap longer than it: a DST weekend,
-    a timer's random delay, a host down across a run, a run whose post failed partway.
+    a host down across a run, a run whose post failed partway.
     Never further back than the retention, past which the state has forgotten what it
     reported anyway.
     """

@@ -3,6 +3,7 @@
 """
 import json
 import os
+import stat
 import tempfile
 import unittest
 
@@ -72,6 +73,16 @@ class TestJob(unittest.TestCase):
         run()
         self.assertEqual(run.posted, [])
         self.assertEqual(set(run.saved()["platforms"]), {"ios", "desktop"})
+
+    def test_the_state_is_readable_by_the_discord_relay_despite_the_umask(self):
+        run = Run({"session-ios": "2.15.5", "session-desktop": "1.18.2"},
+                  {"appstore": "2.15.5", "deb": "1.18.2"})
+        previous = os.umask(0o077)
+        try:
+            run()
+        finally:
+            os.umask(previous)
+        self.assertEqual(stat.S_IMODE(os.stat(run.state).st_mode), 0o644)
 
     def test_warning_tags_the_platforms_people_only(self):
         run = Run({"session-ios": "2.15.5", "session-desktop": "1.18.2"},
