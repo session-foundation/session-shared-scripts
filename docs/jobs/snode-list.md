@@ -13,7 +13,7 @@ bundles it, as the list a new client falls back on when it cannot reach them:
 | --- | --- |
 | Runs | `session-ops-queue.timer`, Mon–Fri from 10:00 Australia/Melbourne, after `crowdin-sync` |
 | Secrets | `/etc/session-ops/publish.env` and the GitHub App key, installed on the three repos above; `CROWDIN_DISCORD_WEBHOOK_URL` from `crowdin.env` for the summary |
-| Dry run | `session-ops run snode-list --dry-run` |
+| Dry run | `session-ops run snode-list --dry-run`. On the host, through `systemd-run` as in [deploy/README.md](../../deploy/README.md). |
 | Re-run | `systemctl start session-ops@snode-list.service` |
 | Logs | `journalctl -u session-ops@snode-list -n 50 --no-pager` |
 

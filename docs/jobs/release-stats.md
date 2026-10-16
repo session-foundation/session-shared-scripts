@@ -7,7 +7,7 @@ public releases API, as two CSV files.
 | --- | --- |
 | Runs | on demand only: `systemctl start session-ops@release-stats.service` |
 | Secrets | none; `/etc/session-ops/alerts.env` for its failures |
-| Dry run | `session-ops run release-stats --dry-run` prints the CSVs and writes nothing |
+| Dry run | `session-ops run release-stats --dry-run` prints the CSVs and writes nothing. On the host, through `systemd-run` as in [deploy/README.md](../../deploy/README.md). |
 | Logs | `journalctl -u session-ops@release-stats -n 50 --no-pager`, which carries both CSVs |
 
 The files land in `/var/lib/session-ops/release-stats/runs/<stamp>/` and are pruned

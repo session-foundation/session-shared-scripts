@@ -8,7 +8,7 @@
 
 # Only for a Claude Code token installed before token-expiry first ran: it otherwise
 # dates a token from the day it first saw it. Ignored once that token is replaced.
-# The fingerprint is printed by `session-ops run token-expiry --dry-run`.
+# The fingerprint is printed by a dry run of token-expiry: see docs/jobs/token-expiry.md.
 #[issued.CLAUDE_CODE_OAUTH_TOKEN]
 #fingerprint = "3f2a9c01b4de"
 #date = 2025-11-20
