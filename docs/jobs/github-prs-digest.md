@@ -49,9 +49,8 @@ cache rather than something to back up.
 
 ### Late, not lost
 
-Two runs can be further apart than 72 hours: April's DST weekend is 73, the timer's
-`RandomizedDelaySec` adds up to two minutes, and a host that was down runs once when it
-comes back. So the state also keeps `covered_until`, the time the last run whose every
+Two runs can be further apart than 72 hours: April's DST weekend is 73, and a host that
+was down runs once when it comes back. So the state also keeps `covered_until`, the time the last run whose every
 message Discord accepted *started* its search, and each run reaches back to whichever is
 earlier, that or 72 hours ago. A run whose post fails partway, or that fails before
 posting, never moves it forward; a dry run writes nothing. The header then names the

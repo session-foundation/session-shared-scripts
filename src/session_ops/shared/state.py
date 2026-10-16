@@ -73,7 +73,7 @@ def save_state(path, state, records, retention_days, version, extra=None):
     return len(kept), len(seen) - len(kept)
 
 
-def write_json(path, data):
+def write_json(path, data, mode=None):
     """Write `data` to `path` atomically: a crash mid-write cannot corrupt the state."""
     directory = os.path.dirname(path)
     if directory:
@@ -81,4 +81,6 @@ def write_json(path, data):
     temporary = f"{path}.tmp"
     with open(temporary, "w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=2)
+        if mode is not None:
+            os.fchmod(handle.fileno(), mode)
     os.replace(temporary, path)

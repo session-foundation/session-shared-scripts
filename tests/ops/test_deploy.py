@@ -14,7 +14,8 @@ import tempfile
 import tomllib
 import unittest
 
-from session_ops.ops import registry, units
+from session_ops.ops import discord_commands, registry, units
+from session_ops.platforms import mau
 from tests.golden import assert_golden
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -62,6 +63,15 @@ class TestDeploy(unittest.TestCase):
                 self.assertEqual(f"session-ops@{job.name}.timer.d/schedule.conf" in files,
                                  bool(job.schedule))
 
+    def test_a_discord_job_starts_on_a_write_to_its_request_and_never_removes_it(self):
+        files = units.dropins(registry.load(), registry.load_queue())
+        for job in registry.load():
+            with self.subTest(job=job.name):
+                watch = files.get(f"session-ops@{job.name}.path.d/request.conf", "")
+                request = os.path.join(registry.REQUESTS_DIR, job.name)
+                self.assertEqual(f"\nPathChanged={request}\n" in watch, job.discord)
+                self.assertNotIn(request, files[f"session-ops@{job.name}.service.d/job.conf"])
+
     def test_each_queued_job_runs_after_every_one_before_it(self):
         queue = registry.load_queue()
         files = units.dropins(registry.load(), queue)
@@ -74,10 +84,34 @@ class TestDeploy(unittest.TestCase):
                               files[f"session-ops@{job}.service.d/job.conf"])
         self.assertNotIn("After=", files[f"session-ops@{queue.jobs[0]}.service.d/job.conf"])
 
+    def test_install_enables_timers_only_for_jobs_with_a_schedule_of_their_own(self):
+        with open(os.path.join(ROOT, "deploy", "install.sh"), encoding="utf-8") as handle:
+            script = handle.read()
+        self.assertEqual(re.findall(r'systemctl enable --now "session-ops@\$job\.timer"', script),
+                         ['systemctl enable --now "session-ops@$job.timer"'])
+        self.assertIn('for job in $TIMED; do\n    systemctl enable --now "session-ops@$job.timer"',
+                      script)
+
     def test_the_generated_dropins(self):
         files = units.dropins(registry.load(), registry.load_queue())
         text = "".join(f"==> {path} <==\n{files[path]}\n" for path in sorted(files))
         assert_golden(self, "units/dropins.txt", text)
+
+    def test_only_the_discord_relay_s_account_can_write_requests(self):
+        self.assertIn(f"\nUser={units.RELAY_USER}\n", unit_text("session-ops-discord.service"))
+        with open(os.path.join(ROOT, "deploy", "session-ops.tmpfiles"), encoding="utf-8") as handle:
+            self.assertIn(f"\nd {registry.REQUESTS_DIR} 0770 root {units.RELAY_USER} -\n",
+                          handle.read())
+
+    def test_the_discord_relay_can_write_requests_and_mau_s_inbox_and_nothing_else(self):
+        mau_job = registry.get(discord_commands.MAU_JOB)
+        inbox = os.path.join(mau_job.state_dir, mau.INBOX)
+        writable = re.findall(r"^ReadWritePaths=-?(.*)$",
+                              unit_text("session-ops-discord.service"), re.MULTILINE)
+        self.assertEqual(writable, [registry.REQUESTS_DIR, inbox])
+        with open(os.path.join(ROOT, "deploy", "install.sh"), encoding="utf-8") as handle:
+            self.assertIn(f'install -d -o {mau_job.user} -g {units.RELAY_USER} -m 770 '
+                          f'"$STATE/{mau_job.name}/{mau.INBOX}"', handle.read())
 
 
 class TestInstallScript(unittest.TestCase):
