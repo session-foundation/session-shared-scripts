@@ -15,6 +15,17 @@ does the work: accounts, venv, env files, units, timers, and migrating an older 
 runs one as its timer does. State is under `/var/lib/session-ops/<job>/`, copies of a
 run under its `runs/` for 14 days.
 
+`session-ops run` does not read the job's env files: its unit loads them, as root. By
+hand, give it the account and env files its drop-in sets, in
+`/etc/systemd/system/session-ops@<job>.service.d/job.conf`:
+
+```bash
+systemd-run --pipe --wait -p User=sessionops \
+  -p EnvironmentFile=/etc/session-ops/store-versions.env \
+  -p StateDirectory=session-ops/store-versions -p StateDirectoryMode=0711 -p UMask=0077 \
+  /opt/session-ops/.venv/bin/session-ops run store-versions --dry-run
+```
+
 ## Install
 
 Needs systemd 252+, Python 3.11+ at `/usr/bin/python3`, `git`, and nginx with certbot.

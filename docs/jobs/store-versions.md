@@ -8,7 +8,7 @@ highest GitHub release, and posts as they diverge and come back.
 | Runs | `session-ops@store-versions.timer`, every 5 minutes |
 | Secrets | `/etc/session-ops/store-versions.env`: `STORE_VERSIONS_DISCORD_WEBHOOK_URL` |
 | Tags | `/etc/session-ops/store-versions.toml`, from [`store-versions.toml.example`](../../deploy/env/store-versions.toml.example); without it nobody is tagged |
-| Dry run | `session-ops run store-versions --dry-run` prints every version and what it would post |
+| Dry run | `session-ops run store-versions --dry-run` prints every version and what it would post. On the host, through `systemd-run` as in [deploy/README.md](../../deploy/README.md), so it gets the env file |
 | Logs | `journalctl -u session-ops@store-versions -n 50 --no-pager` |
 
 | Platform | GitHub | Store | Warns when the store is |

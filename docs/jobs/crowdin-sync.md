@@ -18,8 +18,8 @@ commit just pushed:
 | --- | --- |
 | Runs | `session-ops-queue.timer`, Mon–Fri from 10:00 Australia/Melbourne, after `zendesk-digest` |
 | Secrets | `/etc/session-ops/crowdin.env`: a read-only `CROWDIN_API_TOKEN` and `CROWDIN_DISCORD_WEBHOOK_URL` for the summary; `/etc/session-ops/publish.env` and the GitHub App key, to publish |
-| Dry run | `session-ops run crowdin-sync --dry-run`: everything but the push, with each platform's diff in the journal |
-| Re-run | `systemctl start session-ops@crowdin-sync.service`; one target with `session-ops run crowdin-sync -- --only ios` |
+| Dry run | `session-ops run crowdin-sync --dry-run`: everything but the push, with each platform's diff in the journal. On the host, through `systemd-run` as in [deploy/README.md](../../deploy/README.md). |
+| Re-run | `systemctl start session-ops@crowdin-sync.service`; one target with `session-ops run crowdin-sync -- --only ios`. On the host, through `systemd-run` as in [deploy/README.md](../../deploy/README.md). |
 | Logs | `journalctl -u session-ops@crowdin-sync -n 100 --no-pager`; the run's downloads, parsed JSON and validation report under `/var/lib/session-ops/crowdin-sync/runs/`, for 14 days |
 
 One process, in order:

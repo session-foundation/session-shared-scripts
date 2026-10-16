@@ -6,7 +6,7 @@ Claude reviews the Zendesk tickets awaiting a reply — `new` and `open`, no app
 | --- | --- |
 | Runs | `session-ops-queue.timer`, Mon–Fri from 10:00 Australia/Melbourne, after `github-prs-digest`: `zendesk-resolve-reviews --apply`, then `zendesk-triage` |
 | Secrets | `/etc/session-ops/zendesk.env`: the Zendesk API token, the triage channel's webhook, and the Claude Code CLI login of the `zendesk` account |
-| Dry run | `session-ops run zendesk-digest --dry-run`; `uv run zendesk-triage --window-hours 72 --dry-run` from a checkout |
+| Dry run | `session-ops run zendesk-digest --dry-run`; `uv run zendesk-triage --window-hours 72 --dry-run` from a checkout. On the host, through `systemd-run` as in [deploy/README.md](../../deploy/README.md). |
 | Re-run | `systemctl start session-ops@zendesk-digest.service` |
 | Logs | `journalctl -u session-ops@zendesk-digest -n 50 --no-pager` |
 

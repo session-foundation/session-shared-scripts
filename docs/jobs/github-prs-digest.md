@@ -9,7 +9,7 @@ has a reason to already know about:
 | --- | --- |
 | Runs | `session-ops-queue.timer`, Mon–Fri from 10:00 Australia/Melbourne, first in the queue |
 | Secrets | `/etc/session-ops/github-prs.env`: `GITHUB_PRS_TOKEN` with no scopes at all, and the channel's webhook |
-| Dry run | `session-ops run github-prs-digest --dry-run`; `uv run github-prs-digest --dry-run` from a checkout |
+| Dry run | `session-ops run github-prs-digest --dry-run`; `uv run github-prs-digest --dry-run` from a checkout. On the host, through `systemd-run` as in [deploy/README.md](../../deploy/README.md). |
 | Re-run | `systemctl start session-ops@github-prs-digest.service` |
 | Logs | `journalctl -u session-ops@github-prs-digest -n 50 --no-pager` |
 
