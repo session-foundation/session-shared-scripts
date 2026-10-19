@@ -139,8 +139,4 @@ User=zendesk
 Group=zendesk
 EnvironmentFile=/etc/session-ops/zendesk.env
 TimeoutStartSec=90min
-ProtectHome=tmpfs
-BindPaths=/home/zendesk
-ReadWritePaths=/home/zendesk
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 

@@ -8,24 +8,22 @@ import unittest
 from unittest import mock
 
 from session_ops.monitor import alert
-from session_ops.zendesk import claude_cli
+from session_ops.zendesk import claude_api
 
-# What the digest itself left in the journal on 2026-09-23.
 JOURNAL = """\
 Fetched 13 of 13 matching tickets (query: 'type:ticket status<pending').
 Loaded state for 242 previously reported tickets.
 4 new, 1 changed since last reported, 8 unchanged (skipped).
-claude exited 1 on a batch of 5 tickets: Failed to authenticate: OAuth session \
-expired and could not be refreshed (api_error)
+Claude API refused the key on a batch of 5 tickets: invalid x-api-key
 
 """
-CLI = "claude exited 1 on a batch of 5 tickets: "
+API = "Claude API refused the key on a batch of 5 tickets: "
 
 
 class TestLastJobLine(unittest.TestCase):
     def test_the_last_non_blank_line_is_the_excerpt(self):
-        self.assertTrue(alert.last_job_line(JOURNAL).startswith(CLI))
-        self.assertIn("OAuth session expired", alert.last_job_line(JOURNAL))
+        self.assertTrue(alert.last_job_line(JOURNAL).startswith(API))
+        self.assertIn("invalid x-api-key", alert.last_job_line(JOURNAL))
 
     def test_a_unit_that_said_nothing_leaves_it_empty(self):
         self.assertEqual(alert.last_job_line("   \n\n"), "")
@@ -38,57 +36,44 @@ class TestLastJobLine(unittest.TestCase):
 
 class TestAuthDetection(unittest.TestCase):
     def test_the_host_failure_is_recognised(self):
-        self.assertTrue(claude_cli.is_auth_failure(alert.last_job_line(JOURNAL)))
+        self.assertTrue(claude_api.is_auth_failure(alert.last_job_line(JOURNAL)))
 
-    def test_the_cli_rewordings_are_covered(self):
-        for line in ("Invalid API key · Please run /login",
-                     "OAuth token expired",
-                     "Request failed: unauthorized",
-                     "it printed nothing, which is what a login it can no longer use "
-                     "looks like; check that `claude` is still signed in."):
-            with self.subTest(line=line):
-                self.assertTrue(claude_cli.is_auth_failure(CLI + line))
-
-    def test_a_failure_the_cli_reported_with_exit_zero_is_recognised_too(self):
-        self.assertTrue(claude_cli.is_auth_failure(
-            "claude reported failure on a batch (subtype='error'): Please run /login"))
-
-    def test_an_account_out_of_credit_is_not_told_to_log_in(self):
-        line = CLI + "Credit balance is too low"
-        self.assertFalse(claude_cli.is_auth_failure(line))
+    def test_an_account_out_of_credit_is_not_told_to_rotate_the_key(self):
+        line = "Claude API returned 400 on a batch: Your credit balance is too low"
+        self.assertFalse(claude_api.is_auth_failure(line))
         self.assertIn("out of credit", alert.build_message("x.service", "angus", detail=line))
 
-    def test_an_ordinary_failure_is_not_a_login_problem(self):
+    def test_an_ordinary_failure_is_not_a_key_problem(self):
         for line in ("Zendesk 500 on /api/v2/search.json",
-                     "claude did not finish a batch of 5 tickets within 1800s.",
+                     "Claude API did not finish a batch of 5 tickets in time.",
+                     "Claude API returned 529 on a batch: Overloaded",
                      ""):
             with self.subTest(line=line):
-                self.assertFalse(claude_cli.is_auth_failure(line))
+                self.assertFalse(claude_api.is_auth_failure(line))
 
-    def test_a_dead_zendesk_token_is_not_a_dead_claude_login(self):
-        """Zendesk's 401 body says "authenticate" too, and re-logging the CLI in
+    def test_a_dead_zendesk_token_is_not_a_dead_claude_key(self):
+        """Zendesk's 401 body says "authenticate" too, and rotating the Claude key
         would fix nothing."""
         for line in ('Zendesk search failed (401): {"error":"Couldn\'t authenticate you"}',
                      'update_many failed (401): {"error":"Couldn\'t authenticate you"}'):
             with self.subTest(line=line):
-                self.assertFalse(claude_cli.is_auth_failure(line))
+                self.assertFalse(claude_api.is_auth_failure(line))
 
 
 class TestMessage(unittest.TestCase):
     def build(self, detail=""):
         return alert.build_message("zendesk-digest.service", "angus", detail=detail)
 
-    def test_a_login_failure_says_so_and_says_what_to_run(self):
+    def test_a_refused_key_says_so_and_says_where_it_goes(self):
         message = self.build(alert.last_job_line(JOURNAL))
-        self.assertIn("OAuth session expired", message)
-        self.assertIn("no longer logged in", message)
-        self.assertIn("/login", message)
-        self.assertIn("runuser -u zendesk", message)
+        self.assertIn("invalid x-api-key", message)
+        self.assertIn("key was refused", message)
+        self.assertIn("/etc/session-ops/zendesk.env", message)
 
-    def test_an_ordinary_failure_is_not_told_to_log_in(self):
+    def test_an_ordinary_failure_is_not_told_to_rotate_the_key(self):
         message = self.build("Zendesk 500 on /api/v2/search.json")
         self.assertIn("Zendesk 500", message)
-        self.assertNotIn("logged in", message)
+        self.assertNotIn("key was refused", message)
 
     def test_the_journalctl_line_survives_an_excerpt(self):
         """One line is rarely the whole story, so the excerpt adds to the pointer at

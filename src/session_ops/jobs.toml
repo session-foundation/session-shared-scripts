@@ -46,18 +46,12 @@ entry = "session_ops.zendesk.digest_job:main"
 args = ["--state", "{state}/seen.json"]
 user = "zendesk"
 env_files = ["/etc/session-ops/zendesk.env"]
-env = ["ZENDESK_SUBDOMAIN", "ZENDESK_EMAIL", "ZENDESK_API_TOKEN", "ZENDESK_DISCORD_WEBHOOK_URL"]
+env = ["ZENDESK_SUBDOMAIN", "ZENDESK_EMAIL", "ZENDESK_API_TOKEN", "ZENDESK_DISCORD_WEBHOOK_URL",
+       "ANTHROPIC_API_KEY"]
 channel_env = "ZENDESK_DISCORD_WEBHOOK_URL"
 max_age_hours = 80
 # A full 1000-ticket resolve is ten bulk jobs polled for up to 300 s each.
 timeout = "90min"
-# The Claude Code CLI reads its login from $HOME: mask /home and bind only this one.
-unit = [
-    "ProtectHome=tmpfs",
-    "BindPaths=/home/zendesk",
-    "ReadWritePaths=/home/zendesk",
-    "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
-]
 
 [[job]]
 name = "crowdin-duplicates"

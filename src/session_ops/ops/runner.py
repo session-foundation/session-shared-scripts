@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from session_ops.ops import registry
 from session_ops.shared import discord, http
 from session_ops.shared.state import write_json
-from session_ops.zendesk import claude_cli
+from session_ops.zendesk import claude_api
 
 ALERTED_MARKER = "alerted"
 LAST_ALERT = "last-alert.json"
@@ -125,7 +125,7 @@ def alert_message(job, host, current_step, error, outcome):
         mark = "✅" if not result else ("⚠️" if name in outcome.optional else "❌")
         lines.append(f"{mark} **{name}**" + (f": {result}" if result else ""))
     journal = f"`journalctl -u session-ops@{job.name} -n 50 --no-pager`"
-    account = claude_cli.advice(error, *outcome.targets.values())
+    account = claude_api.advice(error, *outcome.targets.values())
     if account:
         lines += [*account, journal]
     else:

@@ -67,7 +67,7 @@ import textwrap
 from session_ops.shared.discord import clip
 from session_ops.shared.env import get_env
 from session_ops.shared.text import undash_english
-from session_ops.zendesk import api, claude_cli, transcript
+from session_ops.zendesk import api, claude_api, transcript
 
 COMPOSE_TIMEOUT_SECONDS = 240
 PLACEMENT_TIMEOUT_SECONDS = 120
@@ -442,7 +442,7 @@ def place_ticket(model, book, ticket, sample):
     catalogue = "\n".join(f"- {g['key']}: {g['title']}" for g in book["groups"])
     body = clip(sample, CUSTOMER_SAMPLE_CHARS)
     try:
-        found = claude_cli.claude_cli_json(
+        found = claude_api.claude_json(
             model, "medium", PLACEMENT_SYSTEM, PLACEMENT_SCHEMA,
             f"GROUP CATALOGUE:\n{catalogue}\n\nTHE TICKET:\n"
             f"{(ticket.get('subject') or '')[:200]}\n\n{body}",
@@ -705,7 +705,7 @@ def validate_composition(result):
 
 
 def compose(model, sample, brief, previous=None, precedent=None, thread=None):
-    return validate_composition(claude_cli.claude_cli_json(
+    return validate_composition(claude_api.claude_json(
         model, "medium", COMPOSE_SYSTEM, COMPOSE_SCHEMA,
         build_compose_prompt(sample, brief, previous, precedent, thread),
         COMPOSE_TIMEOUT_SECONDS, "the reply draft"))
@@ -1160,7 +1160,7 @@ def translate_conversation(session, subdomain, model, ticket, comments):
         return "empty", None
     turns, omitted = fit_turns(turns, transcript.TRANSCRIPT_INPUT_CHARS)
     try:
-        rendered = claude_cli.claude_cli_json(
+        rendered = claude_api.claude_json(
             model, "medium", transcript.TRANSCRIPT_SYSTEM_PROMPT, transcript.TRANSCRIPT_SCHEMA,
             transcript_payload(turns),
             transcript.ENGLISH_TIMEOUT_SECONDS, f"the English transcript of #{ticket_id}")
@@ -1287,7 +1287,7 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true",
                         help="do everything except write to Zendesk")
     args = parser.parse_args(argv)
-    model = claude_cli.MODEL
+    model = claude_api.model()
 
     subdomain = get_env("ZENDESK_SUBDOMAIN")
     session = api.zendesk_session(get_env("ZENDESK_EMAIL"),

@@ -25,7 +25,7 @@ import unittest
 from unittest import mock
 
 from session_ops.shared.text import undash_english
-from session_ops.zendesk import api, claude_cli, note_reply
+from session_ops.zendesk import api, claude_api, note_reply
 from tests.zendesk.test_triage import FakeResponse, FakeSession, Patched
 
 API_USER = 901790886886
@@ -179,7 +179,7 @@ class EnglishTranscript(unittest.TestCase):
         turns = [{"index": 0, "who": "Customer", "when": "t", "body": "My app crashes"}]
         session = fake_session(*[FakeResponse({"ticket": {}})])
         with Patched(api, conversation_turns=lambda *a: turns), \
-                Patched(claude_cli, claude_cli_json=lambda *a, **k: {
+                Patched(claude_api, claude_json=lambda *a, **k: {
                     "turns": [{"index": 0, "english": "My app crashes"}]}):
             note_reply.run_english(session, "sub", "model", {"id": 7},
                                    [comment("claude: english", cid=9)],
@@ -196,7 +196,7 @@ class EnglishTranscript(unittest.TestCase):
         session = fake_session(*[FakeResponse({"ticket": {}}), FakeResponse({}),
                                FakeResponse({})])
         with Patched(api, conversation_turns=lambda *a: turns), \
-                Patched(claude_cli, claude_cli_json=fail):
+                Patched(claude_api, claude_json=fail):
             note_reply.run_english(session, "sub", "model", {"id": 7},
                                    [comment("claude: english", cid=9)],
                                    {"id": 9, "author": AGENT, "action": "english",
@@ -214,7 +214,7 @@ class EnglishTranscript(unittest.TestCase):
         landed = comment(f"transcript {note_reply.english_marker(3)}", author=API_USER, cid=4)
         session = fake_session(FakeResponse({"comments": [landed]}))
         with Patched(api, conversation_turns=lambda *a: turns), \
-                Patched(claude_cli, claude_cli_json=lambda *a, **k: {
+                Patched(claude_api, claude_json=lambda *a, **k: {
                     "turns": [{"index": 0, "english": "Hello"}]}), \
                 contextlib.redirect_stdout(io.StringIO()):
             note_reply.run_english(session, "sub", "model", {"id": 7},
@@ -298,7 +298,7 @@ class EnglishTranscript(unittest.TestCase):
                   "body": "Hallo"}]
         session = fake_session(*[FakeResponse({"ticket": {}})])
         with Patched(api, conversation_turns=lambda *a: turns), \
-                Patched(claude_cli, claude_cli_json=lambda *a, **k: {
+                Patched(claude_api, claude_json=lambda *a, **k: {
                     "turns": [{"index": 0, "english": "Hello"}]}):
             note_reply.run_english(session, "sub", "model", {"id": 7},
                                    [dict(comment("Hallo", author=42, cid=3), public=True)],
@@ -344,7 +344,7 @@ class FitTurns(unittest.TestCase):
             return {"turns": [{"index": 1, "english": "It does not work."}]}
 
         with Patched(api, conversation_turns=lambda *a: turns), \
-                Patched(claude_cli, claude_cli_json=translate):
+                Patched(claude_api, claude_json=translate):
             outcome, detail = note_reply.translate_conversation(
                 None, "sub", "model", {"id": 7}, [comment("x", public=True, cid=3)])
         self.assertEqual(outcome, "ready")
@@ -1300,12 +1300,13 @@ class Model(unittest.TestCase):
             note_reply.main(["--ticket", "7", *flag])
         return seen[0]
 
-    def test_every_call_uses_the_clis_opus_alias(self):
-        self.assertEqual(self.model_for([]), claude_cli.MODEL)
-        self.assertEqual(claude_cli.MODEL, "opus")
+    def test_every_call_uses_the_newest_opus(self):
+        with Patched(claude_api, model=lambda: "claude-opus-9"):
+            self.assertEqual(self.model_for([]), "claude-opus-9")
 
     def test_there_is_no_model_flag(self):
-        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()), \
+                Patched(claude_api, model=lambda: "claude-opus-9"):
             self.model_for(["--model", "sonnet"])
 
 

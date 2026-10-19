@@ -5,7 +5,7 @@ Claude reviews the Zendesk tickets awaiting a reply — `new` and `open`, no app
 | | |
 | --- | --- |
 | Runs | `session-ops-queue.timer`, Mon–Fri from 10:00 Australia/Melbourne, after `github-prs-digest`: `zendesk-resolve-reviews --apply`, then `zendesk-triage` |
-| Secrets | `/etc/session-ops/zendesk.env`: the Zendesk API token, the triage channel's webhook, and the Claude Code CLI login of the `zendesk` account |
+| Secrets | `/etc/session-ops/zendesk.env`: the Zendesk API token, the triage channel's webhook, and the Claude API key |
 | Dry run | `session-ops run zendesk-digest --dry-run`; `uv run zendesk-triage --window-hours 72 --dry-run` from a checkout. On the host, through `systemd-run` as in [deploy/README.md](../../deploy/README.md). |
 | Re-run | `systemctl start session-ops@zendesk-digest.service` |
 | Logs | `journalctl -u session-ops@zendesk-digest -n 50 --no-pager` |
@@ -49,7 +49,7 @@ The star-floor machinery (`partition_reviews`, `--review-star-floor`, `--include
 
 Twitter DM tickets arrive with `description` identical to `subject` — both just `"Conversation with <handle>"` — which is 15% of non-review tickets and unclassifiable as fetched. For those only, `hydrate_descriptions` fetches a page of up to 10 comments and joins every body that differs from the subject into the description; later replies often carry the actual detail. Hydration is an enrichment, so an HTTP error or an unreachable endpoint leaves the ticket as-is rather than failing the run (`--no-hydrate` to skip it entirely).
 
-The script (`zendesk-triage`, [triage.py](../../src/session_ops/zendesk/triage.py)) fetches the tickets in a rolling time window, classifies the whole batch in one schema-enforced request through the Claude Code CLI, and posts a Discord digest: a short header, the new tickets not in English, one line per ticket worth looking into, then the abuse reports and the unflagged tickets.
+The script (`zendesk-triage`, [triage.py](../../src/session_ops/zendesk/triage.py)) fetches the tickets in a rolling time window, classifies the whole batch in one schema-enforced request to the Claude API, and posts a Discord digest: a short header, the new tickets not in English, one line per ticket worth looking into, then the abuse reports and the unflagged tickets.
 
 Each line leads with a severity marker, a category emoji and a platform icon, links the ticket id, and carries the model's one-line summary plus its root-cause guess:
 
@@ -115,9 +115,7 @@ Two caveats worth knowing:
 
 ## Claude Authentication
 
-There is no Claude key. Both Claude calls — the digest's classification and the reply flow's translation — shell out to the locally installed Claude Code CLI (`claude --print`), which authenticates as whoever it is logged in as. On the host that is the service user; see [deploy/README.md](../../deploy/README.md).
-
-The trade is process startup, a few seconds per call, against holding an API credential on the box. That is invisible on a nightly digest, and on the reply dialog Discord keeps the interaction open while it runs.
+Every Claude call — the digest's classification, the transcripts and the `claude:` notes — goes to the Claude API with `ANTHROPIC_API_KEY` from `/etc/session-ops/zendesk.env`. A refused key or an exhausted balance is named as such in the failure alert, since re-running fixes neither.
 
 ## Optional Configuration
 
@@ -140,9 +138,9 @@ The trade is process startup, a few seconds per call, against holding an API cre
 
 **Opus**, because the hard part of this job isn't per-ticket classification — enum-constrained categories with prompt guidance is squarely mid-tier work. It's the two batch-wide fields: `cluster` has to spot that a German app-store review and an English bug report describe one root cause, and `priority_rank` has to stay consistent across the whole batch. Those need the model to hold ~45 heterogeneous tickets in mind at once. The exact-transcription requirement (a 66-character Session ID copied verbatim) points the same way. And the entire job costs **single-digit dollars a month** on any current model — roughly $10 on Opus 5 against $6 on Sonnet 5 and $2 on Haiku 4.5 — so trading classification quality for a few dollars would be optimising the wrong thing when the cost of a miss is an unseen security report or a crash cluster nobody grouped.
 
-**The `opus` alias rather than a pinned id**, for every Zendesk call: the digest, the
-transcripts and the `claude:` notes. The CLI resolves it to its newest Opus, so a new model
-arrives with a CLI update and nothing here needs bumping. The cost: the digest's clusters,
+**The newest Opus rather than a pinned id**, for every Zendesk call: the digest, the
+transcripts and the `claude:` notes. Each run looks it up in the Models API, so a new model
+is picked up with nothing here to bump. The cost: the digest's clusters,
 priority ranks and severity calibration can shift when that happens, with no run in between
 to compare. There is no override; one model is all this job supports.
 
@@ -196,7 +194,7 @@ Offline tests covering the window arithmetic, dedup partitioning, state round-tr
 
 ## Local Testing
 
-Local runs need the `claude` CLI on `PATH` and logged in (`claude --version`), alongside the Zendesk credentials. `--dry-run` prints the Discord payload instead of posting, so no webhook is needed. Keep it to local runs: it prints ticket content. `--no-discord` prints counts only:
+Local runs need `ANTHROPIC_API_KEY` alongside the Zendesk credentials. `--dry-run` prints the Discord payload instead of posting, so no webhook is needed. Keep it to local runs: it prints ticket content. `--no-discord` prints counts only:
 
 ```
 uv sync
