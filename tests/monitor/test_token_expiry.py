@@ -17,7 +17,6 @@ def utc(*args):
 
 # 09:00 Melbourne on 6 October, the job's schedule: still the 5th in UTC.
 NOW = utc(2026, 10, 5, 22)
-TODAY = NOW.date()
 
 
 def expiry_file(text):
@@ -27,76 +26,30 @@ def expiry_file(text):
     return handle.name
 
 
-CLAUDE = "CLAUDE_CODE_OAUTH_TOKEN"
-YEAR = timedelta(days=365)
-
-
 class TestConfig(unittest.TestCase):
-    def test_reads_expires_and_issued(self):
-        config = token_expiry.load_config(expiry_file(
-            '[expires]\nCROWDIN_API_TOKEN = 2027-03-01\n'
-            '[issued.CLAUDE_CODE_OAUTH_TOKEN]\nfingerprint = "abc"\ndate = 2025-11-20\n'))
+    def test_reads_expires(self):
+        config = token_expiry.load_config(expiry_file('[expires]\nCROWDIN_API_TOKEN = 2027-03-01\n'))
         self.assertEqual(config.expires, {"CROWDIN_API_TOKEN": date(2027, 3, 1)})
-        self.assertEqual(config.issued, {CLAUDE: ("abc", date(2025, 11, 20))})
 
     def test_a_missing_file_records_nothing(self):
         self.assertEqual(token_expiry.load_config("/nonexistent/expiry.toml"),
-                         token_expiry.Config({}, {}))
+                         token_expiry.Config({}))
 
     def test_refuses_an_expiry_that_is_neither_a_date_nor_never(self):
         with self.assertRaises(SystemExit):
             token_expiry.load_config(expiry_file('[expires]\nCROWDIN_API_TOKEN = "March"\n'))
 
-    def test_refuses_an_issued_entry_without_a_fingerprint(self):
-        with self.assertRaises(SystemExit):
-            token_expiry.load_config(expiry_file('[issued.CLAUDE_CODE_OAUTH_TOKEN]\n'
-                                                 'date = 2025-11-20\n'))
-
 
 class TestCollect(unittest.TestCase):
-    def collect(self, environ, seen=None, config=None, now=NOW):
-        seen = {} if seen is None else seen
-        expiries = token_expiry.collect(config or token_expiry.Config({}, {}), environ,
-                                        seen, None, now)
-        return expiries, seen
+    def collect(self, environ, config=None):
+        return token_expiry.collect(config or token_expiry.Config({}), environ, None)
 
     def test_crowdin_without_a_date_is_missing_and_unset_tokens_are_left_out(self):
-        expiries, _ = self.collect({})
-        self.assertEqual(expiries, {"CROWDIN_API_TOKEN": "missing"})
+        self.assertEqual(self.collect({}), {"CROWDIN_API_TOKEN": "missing"})
 
     def test_a_recorded_date_counts_from_its_start_in_utc(self):
-        config = token_expiry.Config({"CROWDIN_API_TOKEN": date(2027, 3, 1)}, {})
-        self.assertEqual(self.collect({}, config=config)[0]["CROWDIN_API_TOKEN"],
-                         utc(2027, 3, 1))
-
-    def test_a_new_claude_token_expires_a_year_after_it_was_first_seen(self):
-        expiries, seen = self.collect({CLAUDE: "tok-a"})
-        self.assertEqual(expiries[CLAUDE], utc(2027, 10, 5))
-        later, _ = self.collect({CLAUDE: "tok-a"}, seen, now=NOW + timedelta(days=30))
-        self.assertEqual(later[CLAUDE], utc(2027, 10, 5))
-
-    def test_a_replaced_token_starts_a_new_year(self):
-        _, seen = self.collect({CLAUDE: "tok-a"})
-        expiries, _ = self.collect({CLAUDE: "tok-b"}, seen, now=utc(2027, 8, 1, 22))
-        self.assertEqual(expiries[CLAUDE], utc(2028, 7, 31))
-
-    def test_the_issued_date_applies_only_to_the_token_it_names(self):
-        config = token_expiry.Config({}, {CLAUDE: (token_expiry.fingerprint("tok-a"),
-                                                   date(2025, 11, 20))})
-        expiries, seen = self.collect({CLAUDE: "tok-a"}, config=config)
-        self.assertEqual(expiries[CLAUDE], utc(2026, 11, 20))
-        expiries, _ = self.collect({CLAUDE: "tok-b"}, seen, config)
-        self.assertEqual(expiries[CLAUDE], utc(2027, 10, 5))
-
-    def test_the_state_holds_a_fingerprint_not_the_token(self):
-        _, seen = self.collect({CLAUDE: "tok-a"})
-        self.assertNotIn("tok-a", repr(seen))
-        self.assertEqual(seen[CLAUDE]["fingerprint"], token_expiry.fingerprint("tok-a"))
-
-    def test_an_unset_token_forgets_its_fingerprint(self):
-        _, seen = self.collect({CLAUDE: "tok-a"})
-        self.collect({}, seen)
-        self.assertEqual(seen, {})
+        config = token_expiry.Config({"CROWDIN_API_TOKEN": date(2027, 3, 1)})
+        self.assertEqual(self.collect({}, config)["CROWDIN_API_TOKEN"], utc(2027, 3, 1))
 
 
 class FakeResponse:
@@ -202,7 +155,7 @@ class TestMessage(unittest.TestCase):
         self.assertIn("**expired** at 2026-10-05 03:00 UTC", message)
 
     def test_a_missing_date_names_the_file(self):
-        message = token_expiry.build_message([("CLAUDE_CODE_OAUTH_TOKEN", "missing", "missing")],
+        message = token_expiry.build_message([("CROWDIN_API_TOKEN", "missing", "missing")],
                                              "box", "/x/expiry.toml")
         self.assertIn("no expiry date in `/x/expiry.toml`", message)
         self.assertNotIn("Renew", message)
@@ -221,19 +174,16 @@ class TestMain(unittest.TestCase):
             token_expiry.main(argv)
         self.assertEqual(post.call_count, 1)
 
-    def test_a_failed_post_keeps_the_fingerprint_but_records_no_alert(self):
+    def test_a_failed_post_records_no_alert(self):
         state = os.path.join(tempfile.mkdtemp(), "state.json")
         path = expiry_file('[expires]\nCROWDIN_API_TOKEN = 2026-10-10\n')
-        with mock.patch.dict(os.environ, {CLAUDE: "tok-a"}, clear=True), \
+        with mock.patch.dict(os.environ, {}, clear=True), \
                 mock.patch.object(token_expiry, "utc_now", return_value=NOW), \
                 mock.patch.object(token_expiry.discord, "post_to_discord", return_value=0), \
                 self.assertRaises(SystemExit):
             token_expiry.main(["--expiry-file", path, "--state", state,
                                "--webhook", "https://example.invalid"])
-        saved = token_expiry.load_state(state)
-        self.assertEqual(saved["alerts"], {})
-        self.assertEqual(saved["seen"][CLAUDE]["since"], TODAY.isoformat())
-
+        self.assertEqual(token_expiry.load_state(state)["alerts"], {})
 
 if __name__ == "__main__":
     unittest.main()

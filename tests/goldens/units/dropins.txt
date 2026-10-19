@@ -118,7 +118,6 @@ User=sessionops
 Group=sessionops
 EnvironmentFile=/etc/session-ops/alerts.env
 EnvironmentFile=/etc/session-ops/github-prs.env
-EnvironmentFile=/etc/session-ops/zendesk.env
 TimeoutStartSec=5min
 
 ==> session-ops@token-expiry.timer.d/schedule.conf <==

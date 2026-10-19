@@ -86,10 +86,8 @@ description = "Alert before a token the jobs use expires"
 entry = "session_ops.monitor.token_expiry:main"
 args = ["--state", "{state}/state.json"]
 user = "sessionops"
-# For the GitHub token it probes and the Claude Code token it fingerprints, which brings
-# the rest of zendesk.env's secrets into this unit. expiry.toml holds none.
-env_files = ["/etc/session-ops/alerts.env", "/etc/session-ops/github-prs.env",
-             "/etc/session-ops/zendesk.env"]
+# github-prs.env for the token it probes. expiry.toml holds no secrets.
+env_files = ["/etc/session-ops/alerts.env", "/etc/session-ops/github-prs.env"]
 env = ["ALERT_DISCORD_WEBHOOK_URL"]
 schedule = "*-*-* 09:00 Australia/Melbourne"
 # A day, plus the hour a DST change adds and slack for the run.
