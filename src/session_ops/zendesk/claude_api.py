@@ -54,16 +54,18 @@ def failure(exc, label):
     return f"{API_PREFIX} was unreachable on {label}: {message}"
 
 
-def claude_json(model, effort, system_prompt, schema, prompt, timeout, label):
-    """Run one schema-enforced Claude request. Returns the parsed payload.
+def claude_json(effort, system_prompt, schema, prompt, timeout, label, model_id=None):
+    """Run one schema-enforced Claude request on model_id, by default the newest Opus.
+    Returns the parsed payload.
 
     Shared by the digest's classification and note_reply.py's composing: same request
     shape, same error semantics, one place to keep them right. Every failure exits
     with a line starting API_PREFIX, which is what advice() reads.
     """
+    model_id = model_id or model()
     try:
         with client().with_options(timeout=timeout).messages.stream(
-            model=model,
+            model=model_id,
             max_tokens=MAX_OUTPUT_TOKENS,
             system=system_prompt,
             messages=[{"role": "user", "content": prompt}],

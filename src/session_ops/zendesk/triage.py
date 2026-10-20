@@ -609,9 +609,9 @@ def analyze_in_chunks(analyzer, compact_tickets, batch_size):
 def analyze(model, effort, compact_tickets):
     """Classify a batch through the Claude API. Returns findings."""
     payload = claude_json(
-        model, effort, SYSTEM_PROMPT, SCHEMA,
+        effort, SYSTEM_PROMPT, SCHEMA,
         build_analysis_prompt(compact_tickets), CLAUDE_TIMEOUT_SECONDS,
-        f"a batch of {len(compact_tickets)} tickets")
+        f"a batch of {len(compact_tickets)} tickets", model_id=model)
     return tickets_from_payload(payload, "Claude")
 
 

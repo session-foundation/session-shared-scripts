@@ -1701,11 +1701,12 @@ def reply(text='{"a": "b"}', stop_reason="end_turn"):
 class TestClaudeApi(unittest.TestCase):
     SCHEMA = {"type": "object", "properties": {"a": {"type": "string"}}}
 
-    def call(self, message=None, raises=None):
+    def call(self, message=None, raises=None, model_id="claude-opus-5-5"):
         self.client = FakeClient(reply() if message is None else message, raises)
-        with Patched(claude_api, client=lambda: self.client):
-            return claude_api.claude_json("claude-opus-5-5", "medium", "be terse",
-                                          self.SCHEMA, "ticket text", 60, "a batch of 3")
+        with Patched(claude_api, client=lambda: self.client,
+                     model=lambda: "claude-opus-9"):
+            return claude_api.claude_json("medium", "be terse", self.SCHEMA, "ticket text",
+                                          60, "a batch of 3", model_id=model_id)
 
     def failure(self, **kwargs):
         with self.assertRaises(SystemExit) as caught:
@@ -1721,6 +1722,10 @@ class TestClaudeApi(unittest.TestCase):
         self.assertEqual(request["output_config"], {
             "effort": "medium", "format": {"type": "json_schema", "schema": self.SCHEMA}})
         self.assertEqual(self.client.options, [{"timeout": 60}])
+
+    def test_without_a_model_id_the_request_uses_the_newest_opus(self):
+        self.call(model_id=None)
+        self.assertEqual(self.client.calls[0]["model"], "claude-opus-9")
 
     def test_running_out_of_output_tokens_names_the_fix(self):
         self.assertIn("--batch-size",

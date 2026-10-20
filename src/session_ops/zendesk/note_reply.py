@@ -437,13 +437,13 @@ PLACEMENT_SYSTEM = textwrap.dedent(
 ).strip()
 
 
-def place_ticket(model, book, ticket, sample):
+def place_ticket(book, ticket, sample):
     """Which group and platform this ticket belongs to. (None, None) if unplaceable."""
     catalogue = "\n".join(f"- {g['key']}: {g['title']}" for g in book["groups"])
     body = clip(sample, CUSTOMER_SAMPLE_CHARS)
     try:
         found = claude_api.claude_json(
-            model, "medium", PLACEMENT_SYSTEM, PLACEMENT_SCHEMA,
+            "medium", PLACEMENT_SYSTEM, PLACEMENT_SCHEMA,
             f"GROUP CATALOGUE:\n{catalogue}\n\nTHE TICKET:\n"
             f"{(ticket.get('subject') or '')[:200]}\n\n{body}",
             PLACEMENT_TIMEOUT_SECONDS, f"the placement of #{ticket['id']}")
@@ -704,9 +704,9 @@ def validate_composition(result):
     return result
 
 
-def compose(model, sample, brief, previous=None, precedent=None, thread=None):
+def compose(sample, brief, previous=None, precedent=None, thread=None):
     return validate_composition(claude_api.claude_json(
-        model, "medium", COMPOSE_SYSTEM, COMPOSE_SCHEMA,
+        "medium", COMPOSE_SYSTEM, COMPOSE_SCHEMA,
         build_compose_prompt(sample, brief, previous, precedent, thread),
         COMPOSE_TIMEOUT_SECONDS, "the reply draft"))
 
@@ -861,7 +861,7 @@ def build_sent_note(user, comment_id, sent):
 # ---- Actions ----------------------------------------------------------------
 
 
-def run_draft(session, subdomain, model, ticket, comments, command, api_user, dry_run):
+def run_draft(session, subdomain, ticket, comments, command, api_user, dry_run):
     """Compose the reply, or revise the one already on the ticket.
 
     A second `draft` on a ticket that already has one is an amendment, not a fresh
@@ -892,7 +892,7 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
     group, platform = tagged_placement(ticket)
     new_tags = []
     if book and not group:
-        group, platform = place_ticket(model, book, ticket, sample)
+        group, platform = place_ticket(book, ticket, sample)
         # Cached on the ticket so a revision does not pay for the same call again,
         # and so the placement is visible to a human who disagrees with it.
         new_tags = ([f"{TAG_GROUP_PREFIX}{group}"] if group else []) + \
@@ -906,7 +906,7 @@ def run_draft(session, subdomain, model, ticket, comments, command, api_user, dr
               f"({cell['n']} solved, {cell['consistency']} consistency).")
 
     try:
-        result = compose(model, clip(sample, CUSTOMER_SAMPLE_CHARS), brief,
+        result = compose(clip(sample, CUSTOMER_SAMPLE_CHARS), brief,
                          previous, precedent, thread)
     except SystemExit as exc:
         say(session, subdomain, ticket_id, comment_id,
@@ -962,7 +962,7 @@ def run_solve(session, subdomain, ticket, command, dry_run):
     print(f"#{ticket_id}: solved, no reply sent.")
 
 
-def run_explain(session, subdomain, model, ticket, comments, command, dry_run):
+def run_explain(session, subdomain, ticket, comments, command, dry_run):
     """Say what we already know about this kind of ticket, without writing a reply.
 
     The house answer, the steps, and — the reason this verb exists — what was
@@ -982,8 +982,8 @@ def run_explain(session, subdomain, model, ticket, comments, command, dry_run):
     new_tags = []
     if not group:
         group, platform = place_ticket(
-            model, book, ticket, api.customer_text(session, subdomain, ticket, comments,
-                                                   CUSTOMER_SAMPLE_CHARS))
+            book, ticket, api.customer_text(session, subdomain, ticket, comments,
+                                            CUSTOMER_SAMPLE_CHARS))
         new_tags = ([f"{TAG_GROUP_PREFIX}{group}"] if group else []) + \
                    ([f"{TAG_PLATFORM_PREFIX}{platform}"] if platform else [])
     cell, covering = house_cell(book, group, platform)
@@ -1135,7 +1135,7 @@ def fit_turns(turns, limit):
         room -= excess
 
 
-def translate_conversation(session, subdomain, model, ticket, comments):
+def translate_conversation(session, subdomain, ticket, comments):
     """The conversation on a ticket in English, or why there is none.
 
     Returns (outcome, detail): ("current", None) when a transcript already covers the
@@ -1161,7 +1161,7 @@ def translate_conversation(session, subdomain, model, ticket, comments):
     turns, omitted = fit_turns(turns, transcript.TRANSCRIPT_INPUT_CHARS)
     try:
         rendered = claude_api.claude_json(
-            model, "medium", transcript.TRANSCRIPT_SYSTEM_PROMPT, transcript.TRANSCRIPT_SCHEMA,
+            "medium", transcript.TRANSCRIPT_SYSTEM_PROMPT, transcript.TRANSCRIPT_SCHEMA,
             transcript_payload(turns),
             transcript.ENGLISH_TIMEOUT_SECONDS, f"the English transcript of #{ticket_id}")
     except SystemExit as exc:
@@ -1191,10 +1191,10 @@ def transcript_landed(session, subdomain, ticket_id, latest):
     return bool(comments) and api.has_marker(comments, english_marker(latest))
 
 
-def run_english(session, subdomain, model, ticket, comments, command, dry_run):
+def run_english(session, subdomain, ticket, comments, command, dry_run):
     """Put the conversation on the ticket in English, as a private note."""
     ticket_id = ticket["id"]
-    outcome, detail = translate_conversation(session, subdomain, model, ticket, comments)
+    outcome, detail = translate_conversation(session, subdomain, ticket, comments)
     answers = {
         "current": "The English transcript on this ticket is already up to date — nothing "
                    "has been said since it was written.",
@@ -1287,8 +1287,6 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true",
                         help="do everything except write to Zendesk")
     args = parser.parse_args(argv)
-    model = claude_api.model()
-
     subdomain = get_env("ZENDESK_SUBDOMAIN")
     session = api.zendesk_session(get_env("ZENDESK_EMAIL"),
                                   get_env("ZENDESK_API_TOKEN"))
@@ -1313,15 +1311,15 @@ def main(argv=None):
         return
 
     if command["action"] == "draft":
-        run_draft(session, subdomain, model, ticket, comments, command,
+        run_draft(session, subdomain, ticket, comments, command,
                   api_user, args.dry_run)
     elif command["action"] == "solve":
         run_solve(session, subdomain, ticket, command, args.dry_run)
     elif command["action"] == "explain":
-        run_explain(session, subdomain, model, ticket, comments, command,
+        run_explain(session, subdomain, ticket, comments, command,
                     args.dry_run)
     elif command["action"] == "english":
-        run_english(session, subdomain, model, ticket, comments, command, args.dry_run)
+        run_english(session, subdomain, ticket, comments, command, args.dry_run)
     else:
         run_reply(session, subdomain, ticket, comments, command, api_user, args.dry_run)
 
