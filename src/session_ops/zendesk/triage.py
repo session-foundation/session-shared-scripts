@@ -22,23 +22,15 @@ Categories Claude sorts each ticket into:
     bug_report | low_star_review | legal_request | security_or_legislation
     | question | feature_request | other
 
-Classification is driven by the local Claude Code CLI (`claude --print`), with
---json-schema enforcing SCHEMA exactly as the API's structured outputs did.
---findings skips it entirely and renders findings produced elsewhere.
+Classification goes through the Claude API on the newest Opus, with structured
+outputs enforcing SCHEMA. --findings skips it entirely and renders findings produced
+elsewhere.
 
 Config (env vars, or flags for local runs):
     ZENDESK_SUBDOMAIN     e.g. "mycompany"  -> https://mycompany.zendesk.com
     ZENDESK_EMAIL         agent email for API token auth
     ZENDESK_API_TOKEN     Zendesk API token
-                          Classification runs through the locally installed
-                          Claude Code CLI. No Claude API key lives in this
-                          deployment: the CLI authenticates with a subscription,
-                          either the interactive login or CLAUDE_CODE_OAUTH_TOKEN.
-    CLAUDE_CODE_OAUTH_TOKEN
-                          (optional) A `claude setup-token` token, passed through
-                          to the CLI. Same subscription and billing as the
-                          interactive login, with a year's life instead of weeks,
-                          which is what an unattended host wants.
+    ANTHROPIC_API_KEY     Claude API key (not needed with --findings or --dump-batch)
     ZENDESK_DISCORD_WEBHOOK_URL
                           Discord incoming webhook for the triage channel, shared
                           with resolve_reviews.py's tally and the failure alerts
@@ -86,7 +78,7 @@ from session_ops.zendesk.api import (REVIEW_CHANNEL, SEARCH_RESULT_LIMIT, fetch_
                                      hydrate_requester_activity, is_store_review,
                                      review_platform, review_stars, ticket_url,
                                      zendesk_session)
-from session_ops.zendesk.claude_cli import MODEL, claude_cli_json
+from session_ops.zendesk.claude_api import claude_json, model as newest_opus
 
 # Never analyzed. A store review cannot be answered the way a ticket can: it takes
 # one developer response, replacing any previous one, with no way to ask a follow-up
@@ -174,7 +166,7 @@ DESCRIPTION_CHARS = 1500  # per-ticket description sent to Claude (triage only)
 DEFAULT_BATCH_SIZE = 400
 
 # A 400-ticket chunk at medium effort is minutes of work. Generous, because being
-# killed mid-batch costs the whole chunk — and bounded, because a wedged CLI would
+# killed mid-batch costs the whole chunk — and bounded, because a wedged request would
 # otherwise hold the digest until the unit's own TimeoutStartSec fires.
 CLAUDE_TIMEOUT_SECONDS = 1800
 
@@ -569,10 +561,9 @@ def tickets_from_payload(payload, source):
     return validate_findings(found, source)
 
 
-def dump_batch(path, compact_tickets, model):
+def dump_batch(path, compact_tickets):
     """Write the batch to disk so it can be classified by hand. Contains ticket text."""
     payload = {
-        "model": model,
         "system_prompt": SYSTEM_PROMPT,
         "schema": SCHEMA,
         "tickets": compact_tickets,
@@ -616,11 +607,11 @@ def analyze_in_chunks(analyzer, compact_tickets, batch_size):
 
 
 def analyze(model, effort, compact_tickets):
-    """Classify a batch through the Claude Code CLI. Returns findings."""
-    payload = claude_cli_json(
-        model, effort, SYSTEM_PROMPT, SCHEMA,
+    """Classify a batch through the Claude API. Returns findings."""
+    payload = claude_json(
+        effort, SYSTEM_PROMPT, SCHEMA,
         build_analysis_prompt(compact_tickets), CLAUDE_TIMEOUT_SECONDS,
-        f"a batch of {len(compact_tickets)} tickets")
+        f"a batch of {len(compact_tickets)} tickets", model_id=model)
     return tickets_from_payload(payload, "Claude")
 
 
@@ -1114,13 +1105,13 @@ def main(argv=None):
         compact = [compact_ticket(t) for t in tickets]
 
         if args.dump_batch:
-            dump_batch(args.dump_batch, compact, MODEL)
+            dump_batch(args.dump_batch, compact)
             print(f"Wrote {len(compact)} tickets to {args.dump_batch} — this file contains "
                   f"ticket content, so keep it out of the repo.")
             print("Classify it, then: --findings <path> --dry-run")
             return
 
-        analyzer = partial(analyze, MODEL, args.effort)
+        analyzer = partial(analyze, newest_opus(), args.effort)
         findings = analyze_in_chunks(analyzer, compact, args.batch_size)
 
         # Keep only findings whose id maps to a fetched ticket, in case of drift.

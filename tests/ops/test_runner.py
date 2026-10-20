@@ -137,15 +137,15 @@ class TestRun(unittest.TestCase):
         self.assertIn("⚠️ **resolver**: 500", self.posted[0][1][0]["content"])
         self.assertIsNone(self.marker())
 
-    def test_a_dead_claude_login_says_so_and_says_how_to_log_in_instead_of_re_running(self):
-        for entry in ("digest_login_expired", "exits_login_expired"):
+    def test_a_refused_claude_key_says_so_and_says_where_it_goes_instead_of_re_running(self):
+        for entry in ("digest_key_refused", "exits_key_refused"):
             with self.subTest(entry=entry):
                 self.posted.clear()
                 self.assertEqual(self.run_job(job(entry)), 1)
                 content = self.posted[0][1][0]["content"]
-                self.assertIn("OAuth token has expired", content)
-                self.assertIn("no longer logged in", content)
-                self.assertIn("runuser -u zendesk", content)
+                self.assertIn("invalid x-api-key", content)
+                self.assertIn("key was refused", content)
+                self.assertIn("/etc/session-ops/zendesk.env", content)
                 self.assertIn("journalctl -u session-ops@demo -n 50", content)
                 self.assertNotIn("re-run", content)
 

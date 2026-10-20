@@ -41,9 +41,6 @@ Then fill the env files and run `install.sh` again. It enables each job once its
 files have content.
 
 ```bash
-runuser -u zendesk -- env HOME=/home/zendesk sh -c 'curl -fsSL https://claude.ai/install.sh | bash'
-runuser -u zendesk -- env HOME=/home/zendesk /home/zendesk/.local/bin/claude   # then /login
-
 cp /opt/session-ops/deploy/nginx-webhooks.conf /etc/nginx/sites-available/webhooks.session.codes
 ln -s /etc/nginx/sites-available/webhooks.session.codes /etc/nginx/sites-enabled/
 nginx -t && certbot --nginx --redirect -d webhooks.session.codes && nginx -t && systemctl reload nginx

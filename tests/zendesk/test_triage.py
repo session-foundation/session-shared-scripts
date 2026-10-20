@@ -8,16 +8,20 @@ Stdlib unittest so the repo needs no test dependency. Run from anywhere:
 Everything here is offline — no Zendesk, Claude, or Discord calls. The fetch
 tests drive fetch_tickets with a stub session instead.
 """
+import contextlib
 import json
 import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
+import anthropic
+import httpx2
 import requests
 
 from session_ops.shared import discord
-from session_ops.zendesk import api, claude_cli, triage
+from session_ops.zendesk import api, claude_api, triage
 from session_ops.shared.testing import (
     FakeResponse, FakeSession, NonJsonResponse, Patched)
 
@@ -1656,245 +1660,115 @@ class TestFetchTotalUnsolved(unittest.TestCase):
         self.assertIsNone(triage.fetch_total_unsolved(session, "acme"))
 
 
-# ---- The Claude Code CLI ---------------------------------------------------
+# ---- The Claude API ---------------------------------------------------------
 
 
-class TestClaudeCli(unittest.TestCase):
-    """Both Claude calls go through `claude --print`, so the flags are the contract.
-    Nothing here runs the CLI; subprocess.run is replaced by a recorder."""
+def api_error(cls, status, message):
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    return cls(message, response=httpx2.Response(status, request=request), body=None)
 
+
+class FakeClient:
+    """Records each request and answers with `message`, or raises `raises`."""
+
+    def __init__(self, message=None, raises=None, models=()):
+        self.calls, self.options = [], []
+        self.message, self.raises = message, raises
+        self.models = type("Models", (), {"list": lambda _: list(models)})()
+
+    def with_options(self, **kwargs):
+        self.options.append(kwargs)
+        return self
+
+    @property
+    def messages(self):
+        return self
+
+    @contextlib.contextmanager
+    def stream(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.raises is not None:
+            raise self.raises
+        yield type("Stream", (), {"get_final_message": lambda _: self.message})()
+
+
+def reply(text='{"a": "b"}', stop_reason="end_turn"):
+    blocks = [SimpleNamespace(type="thinking", thinking=""),
+              SimpleNamespace(type="text", text=text)]
+    return SimpleNamespace(content=blocks, stop_reason=stop_reason, stop_details=None)
+
+
+class TestClaudeApi(unittest.TestCase):
     SCHEMA = {"type": "object", "properties": {"a": {"type": "string"}}}
 
-    def run_cli(self, response=None, returncode=0, stderr="", raises=None,
-                prompt="ticket text", stdout=None):
-        self.calls = []
+    def call(self, message=None, raises=None, model_id="claude-opus-5-5"):
+        self.client = FakeClient(reply() if message is None else message, raises)
+        with Patched(claude_api, client=lambda: self.client,
+                     model=lambda: "claude-opus-9"):
+            return claude_api.claude_json("medium", "be terse", self.SCHEMA, "ticket text",
+                                          60, "a batch of 3", model_id=model_id)
 
-        def fake_run(command, **kwargs):
-            self.calls.append((command, kwargs))
-            if raises is not None:
-                raise raises
-            payload = {"subtype": "success", "is_error": False,
-                       "structured_output": {"a": "b"}}
-            if response is not None:
-                payload = response
-            written = (json.dumps(payload) if isinstance(payload, dict) else payload)
-            return type("Done", (), {
-                "returncode": returncode,
-                "stdout": written if stdout is None else stdout,
-                "stderr": stderr})()
+    def failure(self, **kwargs):
+        with self.assertRaises(SystemExit) as caught:
+            self.call(**kwargs)
+        return str(caught.exception)
 
-        with Patched(claude_cli.subprocess, run=fake_run):
-            return claude_cli.claude_cli_json("claude-opus-5", "medium", "be terse",
-                                              self.SCHEMA, prompt, 60, "a batch of 3")
+    def test_the_request_carries_the_schema_effort_and_timeout(self):
+        self.assertEqual(self.call(), {"a": "b"})
+        request = self.client.calls[0]
+        self.assertEqual(request["model"], "claude-opus-5-5")
+        self.assertEqual(request["system"], "be terse")
+        self.assertEqual(request["messages"], [{"role": "user", "content": "ticket text"}])
+        self.assertEqual(request["output_config"], {
+            "effort": "medium", "format": {"type": "json_schema", "schema": self.SCHEMA}})
+        self.assertEqual(self.client.options, [{"timeout": 60}])
 
-    def command(self, **kwargs):
-        self.run_cli(**kwargs)
-        return self.calls[0][0]
-
-    def test_the_prompt_goes_over_stdin_not_argv(self):
-        """Linux caps one argument at 128KB and a full batch is several times that, so
-        argv would work on a normal day and die on a backfill. argv is also
-        world-readable through /proc, and these prompts carry ticket text."""
-        self.run_cli(prompt="ticket text")
-        command, kwargs = self.calls[0]
-        self.assertEqual(kwargs["input"], "ticket text")
-        self.assertNotIn("ticket text", command)
-
-    def test_an_anthropic_key_in_the_environment_cannot_outrank_the_login(self):
-        """The CLI authenticates as whatever `claude` is logged in as, and any of
-        these takes precedence over it. A box that once ran the API backend still has
-        the key in its EnvironmentFile, and inheriting it there swapped the credential
-        for every translation until the CLI refused outright."""
-        with Patched(os, environ={"ANTHROPIC_API_KEY": "sk-dead",
-                                  "ANTHROPIC_AUTH_TOKEN": "t",
-                                  "ANTHROPIC_BASE_URL": "https://elsewhere",
-                                  "CLAUDE_CODE_OAUTH_TOKEN": "o",
-                                  "PATH": "/usr/bin", "HOME": "/home/zendesk"}):
-            self.run_cli()
-        child_env = self.calls[0][1]["env"]
-        for name in claude_cli.CLAUDE_AUTH_OVERRIDES:
-            self.assertNotIn(name, child_env)
-        # Everything else still reaches it: HOME is where the login lives, and PATH is
-        # how a per-user install is found at all.
-        self.assertEqual(child_env["HOME"], "/home/zendesk")
-        self.assertEqual(child_env["PATH"], "/usr/bin")
-
-    def test_a_subscription_token_reaches_the_cli(self):
-        """`claude setup-token` is the only credential an unattended host can renew
-        yearly rather than weekly, and it bills the subscription exactly as the
-        interactive login does — so it is passed through where an API key is not."""
-        with Patched(os, environ={"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat-x",
-                                  "ANTHROPIC_API_KEY": "sk-dead",
-                                  "PATH": "/usr/bin", "HOME": "/home/zendesk"}):
-            self.run_cli()
-        child_env = self.calls[0][1]["env"]
-        self.assertEqual(child_env["CLAUDE_CODE_OAUTH_TOKEN"], "sk-ant-oat-x")
-        self.assertNotIn("ANTHROPIC_API_KEY", child_env)
-
-    def test_nothing_outside_the_call_can_change_what_the_model_is_told(self):
-        """--tools "" only removes the tools. Without --setting-sources "" a
-        .claude/settings.json beside this file, or one in the service account's home,
-        joins every classification and every translation — hooks included."""
-        command = self.command()
-        self.assertEqual(command[command.index("--setting-sources") + 1], "")
-        self.assertEqual(command[command.index("--tools") + 1], "")
-
-    def test_tools_stays_last(self):
-        """It is variadic, so it swallows any following argument that does not begin
-        with a dash — including the next flag's value."""
-        self.assertEqual(self.command()[-2:], ["--tools", ""])
-
-    def test_the_schema_is_enforced_by_the_cli(self):
-        command = self.command()
-        self.assertEqual(json.loads(command[command.index("--json-schema") + 1]),
-                         self.SCHEMA)
-        self.assertIn("--no-session-persistence", command)
-
-    def test_structured_output_beats_reparsing_the_result_string(self):
-        """One less decode, and immune to prose alongside the JSON."""
-        self.assertEqual(
-            self.run_cli(response={"subtype": "success", "is_error": False,
-                                   "structured_output": {"a": "from the object"},
-                                   "result": '{"a": "from the string"}'}),
-            {"a": "from the object"})
-
-    def test_a_result_string_is_parsed_when_there_is_no_object(self):
-        self.assertEqual(
-            self.run_cli(response={"subtype": "success", "is_error": False,
-                                   "result": '{"a": "b"}'}),
-            {"a": "b"})
+    def test_without_a_model_id_the_request_uses_the_newest_opus(self):
+        self.call(model_id=None)
+        self.assertEqual(self.client.calls[0]["model"], "claude-opus-9")
 
     def test_running_out_of_output_tokens_names_the_fix(self):
-        """There is no --max-tokens to raise, so a batch too large to answer comes
-        back as JSON that stops mid-object. Without this the parse below reports a
-        syntax error for something whose only fix is a smaller batch."""
-        with self.assertRaises(SystemExit) as caught:
-            self.run_cli(response={"subtype": "success", "is_error": False,
-                                   "stop_reason": "max_tokens",
-                                   "result": '{"a": "b'})
-        self.assertIn("--batch-size", str(caught.exception))
+        self.assertIn("--batch-size",
+                      self.failure(message=reply('{"a": "b', stop_reason="max_tokens")))
 
-    def test_a_successful_run_is_not_mistaken_for_a_truncated_one(self):
-        """Structured output reports stop_reason "tool_use" on success, because that
-        is how the schema is enforced underneath."""
-        self.assertEqual(
-            self.run_cli(response={"subtype": "success", "is_error": False,
-                                   "stop_reason": "tool_use",
-                                   "structured_output": {"a": "b"}}),
-            {"a": "b"})
-
-    def test_a_reported_failure_stops_the_run(self):
-        for response in ({"subtype": "error_during_execution", "is_error": False},
-                         {"subtype": "success", "is_error": True}):
-            with self.subTest(response=response):
-                with self.assertRaises(SystemExit):
-                    self.run_cli(response=response)
-
-    def test_a_zero_exit_that_reports_is_error_names_the_reason(self):
-        """The envelope's `result` is where the CLI puts the reason, whatever the exit
-        code; the subtype and status alone do not say what went wrong."""
-        with self.assertRaises(SystemExit) as caught:
-            self.run_cli(response={"subtype": "success", "is_error": True,
-                                   "api_error_status": 404,
-                                   "result": "There's an issue with the selected model."})
-        message = str(caught.exception)
-        self.assertIn("api_error_status=404", message)
-        self.assertIn("selected model", message)
-
-    def test_a_non_zero_exit_prefers_stderr_over_stdout(self):
-        """A non-zero exit means there is no JSON to read, and the CLI could echo the
-        prompt back — which this repo's public run logs must not carry."""
-        with self.assertRaises(SystemExit) as caught:
-            self.run_cli(returncode=1, stderr="not logged in",
-                         stdout="ticket text echoed back")
-        self.assertIn("not logged in", str(caught.exception))
-        self.assertNotIn("ticket text", str(caught.exception))
-
-    def test_a_non_zero_exit_falls_back_to_stdout(self):
-        """A refused login exits 1 with its diagnostic on stdout and stderr empty,
-        so reading stderr alone reports the exit code and nothing else."""
-        with self.assertRaises(SystemExit) as caught:
-            self.run_cli(returncode=1, stdout="Invalid API key · Please run /login")
-        self.assertIn("/login", str(caught.exception))
-
-    def test_the_json_envelope_is_read_rather_than_clipped(self):
-        """The real failure on the host: the message sits behind ~900 characters of
-        usage counters, so clipping raw stdout reports boilerplate and nothing else."""
-        envelope = {"is_error": True, "duration_api_ms": 0, "num_turns": 1,
-                    "session_id": "95bc6ddc", "total_cost_usd": 0,
-                    "usage": {"input_tokens": 0, "output_tokens": 0,
-                              "padding": "x" * 900},
-                    "terminal_reason": "api_error", "subtype": "error_during_execution",
-                    "result": "OAuth token expired · Please run /login"}
-        with self.assertRaises(SystemExit) as caught:
-            self.run_cli(returncode=1, stdout=json.dumps(envelope))
-        message = str(caught.exception)
-        self.assertIn("OAuth token expired", message)
-        self.assertIn("api_error", message)
-        self.assertNotIn("is_error", message)
-        self.assertNotIn("total_cost_usd", message)
-
-    def test_an_error_field_is_read_when_there_is_no_result(self):
-        for error in ("Credit balance is too low", {"message": "Credit balance is too low"}):
-            with self.subTest(error=error):
-                with self.assertRaises(SystemExit) as caught:
-                    self.run_cli(returncode=1,
-                                 stdout=json.dumps({"is_error": True, "error": error}))
-                self.assertIn("Credit balance is too low", str(caught.exception))
-
-    def test_a_reason_alone_beats_reporting_the_envelope(self):
-        with self.assertRaises(SystemExit) as caught:
-            self.run_cli(returncode=1,
-                         stdout=json.dumps({"is_error": True,
-                                            "terminal_reason": "api_error"}))
-        self.assertIn("api_error", str(caught.exception))
-        self.assertNotIn("is_error", str(caught.exception))
-
-    def test_an_envelope_with_nothing_readable_is_reported_raw(self):
-        """Whatever it printed beats saying nothing, and the shape is the CLI's to
-        change."""
-        with self.assertRaises(SystemExit) as caught:
-            self.run_cli(returncode=1, stdout=json.dumps({"unexpected": "shape"}))
-        self.assertIn("unexpected", str(caught.exception))
-
-    def test_stdout_that_is_not_json_is_reported_raw(self):
-        with self.assertRaises(SystemExit) as caught:
-            self.run_cli(returncode=1, stdout='{"is_error": true, "result": "cut off')
-        self.assertIn("cut off", str(caught.exception))
-
-    def test_a_silent_non_zero_exit_still_says_something(self):
-        """Neither stream is guaranteed to carry anything, and a message ending in a
-        bare colon is what a failed run leaves in the journal."""
-        with self.assertRaises(SystemExit) as caught:
-            self.run_cli(returncode=1, stdout="", stderr="")
-        self.assertFalse(str(caught.exception).rstrip().endswith(":"))
-        self.assertIn("signed in", str(caught.exception))
-
-    def test_the_failure_detail_is_clipped(self):
-        """Every route out of it, not just stderr: the prompt can come back on any
-        of them and this log must not carry ticket text."""
-        for kwargs in ({"stderr": "x" * 5000},
-                       {"stdout": "x" * 5000},
-                       {"stdout": json.dumps({"result": "x" * 5000,
-                                              "terminal_reason": "api_error"})}):
-            with self.subTest(**kwargs):
-                with self.assertRaises(SystemExit) as caught:
-                    self.run_cli(returncode=1, **kwargs)
-                self.assertLess(len(str(caught.exception)), 500)
+    def test_a_refusal_stops_the_run(self):
+        self.assertIn("refused", self.failure(message=reply("", stop_reason="refusal")))
 
     def test_output_that_is_not_json_is_named_as_such(self):
-        with self.assertRaises(SystemExit):
-            self.run_cli(response="<html>proxy error</html>")
+        self.assertIn("not the JSON", self.failure(message=reply("<html>")))
 
-    def test_a_missing_cli_says_what_to_install(self):
-        with self.assertRaises(SystemExit) as caught:
-            self.run_cli(raises=FileNotFoundError())
-        self.assertIn("PATH", str(caught.exception))
+    def test_a_refused_key_gets_the_rotation_advice(self):
+        line = self.failure(raises=api_error(anthropic.AuthenticationError, 401,
+                                             "invalid x-api-key"))
+        self.assertTrue(claude_api.is_auth_failure(line))
+        self.assertIn("ANTHROPIC_API_KEY", "".join(claude_api.advice(line)))
 
-    def test_a_wedged_cli_does_not_hang_the_run(self):
-        with self.assertRaises(SystemExit) as caught:
-            self.run_cli(raises=claude_cli.subprocess.TimeoutExpired("claude", 60))
-        self.assertIn("60s", str(caught.exception))
+    def test_an_account_out_of_credit_is_not_told_to_rotate_the_key(self):
+        line = self.failure(raises=api_error(
+            anthropic.BadRequestError, 400, "Your credit balance is too low"))
+        self.assertFalse(claude_api.is_auth_failure(line))
+        self.assertIn("out of credit", "".join(claude_api.advice(line)))
+
+    def test_a_timeout_is_not_an_account_problem(self):
+        request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+        line = self.failure(raises=anthropic.APITimeoutError(request=request))
+        self.assertIn("in time", line)
+        self.assertEqual(claude_api.advice(line), [])
+
+    def test_the_failure_detail_is_clipped(self):
+        line = self.failure(raises=api_error(anthropic.InternalServerError, 500, "x" * 5000))
+        self.assertLess(len(line), 500)
+
+    def test_the_model_is_the_newest_opus(self):
+        models = [SimpleNamespace(id="claude-opus-5", created_at=1),
+                  SimpleNamespace(id="claude-opus-5-5", created_at=3),
+                  SimpleNamespace(id="claude-fable-5-1", created_at=4)]
+        claude_api.model.cache_clear()
+        try:
+            with Patched(claude_api, client=lambda: FakeClient(models=models)):
+                self.assertEqual(claude_api.model(), "claude-opus-5-5")
+        finally:
+            claude_api.model.cache_clear()
 
 
 if __name__ == "__main__":

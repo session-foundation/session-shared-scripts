@@ -32,7 +32,7 @@ import sys
 from session_ops.ops.runner import scrub
 from session_ops.shared import http
 from session_ops.shared.discord import post_to_discord
-from session_ops.zendesk.claude_cli import advice
+from session_ops.zendesk.claude_api import advice
 
 
 EXCERPT_CHARS = 400

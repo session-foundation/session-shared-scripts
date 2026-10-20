@@ -20,12 +20,13 @@ import html
 import json
 import io
 import os
+import sys
 import re
 import unittest
 from unittest import mock
 
 from session_ops.shared.text import undash_english
-from session_ops.zendesk import api, claude_cli, note_reply
+from session_ops.zendesk import api, claude_api, note_reply
 from tests.zendesk.test_triage import FakeResponse, FakeSession, Patched
 
 API_USER = 901790886886
@@ -148,7 +149,7 @@ class EnglishTranscript(unittest.TestCase):
                     dict(comment("hallo", author=42, cid=7), public=True), prior]
         with Patched(api, conversation_turns=lambda *a: called.append(a)):
             session = fake_session(*[FakeResponse({"ticket": {}})])
-            note_reply.run_english(session, "sub", "model", {"id": 7}, comments,
+            note_reply.run_english(session, "sub", {"id": 7}, comments,
                                    {"id": 9, "author": AGENT, "action": "english",
                                     "brief": ""}, dry_run=False)
         self.assertEqual(called, [])
@@ -162,7 +163,7 @@ class EnglishTranscript(unittest.TestCase):
                     dict(comment("hallo", author=42, cid=7), public=True), prior]
         session = fake_session(*[FakeResponse({"ticket": {}})])
         with Patched(api, conversation_turns=lambda *a: None):
-            note_reply.run_english(session, "sub", "model", {"id": 7}, comments,
+            note_reply.run_english(session, "sub", {"id": 7}, comments,
                                    {"id": 9, "author": AGENT, "action": "english",
                                     "brief": ""}, dry_run=False)
         # the note itself carries no tag fields; the tag work is separate calls
@@ -179,9 +180,9 @@ class EnglishTranscript(unittest.TestCase):
         turns = [{"index": 0, "who": "Customer", "when": "t", "body": "My app crashes"}]
         session = fake_session(*[FakeResponse({"ticket": {}})])
         with Patched(api, conversation_turns=lambda *a: turns), \
-                Patched(claude_cli, claude_cli_json=lambda *a, **k: {
+                Patched(claude_api, claude_json=lambda *a, **k: {
                     "turns": [{"index": 0, "english": "My app crashes"}]}):
-            note_reply.run_english(session, "sub", "model", {"id": 7},
+            note_reply.run_english(session, "sub", {"id": 7},
                                    [comment("claude: english", cid=9)],
                                    {"id": 9, "author": AGENT, "action": "english",
                                     "brief": ""}, dry_run=False)
@@ -196,8 +197,8 @@ class EnglishTranscript(unittest.TestCase):
         session = fake_session(*[FakeResponse({"ticket": {}}), FakeResponse({}),
                                FakeResponse({})])
         with Patched(api, conversation_turns=lambda *a: turns), \
-                Patched(claude_cli, claude_cli_json=fail):
-            note_reply.run_english(session, "sub", "model", {"id": 7},
+                Patched(claude_api, claude_json=fail):
+            note_reply.run_english(session, "sub", {"id": 7},
                                    [comment("claude: english", cid=9)],
                                    {"id": 9, "author": AGENT, "action": "english",
                                     "brief": ""}, dry_run=False)
@@ -214,10 +215,10 @@ class EnglishTranscript(unittest.TestCase):
         landed = comment(f"transcript {note_reply.english_marker(3)}", author=API_USER, cid=4)
         session = fake_session(FakeResponse({"comments": [landed]}))
         with Patched(api, conversation_turns=lambda *a: turns), \
-                Patched(claude_cli, claude_cli_json=lambda *a, **k: {
+                Patched(claude_api, claude_json=lambda *a, **k: {
                     "turns": [{"index": 0, "english": "Hello"}]}), \
                 contextlib.redirect_stdout(io.StringIO()):
-            note_reply.run_english(session, "sub", "model", {"id": 7},
+            note_reply.run_english(session, "sub", {"id": 7},
                                    [comment("claude: english", cid=9),
                                     comment("Hallo", author=42, public=True, cid=3)],
                                    {"id": 9, "author": AGENT, "action": "english",
@@ -298,9 +299,9 @@ class EnglishTranscript(unittest.TestCase):
                   "body": "Hallo"}]
         session = fake_session(*[FakeResponse({"ticket": {}})])
         with Patched(api, conversation_turns=lambda *a: turns), \
-                Patched(claude_cli, claude_cli_json=lambda *a, **k: {
+                Patched(claude_api, claude_json=lambda *a, **k: {
                     "turns": [{"index": 0, "english": "Hello"}]}):
-            note_reply.run_english(session, "sub", "model", {"id": 7},
+            note_reply.run_english(session, "sub", {"id": 7},
                                    [dict(comment("Hallo", author=42, cid=3), public=True)],
                                    {"id": 9, "author": AGENT, "action": "english",
                                     "brief": ""}, dry_run=False)
@@ -339,14 +340,14 @@ class FitTurns(unittest.TestCase):
         turns = self.turns("a" * 7990, "Es geht nicht.")
         sent = []
 
-        def translate(model, effort, system, schema, payload, *a):
+        def translate(effort, system, schema, payload, *a):
             sent.append(json.loads(payload))
             return {"turns": [{"index": 1, "english": "It does not work."}]}
 
         with Patched(api, conversation_turns=lambda *a: turns), \
-                Patched(claude_cli, claude_cli_json=translate):
+                Patched(claude_api, claude_json=translate):
             outcome, detail = note_reply.translate_conversation(
-                None, "sub", "model", {"id": 7}, [comment("x", public=True, cid=3)])
+                None, "sub", {"id": 7}, [comment("x", public=True, cid=3)])
         self.assertEqual(outcome, "ready")
         self.assertEqual([t["index"] for t in sent[0]], [1])
         self.assertEqual(detail[3], 1)
@@ -672,7 +673,7 @@ class Explain(unittest.TestCase):
         session = fake_session(*[FakeResponse({"ticket": {}})])
         with Patched(note_reply, load_house=lambda *a: book):
             note_reply.run_explain(
-                session, "sub", "model",
+                session, "sub",
                 {"id": 7, "tags": ["grp-attachments", "plat-android"]}, [],
                 {"id": 9, "author": AGENT, "action": "explain", "brief": ""},
                 dry_run=False)
@@ -685,7 +686,7 @@ class Explain(unittest.TestCase):
         with Patched(note_reply, load_house=lambda *a: BOOK,
                      place_ticket=lambda *a: (None, "android")):
             session = fake_session(*[FakeResponse({"ticket": {}})])
-            note_reply.run_explain(session, "sub", "model", {"id": 7, "tags": []}, [],
+            note_reply.run_explain(session, "sub", {"id": 7, "tags": []}, [],
                                    {"id": 9, "author": AGENT, "action": "explain",
                                     "brief": ""}, dry_run=False)
         self.assertIn("no precedent",
@@ -697,7 +698,7 @@ class Explain(unittest.TestCase):
     def test_no_house_answers_configured_is_said_plainly(self):
         with Patched(note_reply, load_house=lambda *a: None):
             session = fake_session(*[FakeResponse({"ticket": {}})])
-            note_reply.run_explain(session, "sub", "model", {"id": 7, "tags": []}, [],
+            note_reply.run_explain(session, "sub", {"id": 7, "tags": []}, [],
                                    {"id": 9, "author": AGENT, "action": "explain",
                                     "brief": ""}, dry_run=False)
         self.assertIn("No house answers",
@@ -824,7 +825,7 @@ class Writes(unittest.TestCase):
         called = []
         with Patched(note_reply, compose=lambda *a: called.append(a)):
             session = fake_session(*[FakeResponse({"ticket": {}})])
-            note_reply.run_draft(session, "sub", "model", {"id": 7}, [],
+            note_reply.run_draft(session, "sub", {"id": 7}, [],
                                  {"id": 3, "author": AGENT, "action": "draft", "brief": ""},
                                  API_USER, dry_run=False)
         self.assertEqual(called, [])
@@ -876,12 +877,12 @@ class FollowUps(unittest.TestCase):
 
     def draft(self, comments, brief="still broken, ask for logs", lookups=()):
         seen = {}
-        def fake(model, sample, brief, previous=None, precedent=None, thread=None):
+        def fake(sample, brief, previous=None, precedent=None, thread=None):
             seen.update(sample=sample, previous=previous, thread=thread)
             return GERMAN
         with Patched(note_reply, compose=fake):
             session = fake_session(*lookups, FakeResponse({"ticket": {}}))
-            note_reply.run_draft(session, "sub", "model", TICKET,
+            note_reply.run_draft(session, "sub", TICKET,
                                  [comment(f"claude: draft - {brief}", cid=20)] + comments,
                                  {"id": 20, "author": AGENT, "action": "draft",
                                   "brief": brief}, API_USER, dry_run=False)
@@ -1096,13 +1097,13 @@ class Composition(unittest.TestCase):
         """An agent writing "also mention X" wants the draft they just read plus X.
         Regenerating from the new brief alone throws away wording they kept."""
         seen = {}
-        def fake(model, sample, brief, previous=None, precedent=None, thread=None):
+        def fake(sample, brief, previous=None, precedent=None, thread=None):
             seen.update(brief=brief, previous=previous, precedent=precedent)
             return GERMAN
         with Patched(note_reply, compose=fake):
             session = fake_session(*[FakeResponse({"ticket": {}})])
             note_reply.run_draft(
-                session, "sub", "model", {"id": 7, "requester_id": 42},
+                session, "sub", {"id": 7, "requester_id": 42},
                 [comment("claude: draft - also mention X", cid=11),
                  draft_note("Erster Entwurf", cid=10)],
                 {"id": 11, "author": AGENT, "action": "draft",
@@ -1120,7 +1121,7 @@ class Composition(unittest.TestCase):
             session = fake_session(*[FakeResponse({"ticket": {}}), FakeResponse({}),
                                    FakeResponse({})])
             note_reply.run_draft(
-                session, "sub", "model", {"id": 7, "requester_id": 42},
+                session, "sub", {"id": 7, "requester_id": 42},
                 [comment("claude: draft - x", cid=11)],
                 {"id": 11, "author": AGENT, "action": "draft", "brief": "x"},
                 API_USER, dry_run=False)
@@ -1135,13 +1136,13 @@ class Composition(unittest.TestCase):
 
     def test_a_first_draft_has_nothing_to_amend(self):
         seen = {}
-        def fake(model, sample, brief, previous=None, precedent=None, thread=None):
+        def fake(sample, brief, previous=None, precedent=None, thread=None):
             seen.update(previous=previous, precedent=precedent)
             return GERMAN
         with Patched(note_reply, compose=fake):
             session = fake_session(*[FakeResponse({"ticket": {}})])
             note_reply.run_draft(
-                session, "sub", "model", {"id": 7, "requester_id": 42},
+                session, "sub", {"id": 7, "requester_id": 42},
                 [comment("claude: draft - x", cid=11)],
                 {"id": 11, "author": AGENT, "action": "draft", "brief": "x"},
                 API_USER, dry_run=False)
@@ -1286,28 +1287,41 @@ class Composition(unittest.TestCase):
 
 
 class Model(unittest.TestCase):
-    def model_for(self, flag):
-        seen = []
+    def run_main(self, action, flag=()):
         env = {"ZENDESK_SUBDOMAIN": "sub", "ZENDESK_EMAIL": "e", "ZENDESK_API_TOKEN": "t"}
-        command = {"id": 9, "author": AGENT, "action": "draft", "brief": "x"}
+        command = {"id": 9, "author": AGENT, "action": action, "brief": "x"}
+        ran = []
         with mock.patch.dict(os.environ, env), \
                 Patched(api, zendesk_session=lambda *a: object(),
                         fetch_ticket=lambda *a: {"id": 7, "status": "open"},
                         fetch_comments=lambda *a, **k: []), \
                 Patched(note_reply, api_user_id=lambda *a: API_USER,
                         latest_command=lambda *a: command,
-                        run_draft=lambda session, subdomain, model, *a: seen.append(model)):
+                        run_draft=lambda *a: ran.append("draft"),
+                        run_solve=lambda *a: ran.append("solve")), \
+                Patched(claude_api, model=lambda: sys.exit("Claude API is down")):
             note_reply.main(["--ticket", "7", *flag])
-        return seen[0]
+        return ran
 
-    def test_every_call_uses_the_clis_opus_alias(self):
-        self.assertEqual(self.model_for([]), claude_cli.MODEL)
-        self.assertEqual(claude_cli.MODEL, "opus")
+    def test_a_command_that_needs_no_claude_runs_without_the_model_lookup(self):
+        self.assertEqual(self.run_main("solve"), ["solve"])
+
+    def test_the_model_lookup_waits_for_the_claude_call(self):
+        self.assertEqual(self.run_main("draft"), ["draft"])
 
     def test_there_is_no_model_flag(self):
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
-            self.model_for(["--model", "sonnet"])
+            self.run_main("draft", ["--model", "sonnet"])
 
+    def test_a_failed_model_lookup_is_reported_on_the_ticket(self):
+        session = fake_session(*[FakeResponse({"ticket": {}})] * 3)
+        with Patched(note_reply, load_house=lambda *a: None,
+                     place_ticket=lambda *a: (None, None)), \
+                Patched(claude_api, model=lambda: sys.exit("Claude API is down")):
+            note_reply.run_draft(session, "sub", {"id": 7}, [],
+                                 {"id": 3, "author": AGENT, "action": "draft",
+                                  "brief": "say hi"}, API_USER, dry_run=False)
+        self.assertIn("Claude API is down", str(session.calls))
 
 if __name__ == "__main__":
     unittest.main()

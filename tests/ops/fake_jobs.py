@@ -35,14 +35,14 @@ def exits_with_a_pretty_printed_body(argv):
     raise SystemExit("GitHub 401 on /orgs: {\n  \"message\": \"Bad credentials\"\n}")
 
 
-LOGIN_EXPIRED = "claude exited 1 on classification: OAuth token has expired · Please run /login"
+KEY_REFUSED = "Claude API refused the key on classification: invalid x-api-key"
 
 
-def digest_login_expired(argv):
-    return Outcome(targets={"resolve reviews": None, "digest": LOGIN_EXPIRED},
+def digest_key_refused(argv):
+    return Outcome(targets={"resolve reviews": None, "digest": KEY_REFUSED},
                    optional=frozenset({"resolve reviews"}))
 
 
-def exits_login_expired(argv):
+def exits_key_refused(argv):
     step("classifying")
-    raise SystemExit(LOGIN_EXPIRED)
+    raise SystemExit(KEY_REFUSED)

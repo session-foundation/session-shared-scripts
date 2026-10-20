@@ -118,7 +118,6 @@ User=sessionops
 Group=sessionops
 EnvironmentFile=/etc/session-ops/alerts.env
 EnvironmentFile=/etc/session-ops/github-prs.env
-EnvironmentFile=/etc/session-ops/zendesk.env
 TimeoutStartSec=5min
 
 ==> session-ops@token-expiry.timer.d/schedule.conf <==
@@ -139,8 +138,4 @@ User=zendesk
 Group=zendesk
 EnvironmentFile=/etc/session-ops/zendesk.env
 TimeoutStartSec=90min
-ProtectHome=tmpfs
-BindPaths=/home/zendesk
-ReadWritePaths=/home/zendesk
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
