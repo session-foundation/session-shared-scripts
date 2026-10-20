@@ -12,6 +12,10 @@
 #   repeat_alert_hours  report the same failure again only this often until a run
 #                  succeeds, for a schedule short enough to repeat it every few minutes
 #   unit           further [Service] lines, over the template's hardening
+#   discord        startable by the Discord relay's account: offered to `/run`, except
+#                  mau, which /mau starts
+#   enabled        false keeps a job off: install.sh enables none of its units, the
+#                  runner refuses it, and neither the silence checker nor Discord offers it
 #
 #   max_age_hours  for a queued job, its queue's: the weekend's 72 h (73 h across
 #                  April's DST change), plus every job ahead of it running to its timeout
@@ -67,6 +71,7 @@ channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
 max_age_hours = 80
 # About 9 minutes; a full scan without --croql is ~110k requests, about 85 minutes.
 timeout = "2h"
+discord = true
 
 [[job]]
 name = "session-ops-silence"
@@ -120,6 +125,7 @@ env = ["CROWDIN_API_TOKEN", "PUBLISH_GIT_AUTHOR", "CROWDIN_DISCORD_WEBHOOK_URL"]
 channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
 max_age_hours = 80
 timeout = "1h"
+discord = true
 # Readable by this unit alone, at $CREDENTIALS_DIRECTORY; publishing needs it.
 unit = ["LoadCredential=github-app.pem:/etc/session-ops/github-app.pem"]
 
@@ -136,10 +142,14 @@ timeout = "10min"
 unit = ["LoadCredential=github-app.pem:/etc/session-ops/github-app.pem"]
 
 [[job]]
-name = "release-stats"
-description = "Download counts of the latest Desktop and Android releases"
-entry = "session_ops.platforms.release_stats:main"
-args = ["--out", "{state}/runs"]
+name = "mau"
+description = "Monthly active users per platform, the answer to /mau"
+entry = "session_ops.platforms.mau:main"
+args = ["--state", "{state}"]
 user = "sessionops"
-env_files = ["/etc/session-ops/alerts.env"]
+env_files = ["/etc/session-ops/alerts.env", "/etc/session-ops/mau.env"]
+env = ["ASC_ISSUER_ID", "ASC_KEY_ID"]
+discord = true
 timeout = "5min"
+# The App Store Connect API key, for Apple's opt-in rate.
+unit = ["LoadCredential=asc-key.p8:/etc/session-ops/asc-key.p8"]

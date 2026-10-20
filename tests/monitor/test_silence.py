@@ -82,10 +82,12 @@ class TestMessage(unittest.TestCase):
 
 
 class TestRegistry(unittest.TestCase):
-    def test_every_scheduled_job_is_watched_and_nothing_else(self):
+    def test_every_scheduled_job_that_is_on_is_watched_and_nothing_else(self):
         from session_ops.ops import registry
         watched = {job["name"] for job in silence.load_jobs(silence.REGISTRY)}
-        self.assertEqual(watched, {job.name for job in registry.load() if job.scheduled})
+        self.assertEqual(watched, {job.name for job in registry.load()
+                                   if job.scheduled and job.enabled})
+        self.assertNotIn("mau", watched)
 
 
 if __name__ == "__main__":

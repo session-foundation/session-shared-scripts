@@ -3,6 +3,7 @@
     session-ops list
     session-ops run github-prs-digest [--dry-run] [-- further job arguments]
     session-ops units --out /etc/systemd/system
+    session-ops discord-register
 
 A run owns what every job would otherwise repeat: checking the environment it needs,
 a scratch directory, and telling Discord when it fails. The alert names the job, the
@@ -210,17 +211,24 @@ def _invoke(function, argv):
         return None, one_sentence(describe(exc))
 
 
-def call(job, argv):
-    """Run the job's entry point. Returns (outcome, error)."""
+def entry_point(job):
     module_name, function = job.entry.split(":")
-    result, error = _invoke(getattr(importlib.import_module(module_name), function), argv)
-    return (result if isinstance(result, Outcome) else Outcome()), error
+    return getattr(importlib.import_module(module_name), function)
+
+
+def file_away(path, folder):
+    os.makedirs(folder, exist_ok=True)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    os.replace(path, os.path.join(folder, f"{stamp}-{os.path.basename(path)}"))
 
 
 def run(job, dry_run=False, extra=()):
     """Run `job` and report its failure. Returns the process exit code."""
     global _step
     _step = None
+    if not job.enabled:
+        print(f"{job.name} is off (enabled = false in jobs.toml): nothing ran.")
+        return 0
     state_dir = os.environ.get("STATE_DIRECTORY", "").split(":")[0] or job.state_dir
     missing = [name for name in job.env if not os.environ.get(name)]
     work = tempfile.mkdtemp(prefix=f"{job.name}-")
@@ -237,7 +245,15 @@ def run(job, dry_run=False, extra=()):
             _step = "checking for a rehearsal"
             outcome, error = Outcome(), rehearsal
         else:
-            outcome, error = call(job, job.argv(dry_run, state_dir) + list(extra))
+            try:
+                function = entry_point(job)
+            except Exception as exc:  # a broken install, reported like any failure
+                traceback.print_exc()
+                _step = "loading the job"
+                outcome, error = Outcome(), one_sentence(describe(exc))
+            else:
+                result, error = _invoke(function, job.argv(dry_run, state_dir) + list(extra))
+                outcome = result if isinstance(result, Outcome) else Outcome()
     finally:
         shutil.rmtree(work, ignore_errors=True)
     if outcome.summary:
@@ -267,8 +283,9 @@ def run(job, dry_run=False, extra=()):
 
 
 def ready(job):
-    """Whether every env file the job reads exists and has something in it."""
-    return all(os.path.isfile(path) and os.path.getsize(path) > 0 for path in job.env_files)
+    """Whether the job is on, and every env file it reads exists and has something in it."""
+    return job.enabled and all(os.path.isfile(path) and os.path.getsize(path) > 0
+                               for path in job.env_files)
 
 
 def main(argv=None):
@@ -277,17 +294,27 @@ def main(argv=None):
     list_parser = sub.add_parser("list", help="Every registered job, its schedule and account.")
     readiness = list_parser.add_mutually_exclusive_group()
     readiness.add_argument("--ready", action="store_true",
-                           help="Only the names of scheduled jobs whose env files have content.")
+                           help="Only the names of the jobs a timer, the queue or a path unit "
+                                "starts, that are on and whose env files have content.")
     readiness.add_argument("--not-ready", action="store_true",
-                           help="Only the names of scheduled jobs with an empty env file.")
+                           help="Only the names of those jobs that are on but whose env file "
+                                "is empty.")
+    readiness.add_argument("--timers", action="store_true",
+                           help="Only the names of the ready jobs with a timer of their own.")
+    readiness.add_argument("--off", action="store_true",
+                           help="Only the names of the jobs jobs.toml turns off.")
     readiness.add_argument("--queued", action="store_true",
                            help="Only the names of the queued jobs, in the order they run.")
+    readiness.add_argument("--path-units", action="store_true",
+                           help="Only the names of the jobs a request from Discord starts.")
     run_parser = sub.add_parser("run", help="Run a job as its timer does.")
     run_parser.add_argument("job")
     run_parser.add_argument("--dry-run", action="store_true",
                             help="The job's own dry run; an alert is printed, not posted.")
     units_parser = sub.add_parser("units", help="Write each job's systemd drop-ins.")
     units_parser.add_argument("--out", required=True, metavar="DIR")
+    sub.add_parser("discord-register", help="Register the Discord slash commands, from "
+                                            "discord.env's variables.")
     argv = sys.argv[1:] if argv is None else list(argv)
     extra = argv[argv.index("--") + 1:] if "--" in argv else []
     args = parser.parse_args(argv[:argv.index("--")] if "--" in argv else argv)
@@ -297,9 +324,19 @@ def main(argv=None):
         if args.queued:
             print("\n".join(queue.jobs))
             return
+        if args.path_units:
+            print("\n".join(job.name for job in registry.load() if job.discord))
+            return
+        if args.off:
+            print("\n".join(job.name for job in registry.load() if not job.enabled))
+            return
         for job in registry.load():
-            if args.ready or args.not_ready:
-                if job.scheduled and ready(job) == args.ready:
+            started = job.scheduled or job.discord
+            if args.timers:
+                if job.schedule and not job.queued and ready(job):
+                    print(job.name)
+            elif args.ready or args.not_ready:
+                if started and job.enabled and ready(job) == args.ready:
                     print(job.name)
             else:
                 when = f"queue: {queue.schedule}" if job.queued else job.schedule or "on demand"
@@ -309,6 +346,10 @@ def main(argv=None):
         from session_ops.ops import units
         for path in units.write(registry.load(), registry.load_queue(), args.out):
             print(path)
+        return
+    if args.command == "discord-register":
+        from session_ops.ops import discord_commands
+        discord_commands.main()
         return
     try:
         job = registry.get(args.job)
