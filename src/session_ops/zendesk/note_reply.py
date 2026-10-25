@@ -1248,6 +1248,15 @@ def say(session, subdomain, ticket_id, comment_id, text, dry_run, error=True):
 # ---- Entry point ------------------------------------------------------------
 
 
+# A live chat keeps the customer's newest messages off the ticket, so these would
+# answer, translate or send against a conversation that has moved on.
+READS_CUSTOMER = ("draft", "reply", "english")
+OPEN_CHAT_REFUSAL = (
+    "The customer's newest message is still in a live chat, so it is not on this ticket "
+    "yet and nothing was done. Zendesk adds it once the chat ends, about 10 minutes after "
+    "the ticket has no assignee. Then add your note again.")
+
+
 def latest_command(comments, api_user, session, subdomain):
     """The newest private note that is a command from someone allowed to give one.
 
@@ -1308,6 +1317,10 @@ def main(argv=None):
     if api.has_marker(comments, done_marker(command["id"])):
         print(f"#{args.ticket}: this command was already handled; nothing written.")
         clear_queued(session, subdomain, args.ticket, args.dry_run)
+        return
+    if (command["action"] in READS_CUSTOMER and api.is_messaging(ticket)
+            and api.has_open_chat(session, subdomain, args.ticket)):
+        say(session, subdomain, args.ticket, command["id"], OPEN_CHAT_REFUSAL, args.dry_run)
         return
 
     if command["action"] == "draft":

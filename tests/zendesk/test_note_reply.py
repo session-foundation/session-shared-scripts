@@ -1287,21 +1287,44 @@ class Composition(unittest.TestCase):
 
 
 class Model(unittest.TestCase):
-    def run_main(self, action, flag=()):
+    def run_main(self, action, flag=(), ticket=None, open_chat=False):
         env = {"ZENDESK_SUBDOMAIN": "sub", "ZENDESK_EMAIL": "e", "ZENDESK_API_TOKEN": "t"}
         command = {"id": 9, "author": AGENT, "action": action, "brief": "x"}
         ran = []
         with mock.patch.dict(os.environ, env), \
                 Patched(api, zendesk_session=lambda *a: object(),
-                        fetch_ticket=lambda *a: {"id": 7, "status": "open"},
-                        fetch_comments=lambda *a, **k: []), \
+                        fetch_ticket=lambda *a: ticket or {"id": 7, "status": "open"},
+                        fetch_comments=lambda *a, **k: [],
+                        has_open_chat=lambda *a: open_chat), \
                 Patched(note_reply, api_user_id=lambda *a: API_USER,
                         latest_command=lambda *a: command,
+                        say=lambda *a, **k: ran.append(("said", a[4])),
                         run_draft=lambda *a: ran.append("draft"),
+                        run_reply=lambda *a: ran.append("reply"),
                         run_solve=lambda *a: ran.append("solve")), \
                 Patched(claude_api, model=lambda: sys.exit("Claude API is down")):
             note_reply.main(["--ticket", "7", *flag])
         return ran
+
+    DM = {"id": 7, "status": "open", "via": {"channel": "sunshine_conversations_twitter_dm"}}
+
+    def test_an_open_chat_refuses_what_reads_the_customer(self):
+        for action in note_reply.READS_CUSTOMER:
+            with self.subTest(action=action):
+                self.assertEqual(self.run_main(action, ticket=self.DM, open_chat=True),
+                                 [("said", note_reply.OPEN_CHAT_REFUSAL)])
+
+    def test_an_open_chat_does_not_block_solve(self):
+        self.assertEqual(self.run_main("solve", ticket=self.DM, open_chat=True), ["solve"])
+
+    def test_an_ended_or_unknown_chat_lets_the_command_run(self):
+        for state in (False, None):
+            with self.subTest(state=state):
+                self.assertEqual(self.run_main("reply", ticket=self.DM, open_chat=state),
+                                 ["reply"])
+
+    def test_a_non_messaging_ticket_is_never_checked(self):
+        self.assertEqual(self.run_main("draft", open_chat=True), ["draft"])
 
     def test_a_command_that_needs_no_claude_runs_without_the_model_lookup(self):
         self.assertEqual(self.run_main("solve"), ["solve"])
