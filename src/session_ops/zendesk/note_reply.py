@@ -150,6 +150,14 @@ def draft_marker(comment_id):
     return api.marker("claude:draft", comment_id)
 
 
+def auto_marker(source_ticket_id):
+    """Marks a draft the digest wrote unprompted, naming the ticket whose brief it reused."""
+    return api.marker("claude:auto", source_ticket_id)
+
+
+AUTO_MARKER_PREFIX = auto_marker("")[:-1]
+
+
 def english_marker(latest_public_id):
     """Records how far a transcript note read, so re-running is cheap.
 
@@ -474,6 +482,26 @@ def house_cell(book, group, platform):
     return None, None
 
 
+def ground(ticket, sample, book):
+    """Where the ticket sits in the house answers, placing it with Claude when no tag
+    says so yet.
+
+    Returns (group, cell, covering, title, precedent, new_tags); new_tags caches a
+    fresh placement on the ticket.
+    """
+    group, platform = tagged_placement(ticket)
+    new_tags = []
+    if book and not group:
+        group, platform = place_ticket(book, ticket, sample)
+        new_tags = ([f"{TAG_GROUP_PREFIX}{group}"] if group else []) + \
+                   ([f"{TAG_PLATFORM_PREFIX}{platform}"] if platform else [])
+    cell, covering = house_cell(book, group, platform)
+    title = next((g["title"] for g in (book or {}).get("groups", [])
+                  if g["key"] == group), group)
+    precedent = render_precedent(cell, title, covering) if cell else None
+    return group, cell, covering, title, precedent, new_tags
+
+
 def render_precedent(cell, title, platform):
     """The house answer as prompt text.
 
@@ -715,7 +743,7 @@ def compose(sample, brief, previous=None, precedent=None, thread=None):
 
 
 def build_draft_note(result, brief, comment_id, amended=False,
-                     cell=None, title=None, covering=None):
+                     cell=None, title=None, covering=None, unprompted=None):
     """The note the agent reviews, as HTML.
 
     Each option sits in its own numbered verbatim block: those are what `reply` will
@@ -725,9 +753,16 @@ def build_draft_note(result, brief, comment_id, amended=False,
     The instructions name the commands, so they are written mid-line on purpose:
     COMMAND only matches at the start of a line, so this note cannot command itself
     even if the trigger is misconfigured.
+
+    `unprompted` is (what, brief_label, origin) for a draft the digest wrote with no
+    command: `what` completes "Claude drafted", and `origin` goes in the auto_marker
+    it carries instead of the command markers.
     """
     options = result["options"]
-    what = "revised the reply" if amended else "drafted a reply"
+    if unprompted:
+        what = f"drafted {unprompted[0]}. Nobody has reviewed it yet"
+    else:
+        what = "revised the reply" if amended else "drafted a reply"
     lead = (f"Claude {what}. It will be sent in {result['language']}.") if len(options) == 1 \
         else (f"Claude {what}: {len(options)} options, in {result['language']}. "
               f"Pick one with a private note reading claude: reply 2.")
@@ -739,9 +774,11 @@ def build_draft_note(result, brief, comment_id, amended=False,
         if not result["is_english"] and (option.get("back_translation") or "").strip():
             out += [para(f"Option {number}, back in English:"),
                     verbatim(option["back_translation"].strip())]
-    out += [para("Brief this was written from:" if not amended
-                 else "Change this revision was asked for:"),
-            verbatim(brief.strip())]
+    if brief:
+        out += [para(unprompted[1] if unprompted
+                     else "Change this revision was asked for:" if amended
+                     else "Brief this was written from:"),
+                verbatim(brief.strip())]
     if cell:
         out.append(para(f"Shaped by what we usually reply to: {title} ({covering}), "
                         f"{cell['n']} solved tickets, {cell['consistency']} consistency."))
@@ -751,9 +788,11 @@ def build_draft_note(result, brief, comment_id, amended=False,
             out.append(para("Careful, from those past replies: " + cell["caveat"].strip()))
     send = "add a private note reading claude: reply" if len(options) == 1 \
         else "add a private note reading claude: reply <the option number>"
+    markers = auto_marker(unprompted[2]) if unprompted \
+        else f"{done_marker(comment_id)} {draft_marker(comment_id)}"
     out += [para(f"To send it exactly as above, {send}"),
             para("To change it, add a private note reading claude: draft <a new brief>"),
-            para(f"{done_marker(comment_id)} {draft_marker(comment_id)}")]
+            para(markers)]
     return "".join(out)
 
 
@@ -883,24 +922,15 @@ def run_draft(session, subdomain, ticket, comments, command, api_user, dry_run):
     if any(c.get("public") and c.get("author_id") in authors | {api_user}
            for c in newer):
         shown = {}
+    # Amending keeps what the agent approved, and nobody approved an unprompted draft.
+    if shown and AUTO_MARKER_PREFIX in comment_text(comments[len(newer)]):
+        shown = {}
     previous = "\n\n".join(f"Option {n}:\n{shown[n]}" for n in sorted(shown)) or None
     thread = follow_up(comments, authors)
 
     sample = api.customer_text(session, subdomain, ticket, comments,
                                CUSTOMER_SAMPLE_CHARS, authors)
-    book = load_house()
-    group, platform = tagged_placement(ticket)
-    new_tags = []
-    if book and not group:
-        group, platform = place_ticket(book, ticket, sample)
-        # Cached on the ticket so a revision does not pay for the same call again,
-        # and so the placement is visible to a human who disagrees with it.
-        new_tags = ([f"{TAG_GROUP_PREFIX}{group}"] if group else []) + \
-                   ([f"{TAG_PLATFORM_PREFIX}{platform}"] if platform else [])
-    cell, covering = house_cell(book, group, platform)
-    title = next((g["title"] for g in (book or {}).get("groups", [])
-                  if g["key"] == group), group)
-    precedent = render_precedent(cell, title, covering) if cell else None
+    group, cell, covering, title, precedent, new_tags = ground(ticket, sample, load_house())
     if cell:
         print(f"#{ticket_id}: grounded in {group}/{covering} "
               f"({cell['n']} solved, {cell['consistency']} consistency).")

@@ -71,13 +71,14 @@ import requests
 
 from session_ops.shared import discord, http, state as dedup
 from session_ops.shared.discord import clip, post_to_discord
-from session_ops.shared.env import get_env
+from session_ops.shared.env import get_env, rehearsing
 from session_ops.shared.text import squash
 from session_ops.zendesk.api import (REVIEW_CHANNEL, SEARCH_RESULT_LIMIT, fetch_comments,
                                      fetch_tickets, has_open_chat,
                                      hydrate_requester_activity, is_store_review,
                                      review_platform, review_stars, ticket_url,
                                      zendesk_session)
+from session_ops.zendesk import auto_draft
 from session_ops.zendesk.claude_api import claude_json, model as newest_opus
 
 # Never analyzed. A store review cannot be answered the way a ticket can: it takes
@@ -684,6 +685,7 @@ COLLAPSED_LINKS_CHARS = 900
 UNFLAGGED_MARKER = "💤"
 NON_ENGLISH_MARKER = "🌐"
 OPEN_CHAT_MARKER = "💬"
+DRAFTED_MARKER = "📝"
 
 # ---- Components V2 ---------------------------------------------------------
 #
@@ -853,6 +855,30 @@ def build_open_chat_line(ticket_ids, subdomain):
             f"newest message not on the ticket until an admin unassigns it: {links}", set())
 
 
+def build_drafted_line(ticket_ids, subdomain):
+    """The tickets that got an unprompted draft from a known brief, waiting on a human.
+    None when there are none.
+
+        📝 **2** drafted from a known answer, to check and send with claude: reply N
+        — #28891, #28880
+
+    Covers no ticket: each is accounted for by its own line elsewhere in the digest.
+    """
+    if not ticket_ids:
+        return None
+    links, used = [], 0
+    for tid in ticket_ids:
+        link = f"[#{tid}]({ticket_url(subdomain, tid)})"
+        used += len(link) + 2
+        if used > COLLAPSED_LINKS_CHARS:
+            break
+        links.append(link)
+    if len(ticket_ids) > len(links):
+        links.append(f"+{len(ticket_ids) - len(links)} more")
+    return (f"{DRAFTED_MARKER} **{len(ticket_ids)}** drafted from a known answer, to "
+            f"check and send with claude: reply N — {', '.join(links)}", set())
+
+
 def build_header(findings, highlights, stats=None):
     """The lead lines: what was looked at, the category tally, duplicate clusters.
 
@@ -968,8 +994,9 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
                    f"**{len(shown) + len(omitted)}** worth looking into.")
     open_chats = build_open_chat_line((stats or {}).get("open_chats"), subdomain)
     non_english = build_non_english_line(findings, subdomain, updated_ids)
-    # First, under the header: the run's to-do lists, for an admin and for `claude: english`.
-    entries = [line for line in (open_chats, non_english) if line]
+    drafted = build_drafted_line((stats or {}).get("drafted"), subdomain)
+    # First, under the header: the run's to-do lists, for an admin and for the `claude:` notes.
+    entries = [line for line in (open_chats, non_english, drafted) if line]
     entries += [
         (build_ticket_line(f, subdomain, is_update=f.get("id") in updated_ids),
          {f.get("id")})
@@ -1029,6 +1056,11 @@ def main(argv=None):
                              "real run, after Discord accepts the post.")
     parser.add_argument("--state-retention-days", type=int, default=30, metavar="N",
                         help="Forget state entries older than N days (default: 30).")
+    parser.add_argument("--known-briefs", metavar="PATH",
+                        help="Cache of briefs support already sent. When set, tickets one "
+                             "of them answers get a private draft note before the digest "
+                             "is posted. Needs ZENDESK_HOUSE_ANSWERS. Writes to Zendesk "
+                             "except under --dry-run; skipped under --no-discord.")
     parser.add_argument("--dump-batch", metavar="PATH",
                         help="Write the batch (tickets, prompt, schema) to PATH and exit, for "
                              "hand-classification. WARNING: writes ticket content to disk.")
@@ -1180,10 +1212,17 @@ def main(argv=None):
     print(f"{len(findings)} tickets classified; {len(shown) + len(omitted)} worth looking into"
           + (f" ({len(omitted)} beyond the display cap)." if omitted else "."))
 
-    messages, coverage = build_messages(findings, subdomain, stats, updated_ids)
     # Classified from a conversation missing its newest message, so left unrecorded:
     # once the chat ends the ticket is reported again with that message in it.
     open_chats = stats.get("open_chats") or set()
+    # Before the post, so the digest can say which tickets already carry a draft. Not
+    # under --no-discord: a counts-only run must not write to tickets.
+    if args.known_briefs and zd and classified and not args.no_discord:
+        stats["drafted"] = auto_draft.draft_known(
+            zd, subdomain, classified, findings, args.known_briefs, open_chats,
+            dry_run=args.dry_run or rehearsing())
+
+    messages, coverage = build_messages(findings, subdomain, stats, updated_ids)
     if args.dry_run:
         print(json.dumps(messages, indent=2, ensure_ascii=False))
         if args.state:

@@ -36,6 +36,28 @@ which publishes that option **verbatim** and moves the ticket to `pending`. A ba
 `claude: reply` sends the only option when there is one, and refuses to guess when
 there are several.
 
+## Drafts nobody asked for
+
+The weekday digest writes the same draft note on its own, before it posts, when a
+ticket nobody has answered matches an answer support already gave. A known answer is a
+`claude: draft` brief that went out as a ticket's first reply with no amendment, from
+the same house-answer group. Claude picks the one that fully answers the ticket, or
+none, and rejects briefs that name another ticket, promise an action, or carry a fact
+that has since expired, like a pending release.
+
+A law-enforcement request gets no brief: it gets the standard reply in
+`STANDARD_REPLIES` ([auto_draft.py](../../src/session_ops/zendesk/auto_draft.py)), word
+for word and untranslated, because what Session tells an authority must not vary.
+
+An abuse report, by the digest's own category, is composed from the standing brief in
+`STANDING_BRIEFS`, in the reporter's language: we can block the reported Session ID
+from the communities Session operates, and that is all.
+
+The note says which ticket the brief came from and carries `[claude:auto:<ticket id>]`
+instead of a command's markers. Send it with `claude: reply N`. A `claude: draft` after
+it starts over from the new brief rather than amending it: amending keeps wording an
+agent approved, and nobody approved this one.
+
 ## The commands
 
 | Command | What it does | Touches the customer |
