@@ -6,10 +6,11 @@ problem group in the house answers, that went out as the ticket's first reply wi
 amendment. Those briefs are cached in a file beside the digest's state and topped up
 from `tags:claude-sent` on every run.
 
-For each new ticket nobody has answered, Claude places it in a group, picks the past
-brief that fully answers it (or none), and composes from that brief exactly as
-`claude: draft` would. A group in STANDARD_REPLIES gets its fixed text instead,
-uncomposed, and a category in STANDING_BRIEFS is composed from its fixed brief.
+For each new ticket nobody has answered, Claude places it in a group; only a group in
+DRAFT_GROUPS is drafted. Claude picks the past brief that fully answers it (or none),
+and composes from that brief exactly as `claude: draft` would. A group in
+STANDARD_REPLIES gets its fixed text instead, uncomposed, and a category in
+STANDING_BRIEFS is composed from its fixed brief.
 Each is the same private draft note, so an agent sends it with `claude: reply N`, or
 replaces it with `claude: draft <a new brief>`.
 
@@ -39,8 +40,30 @@ SELECT_TIMEOUT_SECONDS = 120
 BUDGET_SECONDS = 20 * 60
 # A dead key or an exhausted balance fails every ticket the same way.
 MAX_FAILURES = 3
+# A runaway guard on the backfill, far above the sent tickets one retention window holds.
+MAX_SENT_TICKETS = 20000
 
 SKIP_CATEGORIES = frozenset({"spam_or_solicitation", "positive_review"})
+
+# The house-answer groups whose first reply support settled on; the rest vary too much
+# per ticket for an unprompted draft to be worth a reviewer's time.
+DRAFT_GROUPS = frozenset({
+    "reporting-illegal-content",
+    "needs-more-detail",
+    "account-unrecoverable-without-recovery-phrase",
+    "recovery-phrase-location-and-login-basics",
+    "deleted-data-not-recoverable",
+    "lost-contacts-not-restorable",
+    "law-enforcement-requests",
+    "push-notifications-not-arriving",
+    "messages-failing-to-send",
+    "connection-path-errors",
+    "attachments-failing-to-send",
+    "call-failures-and-quality",
+    "messages-notified-but-not-appearing",
+    "delete-account-and-data",
+    "leaked-recovery-phrase",
+})
 
 # House-answer groups answered with one fixed text, never composed or translated: what
 # Session says to an authority has to be the same every time. Sent only by a human's
@@ -130,10 +153,17 @@ def load_cache(path):
 
 
 def refresh_cache(session, subdomain, api_user, cache, today):
-    """Add the briefs sent since the last scan, and age out the old ones."""
-    since = cache.get("scanned_through")
-    query = "type:ticket tags:claude-sent" + (f" updated>{since}" if since else "")
-    tickets, _ = api.fetch_tickets(session, subdomain, query, api.SEARCH_RESULT_LIMIT)
+    """Add the briefs sent since the last scan, and age out the old ones.
+
+    The scan only moves on when it read everything: a truncated search or a failed
+    comment read is retried from the same point next run.
+    """
+    cutoff = (today - timedelta(days=BRIEF_MAX_AGE_DAYS)).isoformat()
+    since = cache.get("scanned_through") or cutoff
+    query = (f"type:ticket tags:claude-sent updated>{since} "
+             "order_by:created_at sort:desc")
+    tickets, matched = api.fetch_every_ticket(session, subdomain, query, MAX_SENT_TICKETS)
+    complete = matched is None or len(tickets) >= matched
     added = 0
     for ticket in tickets:
         group, platform = note_reply.tagged_placement(ticket)
@@ -141,18 +171,22 @@ def refresh_cache(session, subdomain, api_user, cache, today):
             continue
         comments = api.fetch_comments(session, subdomain, ticket["id"], order="asc",
                                       optional=True)
-        found = sent_first_brief(comments or [], api_user)
+        if comments is None:
+            complete = False
+            continue
+        found = sent_first_brief(comments, api_user)
         if found:
             cache["briefs"][str(ticket["id"])] = {
                 "group": group, "platform": platform or "unknown",
                 "brief": found[0], "sent_at": found[1]}
             added += 1
-    cutoff = (today - timedelta(days=BRIEF_MAX_AGE_DAYS)).isoformat()
     cache["briefs"] = {tid: b for tid, b in cache["briefs"].items()
                        if (b.get("sent_at") or "") >= cutoff}
-    cache["scanned_through"] = (today - timedelta(days=RESCAN_DAYS)).isoformat()
-    print(f"Known briefs: read {len(tickets)} sent ticket(s), {added} first-reply "
-          f"brief(s); {len(cache['briefs'])} cached.")
+    if complete:
+        cache["scanned_through"] = (today - timedelta(days=RESCAN_DAYS)).isoformat()
+    print(f"Known briefs: read {len(tickets)} of {matched} sent ticket(s), {added} "
+          f"first-reply brief(s); {len(cache['briefs'])} cached"
+          + ("." if complete else "; incomplete, rescanned next run."))
     return cache
 
 
@@ -251,17 +285,17 @@ def eligible(ticket, comments, authors, api_user):
     """Whether nobody has answered or picked up this ticket yet.
 
     Only a first reply: a brief that answered someone's opening message does not answer
-    their follow-up.
+    their follow-up. Any private note from a person means someone is on it.
     """
     tags = set(ticket.get("tags") or [])
     if tags & {note_reply.TAG_DRAFTED, note_reply.TAG_QUEUED, note_reply.TAG_SENT}:
         return False
     for comment in comments:
+        author = comment.get("author_id")
         if comment.get("public"):
-            if comment.get("author_id") not in authors:
+            if author not in authors:
                 return False
-        elif comment.get("author_id") != api_user and \
-                note_reply.parse_command(note_reply.comment_text(comment)):
+        elif author != api_user and author not in authors:
             return False
     return True
 
@@ -282,8 +316,8 @@ def draft_ticket(session, subdomain, ticket, cache, book, api_user, today, dry_r
     """Draft one ticket. Returns the source ticket id whose brief was reused, the group
     or category of a standard reply or standing brief, or None.
 
-    `category` is the digest's: an abuse report is known from it alone, with no
-    placement call.
+    `category` is the digest's. Placement runs first even for a category with a
+    standing brief: a police request about abuse has to get the fixed legal text.
     """
     ticket_id = ticket["id"]
     comments = api.fetch_comments(session, subdomain, ticket_id)
@@ -293,16 +327,12 @@ def draft_ticket(session, subdomain, ticket, cache, book, api_user, today, dry_r
         return None
     sample = api.customer_text(session, subdomain, ticket, comments,
                                note_reply.CUSTOMER_SAMPLE_CHARS, authors)
-    if category in STANDING_BRIEFS:
-        name, brief = STANDING_BRIEFS[category]
-        result = note_reply.compose(clip(sample, note_reply.CUSTOMER_SAMPLE_CHARS), brief)
-        print(f"#{ticket_id}: {category}, drafted {len(result['options'])} option(s) "
-              f"from the standing brief.")
-        write_draft(session, subdomain, ticket_id, result, brief,
-                    (name, "Standing brief:", category), dry_run)
-        return category
     group, cell, covering, title, precedent, new_tags = note_reply.ground(
         ticket, sample, book)
+    if group not in DRAFT_GROUPS:
+        if new_tags and not dry_run:
+            note_reply.change_tags(session, subdomain, ticket_id, add=new_tags)
+        return None
     if group in STANDARD_REPLIES:
         name, text = STANDARD_REPLIES[group]
         print(f"#{ticket_id}: {group}, drafted the standard reply.")
@@ -310,7 +340,15 @@ def draft_ticket(session, subdomain, ticket, cache, book, api_user, today, dry_r
                     (f"the standard reply to {name}, word for word", None, group),
                     dry_run, tags=new_tags)
         return group
-    rows = candidates(cache, group) if group else []
+    if category in STANDING_BRIEFS:
+        name, brief = STANDING_BRIEFS[category]
+        result = note_reply.compose(clip(sample, note_reply.CUSTOMER_SAMPLE_CHARS), brief)
+        print(f"#{ticket_id}: {category}, drafted {len(result['options'])} option(s) "
+              f"from the standing brief.")
+        write_draft(session, subdomain, ticket_id, result, brief,
+                    (name, "Standing brief:", category), dry_run, tags=new_tags)
+        return category
+    rows = candidates(cache, group)
     if not rows:
         if new_tags and not dry_run:
             note_reply.change_tags(session, subdomain, ticket_id, add=new_tags)
@@ -351,11 +389,17 @@ def draft_known(session, subdomain, tickets, findings, cache_path, skip_ids=(),
     try:
         api_user = note_reply.api_user_id(session, subdomain)
         cache = refresh_cache(session, subdomain, api_user, load_cache(cache_path), today)
-    except SystemExit as exc:
-        print(f"Note: could not read the known briefs ({exc}); drafting skipped.")
+    # Broad on purpose, here and per ticket: drafting runs before the digest posts, so
+    # anything it raises would cost the digest itself.
+    except (Exception, SystemExit) as exc:
+        print(f"Note: could not read the known briefs ({type(exc).__name__}: {exc}); "
+              f"drafting skipped.")
         return []
     if not dry_run:
-        write_json(cache_path, cache)
+        try:
+            write_json(cache_path, cache)
+        except OSError as exc:
+            print(f"Note: could not save the known briefs ({exc}).", file=sys.stderr)
 
     category = {f.get("id"): f.get("category") for f in findings}
     rank = {f.get("id"): f.get("priority_rank", 9999) for f in findings}
@@ -373,9 +417,10 @@ def draft_known(session, subdomain, tickets, findings, cache_path, skip_ids=(),
             if draft_ticket(session, subdomain, ticket, cache, book, api_user, today,
                             dry_run, category[ticket["id"]]):
                 drafted.append(ticket["id"])
-        except SystemExit as exc:
+        except (Exception, SystemExit) as exc:
             failures += 1
-            print(f"#{ticket['id']}: not drafted ({exc}).", file=sys.stderr)
+            print(f"#{ticket['id']}: not drafted ({type(exc).__name__}: {exc}).",
+                  file=sys.stderr)
             if failures >= MAX_FAILURES:
                 print(f"Drafting stopped after {failures} failures.")
                 break

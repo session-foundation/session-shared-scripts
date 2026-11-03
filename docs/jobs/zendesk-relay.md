@@ -45,13 +45,18 @@ the same house-answer group. Claude picks the one that fully answers the ticket,
 none, and rejects briefs that name another ticket, promise an action, or carry a fact
 that has since expired, like a pending release.
 
+Only the groups in `DRAFT_GROUPS` are drafted: those whose first reply support has
+settled on, like reports of illegal content, lost recovery phrases, unrecoverable data
+and the common delivery, notification, connection and call failures. A ticket placed
+anywhere else, or nowhere, is left to an agent.
+
 A law-enforcement request gets no brief: it gets the standard reply in
 `STANDARD_REPLIES` ([auto_draft.py](../../src/session_ops/zendesk/auto_draft.py)), word
 for word and untranslated, because what Session tells an authority must not vary.
 
-An abuse report, by the digest's own category, is composed from the standing brief in
-`STANDING_BRIEFS`, in the reporter's language: we can block the reported Session ID
-from the communities Session operates, and that is all.
+An abuse report, by the digest's own category and in one of those groups, is composed
+from the standing brief in `STANDING_BRIEFS`, in the reporter's language: we can block
+the reported Session ID from the communities Session operates, and that is all.
 
 The note says which ticket the brief came from and carries `[claude:auto:<ticket id>]`
 instead of a command's markers. Send it with `claude: reply N`. A `claude: draft` after

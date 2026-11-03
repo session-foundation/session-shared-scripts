@@ -92,13 +92,14 @@ support has not answered yet and that a brief support already sent answers; see
 [Drafts nobody asked for](zendesk-relay.md#drafts-nobody-asked-for). A 📝 line lists
 them under the header. Up to three Claude calls a ticket: placement in the house
 answers (skipped when the ticket is already tagged), the choice of brief, and the draft.
+Only a ticket placed in one of the groups in `DRAFT_GROUPS` gets past placement.
 
 | | |
 | --- | --- |
 | Enabled by | `--known-briefs PATH`, which `digest_job.py` sets beside `--state`, and `ZENDESK_HOUSE_ANSWERS` |
-| Cache | `known_briefs.json`: briefs read from `tags:claude-sent`, topped up each run, dropped after 180 days. Losing it costs one backfill |
+| Cache | `known_briefs.json`: briefs read from `tags:claude-sent`, topped up each run, dropped after 180 days. Losing it costs one backfill of those 180 days; a truncated search or a failed comment read rescans from the same point next run |
 | Fixed answers | a law-enforcement request gets the standard reply word for word; an abuse report is composed from a standing brief |
-| Not drafted | spam and positive reviews, tickets with a live chat open, tickets already tagged `claude-drafted`, `claude-queued` or `claude-sent`, and any ticket with a public reply from support or a `claude:` note |
+| Not drafted | spam and positive reviews, groups outside `DRAFT_GROUPS`, tickets with a live chat open, tickets already tagged `claude-drafted`, `claude-queued` or `claude-sent`, and any ticket with a public reply from support or a private note from anyone but the API user |
 | Bounds | 20 minutes of drafting a run, highest priority first; stops after three failures. A failure never fails the digest |
 | Dry run | `--dry-run` and a rehearsal compose but write no note and no cache; `--no-discord` drafts nothing |
 
