@@ -5,7 +5,7 @@ Documentation=https://github.com/session-foundation/session-shared-scripts
 
 [Timer]
 Persistent=yes
-RandomizedDelaySec=2min
+# No random delay: /run in Discord refuses a job its timeout would carry past the next run.
 
 [Install]
 WantedBy=timers.target

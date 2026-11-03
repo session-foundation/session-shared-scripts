@@ -44,6 +44,8 @@ from session_ops.store_versions.transitions import (
 
 TAGS_FILE = "/etc/session-ops/store-versions.toml"
 STATE_VERSION = 1
+# The job's UMask makes it 0600; the Discord relay's /versions reads it as another account.
+STATE_MODE = 0o644
 HOUR = 3600
 REMINDER_SECONDS = 12 * HOUR
 FAILING_AFTER_SECONDS = HOUR
@@ -339,9 +341,9 @@ def main(argv=None):
         apply()
         # Saved per step: a run killed mid-way reposts at most the step it was on.
         if args.state and step_messages:
-            write_json(args.state, state)
+            write_json(args.state, state, STATE_MODE)
     if args.state:
-        write_json(args.state, state)
+        write_json(args.state, state, STATE_MODE)
     if refused:
         # Without counts: the runner repeats an alert only when its text changes.
         sys.exit("Discord refused a post; it is retried next run.")

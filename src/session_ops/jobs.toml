@@ -12,6 +12,7 @@
 #   repeat_alert_hours  report the same failure again only this often until a run
 #                  succeeds, for a schedule short enough to repeat it every few minutes
 #   unit           further [Service] lines, over the template's hardening
+#   discord        startable by the Discord relay's account: offered to `/run`
 #
 #   max_age_hours  for a queued job, its queue's: the weekend's 72 h (73 h across
 #                  April's DST change), plus every job ahead of it running to its timeout
@@ -67,6 +68,7 @@ channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
 max_age_hours = 80
 # About 9 minutes; a full scan without --croql is ~110k requests, about 85 minutes.
 timeout = "2h"
+discord = true
 
 [[job]]
 name = "session-ops-silence"
@@ -120,6 +122,7 @@ env = ["CROWDIN_API_TOKEN", "PUBLISH_GIT_AUTHOR", "CROWDIN_DISCORD_WEBHOOK_URL"]
 channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
 max_age_hours = 80
 timeout = "1h"
+discord = true
 # Readable by this unit alone, at $CREDENTIALS_DIRECTORY; publishing needs it.
 unit = ["LoadCredential=github-app.pem:/etc/session-ops/github-app.pem"]
 
@@ -134,12 +137,3 @@ channel_env = "CROWDIN_DISCORD_WEBHOOK_URL"
 max_age_hours = 80
 timeout = "10min"
 unit = ["LoadCredential=github-app.pem:/etc/session-ops/github-app.pem"]
-
-[[job]]
-name = "release-stats"
-description = "Download counts of the latest Desktop and Android releases"
-entry = "session_ops.platforms.release_stats:main"
-args = ["--out", "{state}/runs"]
-user = "sessionops"
-env_files = ["/etc/session-ops/alerts.env"]
-timeout = "5min"
