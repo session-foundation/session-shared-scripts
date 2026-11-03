@@ -107,6 +107,18 @@ class Candidates(unittest.TestCase):
         self.assertIn("updated>2026-05-06", seen["query"])
         self.assertIn("order_by:created_at sort:desc", seen["query"])
 
+    def test_a_stuck_scan_never_reaches_past_the_retention_window(self):
+        seen = {}
+
+        def fake_search(session, subdomain, query, max_tickets):
+            seen["query"] = query
+            return [], 0
+        stuck = cache()
+        stuck["scanned_through"] = "2026-01-01"
+        with Patched(api, fetch_every_ticket=fake_search):
+            auto_draft.refresh_cache(None, "sub", API_USER, stuck, TODAY)
+        self.assertIn("updated>2026-05-06", seen["query"])
+
     def test_a_failed_comment_read_is_retried_next_run(self):
         refreshed, _ = self.refresh([{"id": 5, "tags": ["grp-call-failures-and-quality"]}],
                                     1, None)

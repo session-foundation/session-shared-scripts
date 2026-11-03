@@ -159,7 +159,8 @@ def refresh_cache(session, subdomain, api_user, cache, today):
     comment read is retried from the same point next run.
     """
     cutoff = (today - timedelta(days=BRIEF_MAX_AGE_DAYS)).isoformat()
-    since = cache.get("scanned_through") or cutoff
+    # A scan stuck incomplete would otherwise reread a window growing past the retention.
+    since = max(cache.get("scanned_through") or cutoff, cutoff)
     query = (f"type:ticket tags:claude-sent updated>{since} "
              "order_by:created_at sort:desc")
     tickets, matched = api.fetch_every_ticket(session, subdomain, query, MAX_SENT_TICKETS)
