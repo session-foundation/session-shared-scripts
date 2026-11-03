@@ -1,0 +1,12 @@
+# Starts a job when the Discord relay asks for it. Its drop-in, written by
+# `session-ops units`, sets PathChanged= on a `discord` job's request.
+[Unit]
+Description=Discord requests for session-ops job %i
+Documentation=https://github.com/session-foundation/session-shared-scripts
+
+[Path]
+# A request triggers once per write, so it is never removed.
+Unit=session-ops@%i.service
+
+[Install]
+WantedBy=paths.target

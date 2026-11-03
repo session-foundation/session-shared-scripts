@@ -118,6 +118,10 @@ class TestRun(unittest.TestCase):
                 self.assertNotIn("abcdef", scrubbed)
                 self.assertIn("(Caused", scrubbed)
 
+    def test_a_job_that_cannot_be_loaded_is_reported(self):
+        self.assertEqual(self.run_job(job("no_such_entry")), 1)
+        self.assertIn("during **loading the job**", self.posted[0][1][0]["content"])
+
     def test_missing_environment_is_reported_without_running_the_job(self):
         the_job = job("succeeds", env=("DEMO_MISSING",))
         self.assertEqual(self.run_job(the_job), 1)
@@ -217,6 +221,11 @@ class TestRun(unittest.TestCase):
 
 
 class TestCommandLine(unittest.TestCase):
+    def listed(self, *flags):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            runner.main(["list", *flags])
+        return out.getvalue().split()
+
     def test_dry_run_is_the_runners_and_what_follows_dashes_is_the_jobs(self):
         with mock.patch.object(runner, "run", return_value=0) as run, \
                 self.assertRaises(SystemExit):
