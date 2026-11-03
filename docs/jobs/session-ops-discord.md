@@ -20,10 +20,10 @@ options chosen.
 A request is refused unless Discord signed it in the last five minutes, it comes from
 `DISCORD_GUILD_ID` and, when `ALLOWED_CHANNEL_IDS` is set, one of its channels, and its
 author is in `ALLOWED_USER_IDS` or holds a role in `ALLOWED_ROLE_IDS`. Both lists empty
-refuses everybody. `/run` is registered hidden from everyone but server administrators,
-and the server's Integrations settings show it to the right role; that only hides it, and
-these checks are what refuse everyone else, administrators included. `/versions` only reads, so it is shown to
-everyone and skips the author check.
+refuses everybody, administrators included. Both commands are shown to every member, since
+Discord lets only someone who can use a command change who sees it; the server's
+Integrations settings can narrow the channels. `/versions` only reads, so it skips the
+author check.
 
 The relay runs as `opsbot`, which can start no unit itself. It can write only to
 `/run/session-ops/requests`, where `session-ops units` writes a `PathChanged=` watch for
