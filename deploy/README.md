@@ -7,10 +7,10 @@ does the work: accounts, venv, env files, units, timers, and migrating an older 
 | Unit | What it is |
 | --- | --- |
 | `session-ops@<job>.timer` → `.service` | One per job with a `schedule`; a generated drop-in sets its account, env files and schedule. |
-| `session-ops@<job>.path` → `.service` | For a job with `discord = true`: starts it when `/run` requests it. |
+| `session-ops@<job>.path` → `.service` | For a job with `discord = true`: starts it when `/run`, or `/mau` for mau, requests it. |
 | `session-ops-queue.timer` → `.service` | Starts the jobs in `jobs.toml`'s `[queue]`, which then run one at a time in its order. |
 | `zendesk-relay.service` | Always on, `127.0.0.1:8080`: Zendesk's `claude:` note webhooks. |
-| `session-ops-discord.service` | Always on, `127.0.0.1:8081`: the `/run` and `/versions` slash commands. See [Discord commands](#discord-commands). |
+| `session-ops-discord.service` | Always on, `127.0.0.1:8081`: the `/run`, `/mau`, `/mau-upload` and `/versions` slash commands. See [Discord commands](#discord-commands). |
 | `session-ops-alert@.service` | Every unit's `OnFailure=` backstop; see [session-ops-silence](../docs/jobs/session-ops-silence.md). |
 
 `session-ops list` shows the jobs; `session-ops run <job> [--dry-run] [-- job arguments]`
@@ -64,7 +64,7 @@ files and state over. Remove `/opt/zendesk`, `/etc/zendesk` and `/var/lib/zendes
 
 ## Discord commands
 
-What `/run` and `/versions` do, and who may run them:
+What `/run`, `/mau`, `/mau-upload` and `/versions` do, and who may run them:
 [session-ops-discord](../docs/jobs/session-ops-discord.md). To set them up:
 
 1. In the Developer Portal, create an application. Put its public key, its application

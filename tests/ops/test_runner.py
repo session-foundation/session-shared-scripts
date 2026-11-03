@@ -6,6 +6,7 @@ import io
 import os
 import tempfile
 import unittest
+from dataclasses import replace
 from unittest import mock
 
 from session_ops.ops import registry, runner
@@ -118,6 +119,10 @@ class TestRun(unittest.TestCase):
                 self.assertNotIn("abcdef", scrubbed)
                 self.assertIn("(Caused", scrubbed)
 
+    def test_a_job_that_is_off_neither_runs_nor_alerts(self):
+        self.assertEqual(self.run_job(job("raises", enabled=False)), 0)
+        self.assertEqual((fake_jobs.calls, self.posted), ([], []))
+
     def test_a_job_that_cannot_be_loaded_is_reported(self):
         self.assertEqual(self.run_job(job("no_such_entry")), 1)
         self.assertIn("during **loading the job**", self.posted[0][1][0]["content"])
@@ -225,6 +230,15 @@ class TestCommandLine(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as out:
             runner.main(["list", *flags])
         return out.getvalue().split()
+
+    def test_a_job_that_is_off_is_listed_as_off_and_never_as_ready(self):
+        jobs = [replace(job, enabled=job.name != "mau") for job in registry.load()]
+        with mock.patch.object(registry, "load", return_value=jobs):
+            with mock.patch.object(runner, "ready", side_effect=lambda job: job.enabled):
+                self.assertNotIn("mau", self.listed("--ready"))
+                self.assertNotIn("mau", self.listed("--not-ready"))
+            self.assertEqual(self.listed("--off"), ["mau"])
+        self.assertFalse(runner.ready(next(job for job in jobs if job.name == "mau")))
 
     def test_dry_run_is_the_runners_and_what_follows_dashes_is_the_jobs(self):
         with mock.patch.object(runner, "run", return_value=0) as run, \

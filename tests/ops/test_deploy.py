@@ -14,7 +14,8 @@ import tempfile
 import tomllib
 import unittest
 
-from session_ops.ops import registry, units
+from session_ops.ops import discord_commands, registry, units
+from session_ops.platforms import mau
 from tests.golden import assert_golden
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -102,10 +103,15 @@ class TestDeploy(unittest.TestCase):
             self.assertIn(f"\nd {registry.REQUESTS_DIR} 0770 root {units.RELAY_USER} -\n",
                           handle.read())
 
-    def test_the_discord_relay_can_write_requests_and_nothing_else(self):
+    def test_the_discord_relay_can_write_requests_and_mau_s_inbox_and_nothing_else(self):
+        mau_job = registry.get(discord_commands.MAU_JOB)
+        inbox = os.path.join(mau_job.state_dir, mau.INBOX)
         writable = re.findall(r"^ReadWritePaths=-?(.*)$",
                               unit_text("session-ops-discord.service"), re.MULTILINE)
-        self.assertEqual(writable, [registry.REQUESTS_DIR])
+        self.assertEqual(writable, [registry.REQUESTS_DIR, inbox])
+        with open(os.path.join(ROOT, "deploy", "install.sh"), encoding="utf-8") as handle:
+            self.assertIn(f'install -d -o {mau_job.user} -g {units.RELAY_USER} -m 770 '
+                          f'"$STATE/{mau_job.name}/{mau.INBOX}"', handle.read())
 
 
 class TestInstallScript(unittest.TestCase):

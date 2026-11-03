@@ -34,6 +34,8 @@ MemoryDenyWriteExecute=yes
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 ReadWritePaths=/run/session-ops/requests
+# `-`: a host without the inbox yet still answers /run.
+ReadWritePaths=-/var/lib/session-ops/mau/inbox
 
 [Install]
 WantedBy=multi-user.target

@@ -1,7 +1,7 @@
 """
     uv run python -m unittest tests.ops.test_discord_relay
 
-Offline: systemctl, the path units and Discord's API are fakes, and
+Offline: systemctl, the path units, Discord's CDN and its webhook API are fakes, and
 requests go through FastAPI's TestClient. The relay can start jobs on the host, so most
 of this is about who it refuses.
 """
@@ -12,12 +12,15 @@ import subprocess
 import tempfile
 import time
 import unittest
+from dataclasses import replace
+from datetime import datetime
 from unittest import mock
 
 from fastapi.testclient import TestClient
 from nacl.signing import SigningKey
 
 from session_ops.ops import discord_commands, discord_relay as relay, registry
+from session_ops.platforms import mau
 from session_ops.store_versions import job as store_versions
 from session_ops.shared.testing import FakeResponse, FakeSession, Patched
 
@@ -28,7 +31,14 @@ ALLOWED_ROLE = "333"
 CHANNEL = "444"
 ENV = {"DISCORD_PUBLIC_KEY": KEY.verify_key.encode().hex(), "DISCORD_GUILD_ID": GUILD,
        "ALLOWED_USER_IDS": ALLOWED_USER, "ALLOWED_ROLE_IDS": ALLOWED_ROLE}
+EXPORT = f'Date,"{mau.PLAY_COLUMN}"\n"Sep 29, 2026","1,200"\n"Sep 30, 2026","1,250"\n'
+CDN_URL = "https://cdn.discordapp.com/attachments/1/2/All%20countries.csv?ex=1"
 
+
+def fixed_now(*day):
+    """A datetime class whose now() is noon on `day`."""
+    return type("Fixed", (datetime,), {"now": classmethod(
+        lambda cls, tz=None: datetime(*day, 12, tzinfo=tz))})
 
 
 class FakePathUnits:
@@ -70,12 +80,24 @@ class FakeSystemd:
         return subprocess.CompletedProcess(["systemctl", *args], 0, out, "")
 
 
-def command(name, options=(), *, user=ALLOWED_USER, roles=(), guild=GUILD, channel=CHANNEL):
+def command(name, options=(), *, user=ALLOWED_USER, roles=(), guild=GUILD, channel=CHANNEL,
+            resolved=None):
     data = {"name": name, "options": [{"name": k, "value": v} for k, v in options]}
+    if resolved:
+        data["resolved"] = resolved
     return {"type": relay.INTERACTION_COMMAND, "id": "999", "application_id": "app",
             "token": "tok", "guild_id": guild, "channel_id": channel, "data": data,
             "member": {"user": {"id": user}, "roles": list(roles)}}
 
+
+def upload(attachment):
+    return command(discord_commands.MAU_UPLOAD, [("file", "55")],
+                   resolved={"attachments": {"55": attachment}})
+
+
+def attachment(**overrides):
+    return {"id": "55", "filename": "All countries _ regions.csv", "size": len(EXPORT),
+            "url": CDN_URL, **overrides}
 
 
 def post(body, *, key=KEY, age=0, tamper=False):
@@ -179,6 +201,13 @@ class TestRun(RelayCase):
                               self.content(post(command("run", [("job", name)]))))
         self.assertEqual(self.started, [])
 
+    def test_a_discord_job_that_is_off_is_refused(self):
+        jobs = [replace(job, enabled=job.name != "crowdin-duplicates") for job in registry.load()]
+        with Patched(registry, load=lambda *args: jobs):
+            self.assertIn("not a job /run can start",
+                          self.content(post(command("run", [("job", "crowdin-duplicates")]))))
+        self.assertEqual(self.started, [])
+
     def test_a_running_or_waiting_queue_job_holds_it_off(self):
         queued = registry.load_queue().jobs
         for systemd in (FakeSystemd(running=[f"session-ops@{queued[0]}.service"]),
@@ -250,6 +279,142 @@ class TestRun(RelayCase):
                           self.content(post(command("run", [("job", "crowdin-sync")]))))
 
 
+class TestMau(RelayCase):
+    def setUp(self):
+        super().setUp()
+        self.inbox = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.inbox, True)
+        self.patch(relay, inbox=lambda: self.inbox, mau_on=lambda: True)
+
+    def request(self):
+        with open(os.path.join(self.inbox, mau.REQUEST), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_mau_starts_with_whom_to_answer_and_only_the_asker_sees_the_wait(self):
+        response = post(command(discord_commands.MAU, [("month", "2026-08")]))
+        self.assertEqual(response.json(), {"type": relay.RESPONSE_DEFERRED,
+                                           "data": {"flags": relay.EPHEMERAL}})
+        self.assertEqual(self.started, ["session-ops@mau.service"])
+        self.assertEqual(self.request(), {"application_id": "app", "token": "tok",
+                                          "month": "2026-08"})
+        self.assertEqual(os.stat(os.path.join(self.inbox, mau.REQUEST)).st_mode & 0o777, 0o644)
+        self.assertEqual(os.listdir(self.inbox), [mau.REQUEST])
+
+    def test_without_a_month_mau_answers_for_the_last(self):
+        post(command(discord_commands.MAU))
+        self.assertIsNone(self.request()["month"])
+
+    def test_a_month_that_has_not_ended_is_refused_before_starting(self):
+        for month in ("2099-01", "September"):
+            with self.subTest(month=month):
+                data = post(command(discord_commands.MAU, [("month", month)])).json()["data"]
+                self.assertEqual(data["flags"], relay.EPHEMERAL)
+                self.assertTrue(data["content"].startswith("❌ "))
+        self.assertEqual((self.started, os.listdir(self.inbox)), ([], []))
+
+    def test_a_request_nothing_picks_up_is_removed(self):
+        self.path_units.picks_up = False
+        self.assertIn("**mau** did not start",
+                      self.content(post(command(discord_commands.MAU))))
+        self.assertEqual(os.listdir(self.inbox), [])
+
+    def test_a_busy_queue_holds_it_off_and_writes_nothing(self):
+        queued = registry.load_queue().jobs[0]
+        with Patched(relay, systemctl=FakeSystemd(running=[f"session-ops@{queued}.service"])):
+            self.assertIn("running or waiting", self.content(post(command(discord_commands.MAU))))
+        self.assertEqual((self.started, os.listdir(self.inbox)), ([], []))
+
+    def test_run_does_not_start_mau(self):
+        self.assertIn("not a job /run can start",
+                      self.content(post(command("run", [("job", "mau")]))))
+        self.assertEqual(self.started, [])
+
+    def test_while_mau_is_off_it_is_refused(self):
+        with Patched(relay, mau_on=lambda: False):
+            self.assertIn("mau is off", self.content(post(command(discord_commands.MAU))))
+        self.assertEqual(self.started, [])
+
+
+class TestMauUpload(RelayCase):
+    def setUp(self):
+        super().setUp()
+        self.inbox = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.inbox, True)
+        self.cdn = FakeResponse({})
+        self.cdn.text = EXPORT
+        self.session = FakeSession([self.cdn, FakeResponse({})])
+        patched = Patched(relay, inbox=lambda: self.inbox, mau_on=lambda: True)
+        patched.__enter__()
+        self.addCleanup(patched.__exit__)
+        http = Patched(relay.http, Session=lambda **kwargs: self.session)
+        http.__enter__()
+        self.addCleanup(http.__exit__)
+
+    def told(self):
+        method, url, kwargs = self.session.calls[-1]
+        self.assertEqual((method, url), ("PATCH", f"{discord_commands.API}/webhooks/app/tok"
+                                                  "/messages/@original"))
+        return kwargs["json"]["content"]
+
+    def test_an_export_lands_in_the_inbox_under_a_name_mau_reads(self):
+        response = post(upload(attachment()))
+        self.assertEqual(response.json(), {"type": relay.RESPONSE_DEFERRED,
+                                           "data": {"flags": relay.EPHEMERAL}})
+        self.assertEqual(os.listdir(self.inbox), ["discord-999.csv"])
+        path = os.path.join(self.inbox, "discord-999.csv")
+        self.assertEqual(mau.parse_export(path),
+                         ("android", {"2026-09-29": 1200, "2026-09-30": 1250}))
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o644)
+        self.assertIn("Your Android export, 2 days from 2026-09-29 to 2026-09-30, is in mau's "
+                      "inbox. Run `/mau` once", self.told())
+
+    def test_an_export_without_last_month_s_end_says_so(self):
+        with Patched(relay, datetime=fixed_now(2026, 11, 3)):
+            post(upload(attachment()))
+        self.assertIn("no final figure for 31 October, which `/mau` needs for October 2026",
+                      self.told())
+
+    def test_an_app_store_connect_export_is_named_ios(self):
+        self.cdn.text = ('Name,"Session - Private Messenger"\nStart Date,9/1/26\n'
+                         'End Date,9/30/26\n\nDate,Active Last 30 Days\n9/30/26,42000.0\n')
+        with Patched(relay, datetime=fixed_now(2026, 10, 3)):
+            post(upload(attachment()))
+        self.assertIn("iOS export, 1 day from 2026-09-30", self.told())
+        self.assertNotIn("no final figure", self.told())
+
+    def test_a_file_mau_would_reject_is_refused_and_leaves_nothing_behind(self):
+        self.cdn.text = 'Date,Installs\n"Sep 30, 2026",4\n'
+        post(upload(attachment()))
+        self.assertEqual(os.listdir(self.inbox), [])
+        self.assertIn("not the export mau reads", self.told())
+
+    def test_the_cdn_failing_is_reported(self):
+        self.cdn.status_code = 404
+        post(upload(attachment()))
+        self.assertEqual(os.listdir(self.inbox), [])
+        self.assertIn("answered 404", self.told())
+
+    def test_what_cannot_be_an_export_is_refused_before_downloading(self):
+        for bad, why in ((attachment(filename="mau.xlsx"), "export a .csv"),
+                         (attachment(size=relay.MAX_UPLOAD_BYTES + 1), "larger"),
+                         (attachment(url="https://evil.test/a.csv"), "not on Discord's CDN"),
+                         (attachment(url=CDN_URL.replace("https", "http")), "not on Discord's CDN"),
+                         (None, "no file")):
+            with self.subTest(why=why):
+                self.assertIn(why, self.content(post(upload(bad))))
+        self.assertEqual(self.session.calls, [])
+        self.assertEqual(os.listdir(self.inbox), [])
+
+    def test_while_mau_is_off_nothing_is_downloaded(self):
+        with Patched(relay, mau_on=lambda: False):
+            self.assertIn("mau is off", self.content(post(upload(attachment()))))
+        self.assertEqual(self.session.calls, [])
+        self.assertEqual(os.listdir(self.inbox), [])
+
+    def test_someone_not_allowed_cannot_upload(self):
+        self.assertIn("not on the list", self.content(post(
+            {**upload(attachment()), "member": {"user": {"id": "5"}, "roles": []}})))
+        self.assertEqual(self.session.calls, [])
 
 
 def platform_state(**platforms):
@@ -327,26 +492,39 @@ class TestVersions(RelayCase):
 
 
 class TestCommands(unittest.TestCase):
-    def test_run_offers_the_discord_jobs_and_starts_hidden(self):
-        jobs = registry.load()
-        run, versions = discord_commands.commands(jobs)
+    def test_run_offers_the_discord_jobs_but_mau_and_the_job_commands_start_hidden(self):
+        jobs = [replace(job, enabled=True) for job in registry.load()]
+        run, mau_command, upload_command, versions = discord_commands.commands(jobs)
         offered = [choice["value"] for choice in run["options"][0]["choices"]]
-        self.assertEqual(offered, [job.name for job in jobs if job.discord])
+        self.assertEqual(offered, [job.name for job in jobs
+                                   if job.discord and job.name != "mau"])
         self.assertIn("crowdin-sync", offered)
-        self.assertEqual(run["default_member_permissions"], "0")
+        self.assertEqual(mau_command["name"], discord_commands.MAU)
+        self.assertFalse(mau_command["options"][0]["required"])
+        for item in (run, mau_command, upload_command):
+            self.assertEqual(item["default_member_permissions"], "0")
         for choice in run["options"][0]["choices"]:
             self.assertLessEqual(len(choice["name"]), discord_commands.MAX_CHOICE_NAME)
         self.assertEqual(versions["name"], discord_commands.VERSIONS)
         self.assertNotIn("default_member_permissions", versions)
 
+    def test_a_job_that_is_off_is_not_offered_and_mau_off_drops_its_commands(self):
+        jobs = [replace(job, enabled=job.name != "crowdin-sync") for job in registry.load()]
+        jobs = [replace(job, enabled=False) if job.name == "mau" else job for job in jobs]
+        run, versions = discord_commands.commands(jobs)
+        self.assertEqual(versions["name"], discord_commands.VERSIONS)
+        offered = [choice["value"] for choice in run["options"][0]["choices"]]
+        self.assertNotIn("crowdin-sync", offered)
+        self.assertIn("crowdin-duplicates", offered)
+
     def test_registration_replaces_the_guild_commands(self):
-        session = FakeSession([FakeResponse([{"name": "run"}, {"name": "versions"}])])
+        session = FakeSession([FakeResponse([{"name": "run"}, {"name": "mau-upload"}])])
         names = discord_commands.register(session, "app", GUILD, "bot", registry.load())
         method, url, kwargs = session.calls[0]
         self.assertEqual((method, url), ("PUT", f"{discord_commands.API}/applications/app"
                                                 f"/guilds/{GUILD}/commands"))
         self.assertEqual(kwargs["headers"], {"Authorization": "Bot bot"})
-        self.assertEqual(names, ["run", "versions"])
+        self.assertEqual(names, ["run", "mau-upload"])
 
     def test_a_refused_registration_exits_saying_why(self):
         session = FakeSession([FakeResponse({"message": "Missing Access"}, status_code=403)])

@@ -78,6 +78,12 @@ class TestRegistry(unittest.TestCase):
         with self.assertRaises(ValueError):
             load(VALID + 'discord = "yes"\n')
 
+    def test_a_job_is_on_unless_it_says_otherwise(self):
+        self.assertTrue(load(VALID)[0].enabled)
+        self.assertFalse(load(VALID + "enabled = false\n")[0].enabled)
+        with self.assertRaises(ValueError):
+            load(VALID + 'enabled = "no"\n')
+
     def test_more_jobs_than_discord_offers_choices_for_is_refused(self):
         many = "".join(VALID.replace('"a"', f'"j{i}"') + "discord = true\n"
                        for i in range(registry.MAX_DISCORD_JOBS + 1))

@@ -42,9 +42,9 @@ REMIND_SECONDS = 24 * 3600
 
 
 def load_jobs(path):
-    """The scheduled jobs in the registry: nothing is late that has no schedule."""
+    """The scheduled jobs in the registry that are on: nothing is late that has no schedule."""
     return [{"name": job.name, "max_age_hours": job.max_age_hours, "timer": job.timer}
-            for job in registry.load(path) if job.scheduled]
+            for job in registry.load(path) if job.scheduled and job.enabled]
 
 
 def stamp_time(stamps_dir, name):

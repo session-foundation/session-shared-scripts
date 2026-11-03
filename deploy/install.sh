@@ -4,8 +4,9 @@
 #
 # It creates the accounts, builds the venv, creates any missing env file empty, moves
 # state and env files from the layout before session-ops@ units, installs the units
-# and each job's drop-ins, and enables every job whose env files have content, and no
-# other: on its own timer, on the queue's, or on its path unit. It never edits nginx, which certbot owns; see deploy/README.md for the route.
+# and each job's drop-ins, and enables every job that is on and whose env files have
+# content, and no other: on its own timer, on the queue's, or on its path unit. It
+# never edits nginx, which certbot owns; see deploy/README.md for the route.
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -68,15 +69,16 @@ move /etc/github-prs/env "$ETC/github-prs.env" 600 root
 move "$ETC/env" "$ETC/alerts.env" 600 root
 # systemd reads EnvironmentFile= as root before dropping privileges, so these need
 # no group: a job's account cannot read another job's secrets.
-for name in zendesk github-prs crowdin publish alerts discord store-versions; do
+for name in zendesk github-prs crowdin publish alerts mau discord store-versions; do
     [ -e "$ETC/$name.env" ] || install -m 600 /dev/null "$ETC/$name.env"
 done
 # What each file takes, commented; the env files stay empty until filled, since a job
 # is enabled once its env files have content.
 install -m 644 "$ROOT"/deploy/env/*.example "$ETC/"
-# The publishing units load this as a credential, and a missing file would stop them
-# starting; left empty, their runs exit naming the key.
+# The publishing units and mau load these as credentials, and a missing file would stop
+# them starting; left empty, their runs fail naming the key.
 [ -e "$ETC/github-app.pem" ] || install -m 600 /dev/null "$ETC/github-app.pem"
+[ -e "$ETC/asc-key.p8" ] || install -m 600 /dev/null "$ETC/asc-key.p8"
 
 install -d -m 755 "$STATE"
 install -d -o ghdigest -g ghdigest "$STATE/github-prs-digest"
@@ -91,6 +93,11 @@ if [ -e "$NEW_HOUSE" ] && grep -qx "ZENDESK_HOUSE_ANSWERS=$OLD_HOUSE" "$ETC/zend
     sed -i "s|^ZENDESK_HOUSE_ANSWERS=$OLD_HOUSE\$|ZENDESK_HOUSE_ANSWERS=$NEW_HOUSE|" "$ETC/zendesk.env"
     echo "pointed ZENDESK_HOUSE_ANSWERS in $ETC/zendesk.env at $NEW_HOUSE"
 fi
+
+# The Discord relay's account puts /mau-upload's exports and /mau's request there, and
+# mau's account reads and moves them out.
+install -d -o sessionops -g sessionops -m 711 "$STATE/mau"
+install -d -o sessionops -g opsbot -m 770 "$STATE/mau/inbox"
 
 install -m 644 "$ROOT/deploy/session-ops.tmpfiles" /etc/tmpfiles.d/session-ops.conf
 systemd-tmpfiles --create session-ops.conf
@@ -169,6 +176,9 @@ else
 fi
 for job in $("$OPS" list --not-ready); do
     echo "not enabled: session-ops@$job (its env file is empty)"
+done
+for job in $("$OPS" list --off); do
+    echo "not enabled: session-ops@$job (enabled = false in jobs.toml)"
 done
 # An always-on service, enabled once its env file has content.
 relay() {

@@ -59,6 +59,7 @@ class Job:
     queued: bool = False
     after: tuple = ()
     discord: bool = False
+    enabled: bool = True
 
     @property
     def scheduled(self):
@@ -123,8 +124,9 @@ def load(path=REGISTRY):
     for job in jobs:
         if job.scheduled and not isinstance(job.max_age_hours, (int, float)):
             raise ValueError(f"{path}: scheduled job {job.name} needs a numeric max_age_hours")
-        if not isinstance(job.discord, bool):
-            raise ValueError(f"{path}: {job.name}'s discord must be true or false")
+        for flag in ("discord", "enabled"):
+            if not isinstance(getattr(job, flag), bool):
+                raise ValueError(f"{path}: {job.name}'s {flag} must be true or false")
         try:
             job.timeout_seconds
         except (TypeError, ValueError) as exc:
