@@ -1,0 +1,18 @@
+[Unit]
+Description=Report a failed session-ops-alert to Discord, without the venv
+Documentation=https://github.com/session-foundation/session-shared-scripts
+
+[Service]
+Type=oneshot
+User=sessionops
+Group=sessionops
+EnvironmentFile=/etc/session-ops/alerts.env
+ExecStart=/opt/session-ops/deploy/session-ops-alert-fallback.sh %i
+# Holds the time of the last post, which keeps a broken venv to one post per window.
+StateDirectory=session-ops-alert-fallback
+SupplementaryGroups=systemd-journal
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes

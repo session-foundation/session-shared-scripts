@@ -29,3 +29,9 @@ the first check that found it missing, so a job left disabled alerts once that i
 than its `max_age_hours`: every scheduled job is meant to run.
 
 A job in `jobs.toml` with a `schedule`, or in its `[queue]`, is watched; the `session-ops@` template stamps it.
+
+**A venv that no longer imports.** The jobs, `session-ops-alert` and this checker all
+run from `/opt/session-ops/.venv`, which a Python upgrade under it breaks until
+`install.sh` rebuilds it. `session-ops-alert` failing starts
+`session-ops-alert-fallback`, a shell script that posts the failed alert, its last
+line and that fix to `ALERT_DISCORD_WEBHOOK_URL`, once per 6 hours while it lasts.

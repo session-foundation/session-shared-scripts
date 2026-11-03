@@ -1,6 +1,7 @@
 [Unit]
 Description=Report a failed unit to Discord, unless it already did
 Documentation=https://github.com/session-foundation/session-shared-scripts
+OnFailure=session-ops-alert-fallback@%n.service
 
 [Service]
 Type=oneshot

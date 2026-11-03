@@ -12,6 +12,7 @@ does the work: accounts, venv, env files, units, timers, and migrating an older 
 | `zendesk-relay.service` | Always on, `127.0.0.1:8080`: Zendesk's `claude:` note webhooks. |
 | `session-ops-discord.service` | Always on, `127.0.0.1:8081`: the `/run` and `/versions` slash commands. See [Discord commands](#discord-commands). |
 | `session-ops-alert@.service` | Every unit's `OnFailure=` backstop; see [session-ops-silence](../docs/jobs/session-ops-silence.md). |
+| `session-ops-alert-fallback@.service` | The backstop's own `OnFailure=`: shell and curl, no venv, at most one post per 6 hours. |
 
 `session-ops list` shows the jobs; `session-ops run <job> [--dry-run] [-- job arguments]`
 runs one as its timer does. State is under `/var/lib/session-ops/<job>/`, copies of a
