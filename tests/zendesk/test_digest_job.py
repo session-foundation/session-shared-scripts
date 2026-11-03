@@ -41,6 +41,11 @@ class TestDigestJob(unittest.TestCase):
         self.assertEqual(calls[0][1], ["--apply"])
         self.assertIn("--state", calls[1][1])
 
+    def test_the_brief_cache_sits_beside_the_dedup_state(self):
+        _, calls = self.run_job(["--state", "/s/seen.json"])
+        argv = calls[1][1]
+        self.assertEqual(argv[argv.index("--known-briefs") + 1], "/s/known_briefs.json")
+
     def test_a_failed_resolve_is_reported_and_does_not_cost_the_digest(self):
         outcome, calls = self.run_job([], resolver=SystemExit("Zendesk returned 500"))
         self.assertEqual(len(calls), 2)

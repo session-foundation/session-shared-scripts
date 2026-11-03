@@ -9,6 +9,7 @@ Everything here is offline — no Zendesk, Claude, or Discord calls. The fetch
 tests drive fetch_tickets with a stub session instead.
 """
 import contextlib
+import io
 import json
 import os
 import tempfile
@@ -783,6 +784,38 @@ class TestUnflaggedLine(unittest.TestCase):
 
     def test_no_line_when_every_ticket_is_flagged(self):
         self.assertEqual(self.lines([finding(1)]), [])
+
+
+class TestOpenChatLine(unittest.TestCase):
+    """Tickets whose newest customer message is stuck in a live chat."""
+
+    def test_it_lists_the_swept_tickets_first(self):
+        findings = [finding(1), finding(2, language="German")]
+        messages, _ = triage.build_messages(findings, "acme", {"open_chats": {28835, 26946}})
+        lines = [l for l in digest_text(messages).splitlines() if "[#" in l]
+        self.assertIn("**2** live chats still open", lines[0])
+        self.assertLess(lines[0].index("[#26946]"), lines[0].index("[#28835]"))
+
+    def test_it_covers_no_ticket(self):
+        _, coverage = triage.build_messages([finding(1)], "acme", {"open_chats": {9}})
+        self.assertNotIn(9, set().union(*coverage))
+
+    def test_no_open_chat_no_line(self):
+        self.assertNotIn("live chat", digest_text(triage.build_messages([finding(1)], "acme", {})[0]))
+
+    def test_the_sweep_keeps_only_tickets_with_an_open_chat(self):
+        search = FakeResponse({"count": 2, "results": [
+            {"result_type": "ticket", "id": 1}, {"result_type": "ticket", "id": 2}]})
+        session = FakeSession([
+            search,
+            FakeResponse({"audits": [{"events": [{"type": "ChatStartedEvent"}]}]}),
+            FakeResponse({"audits": [{"events": [{"type": "ChatEndedEvent"}]}]})])
+        self.assertEqual(triage.find_open_chats(session, "acme"), {1})
+
+    def test_a_failed_sweep_does_not_stop_the_digest(self):
+        session = FakeSession([FakeResponse({}, status_code=500)])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(triage.find_open_chats(session, "acme"), set())
 
 
 class TestNonEnglishLine(unittest.TestCase):

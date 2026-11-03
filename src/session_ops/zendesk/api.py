@@ -201,6 +201,39 @@ def hydrate_requester_activity(session, subdomain, tickets):
     return hydrated
 
 
+MESSAGING_CHANNEL_PREFIX = "sunshine_conversations"
+CHAT_EVENTS = ("ChatStartedEvent", "ChatEndedEvent")
+
+
+def is_messaging(ticket):
+    return ((ticket.get("via") or {}).get("channel") or "").startswith(MESSAGING_CHANNEL_PREFIX)
+
+
+def has_open_chat(session, subdomain, ticket_id):
+    """Whether the ticket's newest live chat has not ended; None when it cannot be read.
+
+    Zendesk writes a chat into the ticket as a comment only when it ends, so until then
+    the customer's newest messages are on no comment, and only the assignee can open
+    the chat. One that starts while the ticket has an assignee is never ended for it.
+    """
+    url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}/audits.json"
+    try:
+        resp = session.request("GET", url, attempts=2,
+                               params={"sort_order": "desc", "per_page": 100})
+        if resp.status_code >= 400:
+            print(f"Note: audits for #{ticket_id} returned {resp.status_code}.")
+            return None
+        audits = resp.json().get("audits", [])
+    except (requests.RequestException, ValueError) as exc:
+        print(f"Note: could not read the audits for #{ticket_id} ({exc}).")
+        return None
+    for audit in audits:
+        for event in reversed(audit.get("events") or []):
+            if event.get("type") in CHAT_EVENTS:
+                return event["type"] == "ChatStartedEvent"
+    return False
+
+
 STAR_SUBJECT = re.compile(r"^\s*([★☆]{1,10})")
 
 

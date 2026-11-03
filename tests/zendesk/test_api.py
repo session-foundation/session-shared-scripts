@@ -67,5 +67,46 @@ class TestFetchComments(unittest.TestCase):
                 self.assertIn("#7", out.getvalue())
 
 
+class TestHasOpenChat(unittest.TestCase):
+    def audits(self, *events_per_audit):
+        return FakeSession([FakeResponse({"audits": [
+            {"events": [{"type": t} for t in events]} for events in events_per_audit]})])
+
+    def test_the_newest_chat_event_decides(self):
+        cases = {
+            "started, not ended": (["Change", "ChatStartedEvent"], [], True),
+            "ended after it started": (["ChatEndedEvent", "Change"], ["ChatStartedEvent"], False),
+            "never a chat": (["Change"], [], False),
+        }
+        for name, (newest, older, expected) in cases.items():
+            with self.subTest(name):
+                self.assertIs(api.has_open_chat(self.audits(newest, older), "acme", 7),
+                              expected)
+
+    def test_within_one_audit_the_last_event_is_the_newest(self):
+        session = self.audits(["ChatStartedEvent", "ChatEndedEvent"])
+        self.assertFalse(api.has_open_chat(session, "acme", 7))
+
+    def test_audits_are_read_newest_first(self):
+        session = self.audits([])
+        api.has_open_chat(session, "acme", 7)
+        _, url, kwargs = session.calls[0]
+        self.assertTrue(url.endswith("/tickets/7/audits.json"))
+        self.assertEqual(kwargs["params"]["sort_order"], "desc")
+
+    def test_an_unreadable_history_is_unknown(self):
+        for response in (FakeResponse({}, status_code=500), NonJsonResponse(),
+                         requests.ConnectionError("down")):
+            with self.subTest(response=type(response).__name__):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertIsNone(api.has_open_chat(FakeSession([response]), "acme", 7))
+
+    def test_only_sunshine_channels_are_messaging(self):
+        self.assertTrue(api.is_messaging(
+            {"via": {"channel": "sunshine_conversations_twitter_dm"}}))
+        self.assertFalse(api.is_messaging({"via": {"channel": "email"}}))
+        self.assertFalse(api.is_messaging({}))
+
+
 if __name__ == "__main__":
     unittest.main()
