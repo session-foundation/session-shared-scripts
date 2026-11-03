@@ -87,9 +87,8 @@ What `/run` and `/versions` do, and who may run them:
    /opt/session-ops/.venv/bin/session-ops discord-register
    ```
 
-6. The commands start hidden from everyone but server administrators. In Server
-   Settings → Integrations, allow them for the role or channel that runs jobs. Seeing
-   them is not running them: the relay's allowlist still decides.
+6. Every member sees the commands. In Server Settings → Integrations, limit them to the
+   channels that run jobs. Seeing them is not running them: the relay's allowlist decides.
 
 Register again after changing which jobs have `discord = true`.
 

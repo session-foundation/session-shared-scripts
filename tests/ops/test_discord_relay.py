@@ -327,13 +327,13 @@ class TestVersions(RelayCase):
 
 
 class TestCommands(unittest.TestCase):
-    def test_run_offers_the_discord_jobs_and_starts_hidden(self):
+    def test_run_offers_the_discord_jobs_to_every_member(self):
         jobs = registry.load()
         run, versions = discord_commands.commands(jobs)
         offered = [choice["value"] for choice in run["options"][0]["choices"]]
         self.assertEqual(offered, [job.name for job in jobs if job.discord])
         self.assertIn("crowdin-sync", offered)
-        self.assertEqual(run["default_member_permissions"], "0")
+        self.assertNotIn("default_member_permissions", run)
         for choice in run["options"][0]["choices"]:
             self.assertLessEqual(len(choice["name"]), discord_commands.MAX_CHOICE_NAME)
         self.assertEqual(versions["name"], discord_commands.VERSIONS)
