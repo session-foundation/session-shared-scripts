@@ -794,7 +794,29 @@ class TestOpenChatLine(unittest.TestCase):
         messages, _ = triage.build_messages(findings, "acme", {"open_chats": {28835, 26946}})
         lines = [l for l in digest_text(messages).splitlines() if "[#" in l]
         self.assertIn("**2** live chats still open", lines[0])
+        self.assertIn("until an admin unassigns it", lines[0])
         self.assertLess(lines[0].index("[#26946]"), lines[0].index("[#28835]"))
+
+    def test_released_tickets_are_listed_apart_from_stuck_ones(self):
+        stats = {"open_chats": {1, 2, 3}, "released_chats": {1, 3}}
+        messages, _ = triage.build_messages([finding(9)], "acme", stats)
+        lines = [l for l in digest_text(messages).splitlines() if "live chat" in l]
+        self.assertEqual(len(lines), 2)
+        self.assertIn("**2** live chats still open: unassigned", lines[0])
+        self.assertIn("[#1]", lines[0])
+        self.assertIn("[#3]", lines[0])
+        self.assertIn("**1** live chat still open: newest message not on the ticket", lines[1])
+        self.assertIn("[#2]", lines[1])
+
+    def test_release_unassigns_each_and_keeps_what_zendesk_took(self):
+        session = FakeSession([FakeResponse({}), FakeResponse({}, status_code=403)])
+        with contextlib.redirect_stdout(io.StringIO()):
+            released = triage.release_open_chats(session, "acme", [4, 5])
+        self.assertEqual(released, {4})
+        method, url, kwargs = session.calls[0]
+        self.assertEqual(method, "PUT")
+        self.assertTrue(url.endswith("/tickets/4.json"))
+        self.assertEqual(kwargs["json"], {"ticket": {"assignee_id": None}})
 
     def test_it_covers_no_ticket(self):
         _, coverage = triage.build_messages([finding(1)], "acme", {"open_chats": {9}})
