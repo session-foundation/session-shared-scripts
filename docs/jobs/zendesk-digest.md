@@ -85,6 +85,10 @@ Two limits bound a message and whichever binds first splits it — 40 components
 
 **That is what lets everything here go over one incoming webhook** — the digest, the positive-review tally and the failure alerts alike. A webhook no application owns may send non-interactive components and nothing else, so adding an interactive one means moving the digest back to a bot token and a channel id. The request needs `?with_components=true` (`digest_webhook_url`): Discord ignores the `components` field on a webhook post without it, and the digest is nothing but components.
 
+## Live chats stuck open
+
+Zendesk writes a Twitter DM chat onto the ticket only when the chat ends, and it never ends a chat that started while the ticket had an assignee. The auto-assign trigger gives every ticket one, so a customer writing back on a solved DM ticket is invisible to everyone but the assignee. Each run sweeps the unsolved DM tickets for an open chat and unassigns them; the chat then ends about 10 minutes later and the message lands on the ticket. The digest lists them under 💬 and records none of them, so each is reported again with its newest message. A ticket Zendesk refused to unassign is listed apart, for an admin. `--dry-run`, `--no-discord` and a rehearsal list them without unassigning.
+
 ## Drafting the known answers
 
 Before posting, the digest drafts a private reply note on each ticket it reports that

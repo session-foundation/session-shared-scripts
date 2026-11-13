@@ -74,7 +74,7 @@ from session_ops.shared.discord import clip, post_to_discord
 from session_ops.shared.env import get_env, rehearsing
 from session_ops.shared.text import squash
 from session_ops.zendesk.api import (REVIEW_CHANNEL, SEARCH_RESULT_LIMIT, fetch_comments,
-                                     fetch_tickets, has_open_chat,
+                                     fetch_tickets, has_open_chat, unassign,
                                      hydrate_requester_activity, is_store_review,
                                      review_platform, review_stars, ticket_url,
                                      zendesk_session)
@@ -518,6 +518,16 @@ def find_open_chats(session, subdomain):
     return {t["id"] for t in tickets if has_open_chat(session, subdomain, t["id"])}
 
 
+def release_open_chats(session, subdomain, ticket_ids):
+    """Unassign each ticket so Zendesk ends its chat and writes the customer's newest
+    message onto it, about 10 minutes later. Returns the ids Zendesk accepted.
+
+    Zendesk never ends a chat that started while the ticket had an assignee, and the
+    auto-assign trigger gives every ticket one.
+    """
+    return {tid for tid in ticket_ids if unassign(session, subdomain, tid)}
+
+
 # ---- The classification request ---------------------------------------------
 
 
@@ -838,21 +848,34 @@ def build_non_english_line(findings, subdomain, updated_ids):
             f"{', '.join(links)}", set())
 
 
-def build_open_chat_line(ticket_ids, subdomain):
+def build_open_chat_line(ticket_ids, subdomain, released=()):
     """The tickets whose live chat is still open, so nobody but the assignee can read
     the customer's newest message. None when there are none.
 
-        💬 **2** live chats still open — newest message not on the ticket until an
-        admin unassigns it: #28835, #26946
+        💬 **2** live chats still open: unassigned, so the newest message reaches the
+        ticket in about 10 minutes: #28835, #26946
 
-    Covers no ticket: one stays listed every run until its chat ends.
+    A ticket the run could not unassign is listed apart, for an admin. Covers no
+    ticket: the conversation it was classified from is missing its newest message.
     """
     if not ticket_ids:
         return None
-    links = ", ".join(f"[#{tid}]({ticket_url(subdomain, tid)})" for tid in sorted(ticket_ids))
-    plural = "" if len(ticket_ids) == 1 else "s"
-    return (f"{OPEN_CHAT_MARKER} **{len(ticket_ids)}** live chat{plural} still open — "
-            f"newest message not on the ticket until an admin unassigns it: {links}", set())
+
+    def part(ids, outcome):
+        links = ", ".join(f"[#{tid}]({ticket_url(subdomain, tid)})" for tid in sorted(ids))
+        plural = "" if len(ids) == 1 else "s"
+        return f"{OPEN_CHAT_MARKER} **{len(ids)}** live chat{plural} still open: {outcome}: {links}"
+
+    released = set(released) & set(ticket_ids)
+    stuck = set(ticket_ids) - released
+    parts = []
+    if released:
+        parts.append(part(released, "unassigned, so the newest message reaches the ticket "
+                                    "in about 10 minutes"))
+    if stuck:
+        parts.append(part(stuck, "newest message not on the ticket until an admin "
+                                 "unassigns it"))
+    return "\n".join(parts), set()
 
 
 def build_drafted_line(ticket_ids, subdomain):
@@ -992,7 +1015,8 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
     if omitted:
         header += (f"\nShowing the top **{len(shown)}** of "
                    f"**{len(shown) + len(omitted)}** worth looking into.")
-    open_chats = build_open_chat_line((stats or {}).get("open_chats"), subdomain)
+    open_chats = build_open_chat_line((stats or {}).get("open_chats"), subdomain,
+                                      (stats or {}).get("released_chats") or ())
     non_english = build_non_english_line(findings, subdomain, updated_ids)
     drafted = build_drafted_line((stats or {}).get("drafted"), subdomain)
     # First, under the header: the run's to-do lists, for an admin and for the `claude:` notes.
@@ -1126,6 +1150,11 @@ def main(argv=None):
         stats["open_chats"] = find_open_chats(zd, subdomain)
         if stats["open_chats"]:
             print(f"{len(stats['open_chats'])} ticket(s) have a live chat still open.")
+            # A counts-only run must not write to tickets.
+            if not (args.dry_run or args.no_discord or rehearsing()):
+                stats["released_chats"] = release_open_chats(zd, subdomain,
+                                                             stats["open_chats"])
+                print(f"Unassigned {len(stats['released_chats'])} of them.")
 
         # Drop positive store reviews before anything expensive: they were 59% of all
         # tickets in the sample and never actionable.
