@@ -236,7 +236,11 @@ def has_open_chat(session, subdomain, ticket_id):
 
 def unassign(session, subdomain, ticket_id):
     """Clear the ticket's assignee, which is what lets Zendesk end its live chat.
-    Returns whether Zendesk took it."""
+    Returns whether the ticket Zendesk sent back has no assignee.
+
+    A 200 is not enough: on a ticket with a live chat open, Zendesk can answer 200 and
+    keep the assignee.
+    """
     url = f"https://{subdomain}.zendesk.com/api/v2/tickets/{ticket_id}.json"
     try:
         resp = session.request("PUT", url, json={"ticket": {"assignee_id": None}})
@@ -245,6 +249,13 @@ def unassign(session, subdomain, ticket_id):
         return False
     if resp.status_code >= 400:
         print(f"Note: unassigning #{ticket_id} returned {resp.status_code}.")
+        return False
+    try:
+        ticket = resp.json().get("ticket") or {}
+    except ValueError:
+        ticket = {}
+    if "assignee_id" not in ticket or ticket["assignee_id"] is not None:
+        print(f"Note: Zendesk accepted unassigning #{ticket_id} but kept its assignee.")
         return False
     return True
 

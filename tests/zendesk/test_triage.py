@@ -809,9 +809,13 @@ class TestOpenChatLine(unittest.TestCase):
         self.assertIn("[#2]", lines[1])
 
     def test_release_unassigns_each_and_keeps_what_zendesk_took(self):
-        session = FakeSession([FakeResponse({}), FakeResponse({}, status_code=403)])
+        session = FakeSession([
+            FakeResponse({"ticket": {"id": 4, "assignee_id": None}}),
+            FakeResponse({}, status_code=403),
+            FakeResponse({"ticket": {"id": 6, "assignee_id": 77}}),
+            FakeResponse({})])
         with contextlib.redirect_stdout(io.StringIO()):
-            released = triage.release_open_chats(session, "acme", [4, 5])
+            released = triage.release_open_chats(session, "acme", [4, 5, 6, 7])
         self.assertEqual(released, {4})
         method, url, kwargs = session.calls[0]
         self.assertEqual(method, "PUT")
