@@ -5,7 +5,7 @@ Claude reviews the Zendesk tickets awaiting a reply — `new` and `open`, no app
 | | |
 | --- | --- |
 | Runs | `session-ops-queue.timer`, Mon–Fri from 10:00 Australia/Melbourne, after `github-prs-digest`: `zendesk-resolve-reviews --apply`, then `zendesk-triage` |
-| Secrets | `/etc/session-ops/zendesk.env`: the Zendesk API token, the triage channel's webhook, and the Claude API key |
+| Secrets | `/etc/session-ops/zendesk.env`: the Zendesk OAuth client, the triage channel's webhook, and the Claude API key |
 | Dry run | `session-ops run zendesk-digest --dry-run`; `uv run zendesk-triage --window-hours 72 --dry-run` from a checkout. On the host, through `systemd-run` as in [deploy/README.md](../../deploy/README.md). |
 | Re-run | `systemctl start session-ops@zendesk-digest.service` |
 | Logs | `journalctl -u session-ops@zendesk-digest -n 50 --no-pager` |
@@ -131,9 +131,7 @@ Two caveats worth knowing:
 | Secret                | Description                                             |
 | --------------------- | ------------------------------------------------------- |
 | `ZENDESK_SUBDOMAIN`   | Zendesk subdomain (`mycompany` → `mycompany.zendesk.com`) |
-| `ZENDESK_OAUTH_CLIENT_ID`, `ZENDESK_OAUTH_CLIENT_SECRET` | A confidential OAuth client. Its token acts as the admin who created it, so create it as the admin the reply flow posts as. Wins over the API token when both are set |
-| `ZENDESK_EMAIL`       | Agent email for API-token auth, used only without the OAuth client |
-| `ZENDESK_API_TOKEN`   | Zendesk API token, used only without the OAuth client. Zendesk refuses API tokens from 2027-04-30 |
+| `ZENDESK_OAUTH_CLIENT_ID`, `ZENDESK_OAUTH_CLIENT_SECRET` | A confidential OAuth client. Its token acts as the admin who created it, so create it as the admin the reply flow posts as |
 | `ZENDESK_DISCORD_WEBHOOK_URL` | Discord incoming webhook for the triage channel, shared with the tally and the failure alerts |
 
 ## Claude Authentication

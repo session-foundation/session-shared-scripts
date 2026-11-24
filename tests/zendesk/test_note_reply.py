@@ -1288,7 +1288,8 @@ class Composition(unittest.TestCase):
 
 class Model(unittest.TestCase):
     def run_main(self, action, flag=(), ticket=None, open_chat=False):
-        env = {"ZENDESK_SUBDOMAIN": "sub", "ZENDESK_EMAIL": "e", "ZENDESK_API_TOKEN": "t"}
+        env = {"ZENDESK_SUBDOMAIN": "sub", "ZENDESK_OAUTH_CLIENT_ID": "c",
+               "ZENDESK_OAUTH_CLIENT_SECRET": "s"}
         command = {"id": 9, "author": AGENT, "action": action, "brief": "x"}
         ran = []
         with mock.patch.dict(os.environ, env), \

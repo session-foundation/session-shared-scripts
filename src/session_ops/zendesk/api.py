@@ -1,7 +1,6 @@
 """Zendesk's API as the jobs use it: tickets, their comments and users, the
 markers a run leaves, and what a customer's side of a ticket looks like.
 """
-import os
 import re
 import sys
 import threading
@@ -73,22 +72,11 @@ class ClientCredentials(requests.auth.AuthBase):
         return request
 
 
-def zendesk_session(subdomain, email=None, api_token=None):
-    """A session authenticated as the reply-flow's admin user.
-
-    OAuth when ZENDESK_OAUTH_CLIENT_ID and ZENDESK_OAUTH_CLIENT_SECRET are set, else
-    the API token, which Zendesk stops accepting on 2027-04-30. `email` and
-    `api_token` override their env vars, as the jobs' --email and --api-token do.
-    """
+def zendesk_session(subdomain):
+    """A session authenticated as the admin who created the OAuth client."""
     session = http.Session()
-    client_id = os.environ.get("ZENDESK_OAUTH_CLIENT_ID")
-    client_secret = os.environ.get("ZENDESK_OAUTH_CLIENT_SECRET")
-    if client_id and client_secret:
-        session.auth = ClientCredentials(subdomain, client_id, client_secret)
-    else:
-        # Zendesk API-token auth: username is "{email}/token", password is the token.
-        session.auth = (f"{get_env('ZENDESK_EMAIL', email)}/token",
-                        get_env("ZENDESK_API_TOKEN", api_token))
+    session.auth = ClientCredentials(subdomain, get_env("ZENDESK_OAUTH_CLIENT_ID"),
+                                     get_env("ZENDESK_OAUTH_CLIENT_SECRET"))
     session.headers["Accept"] = "application/json"
     return session
 
@@ -152,7 +140,7 @@ def fetch_tickets(session, subdomain, query, max_tickets):
         resp = session.request("GET", url, params=params)
         params = None  # next_page already carries the query
         if resp.status_code == 403:
-            sys.exit("Zendesk returned 403 — the API token/email may lack search access.")
+            sys.exit("Zendesk returned 403: the OAuth client may lack search access.")
         # 422 past the result limit: `cap` should have stopped us first, so this only
         # fires if the account's effective limit is lower than documented. Keep the
         # tickets already in hand — a partial digest beats no digest — and let the

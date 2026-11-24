@@ -158,31 +158,22 @@ class TestClientCredentials(unittest.TestCase):
 
 
 class TestZendeskSession(unittest.TestCase):
-    OAUTH = {"ZENDESK_OAUTH_CLIENT_ID": "client", "ZENDESK_OAUTH_CLIENT_SECRET": "s3cret"}
-    TOKEN = {"ZENDESK_EMAIL": "agent@acme.test", "ZENDESK_API_TOKEN": "tok"}
-
-    def session(self, env, *args):
+    def session(self, env):
         with mock.patch.dict(os.environ, env, clear=True):
-            return api.zendesk_session("acme", *args)
+            return api.zendesk_session("acme")
 
-    def test_oauth_wins_when_both_are_configured(self):
-        auth = self.session({**self.OAUTH, **self.TOKEN}).auth
+    def test_the_session_authenticates_with_the_oauth_client(self):
+        auth = self.session({"ZENDESK_OAUTH_CLIENT_ID": "client",
+                             "ZENDESK_OAUTH_CLIENT_SECRET": "s3cret"}).auth
         self.assertIsInstance(auth, api.ClientCredentials)
-        self.assertEqual(auth.url, "https://acme.zendesk.com/oauth/tokens")
+        self.assertEqual((auth.url, auth.client_id, auth.client_secret),
+                         ("https://acme.zendesk.com/oauth/tokens", "client", "s3cret"))
 
-    def test_the_api_token_is_used_without_a_complete_oauth_client(self):
-        for oauth in ({}, {"ZENDESK_OAUTH_CLIENT_ID": "client"}):
-            with self.subTest(oauth=oauth):
-                self.assertEqual(self.session({**oauth, **self.TOKEN}).auth,
-                                 ("agent@acme.test/token", "tok"))
-
-    def test_flags_override_the_api_token_env(self):
-        self.assertEqual(self.session(self.TOKEN, "flag@acme.test", "flagtok").auth,
-                         ("flag@acme.test/token", "flagtok"))
-
-    def test_no_credentials_at_all_stops_the_run(self):
-        with self.assertRaises(SystemExit):
-            self.session({})
+    def test_an_incomplete_oauth_client_stops_the_run(self):
+        for env in ({}, {"ZENDESK_OAUTH_CLIENT_ID": "client"},
+                    {"ZENDESK_EMAIL": "agent@acme.test", "ZENDESK_API_TOKEN": "tok"}):
+            with self.subTest(env=env), self.assertRaises(SystemExit):
+                self.session(env)
 
 
 if __name__ == "__main__":

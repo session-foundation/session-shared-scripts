@@ -47,8 +47,8 @@ entry = "session_ops.zendesk.digest_job:main"
 args = ["--state", "{state}/seen.json"]
 user = "zendesk"
 env_files = ["/etc/session-ops/zendesk.env"]
-# The Zendesk credentials are either the OAuth client or the API token; the job checks.
-env = ["ZENDESK_SUBDOMAIN", "ZENDESK_DISCORD_WEBHOOK_URL", "ANTHROPIC_API_KEY"]
+env = ["ZENDESK_SUBDOMAIN", "ZENDESK_OAUTH_CLIENT_ID", "ZENDESK_OAUTH_CLIENT_SECRET",
+       "ZENDESK_DISCORD_WEBHOOK_URL", "ANTHROPIC_API_KEY"]
 channel_env = "ZENDESK_DISCORD_WEBHOOK_URL"
 max_age_hours = 80
 # A full 1000-ticket resolve is ten bulk jobs polled for up to 300 s each.

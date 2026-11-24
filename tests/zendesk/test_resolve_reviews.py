@@ -348,7 +348,7 @@ class TestSummaryMessage(unittest.TestCase):
         self.assertLess(len(message), triage.MAX_MESSAGE_CHARS)
 
     def test_the_summary_does_not_reuse_the_zendesk_session(self):
-        """That session carries the API-token auth header; Discord must not see it."""
+        """That session carries the Zendesk credentials; Discord must not see them."""
         posted = []
         def post(session, url, messages):
             posted.append((session, url, messages))
