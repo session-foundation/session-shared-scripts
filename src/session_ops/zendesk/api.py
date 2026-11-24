@@ -3,12 +3,15 @@ markers a run leaves, and what a customer's side of a ticket looks like.
 """
 import re
 import sys
+import threading
+import time
 from datetime import datetime
 
 import requests
 
 from session_ops.shared import http
 from session_ops.shared.discord import clip
+from session_ops.shared.env import get_env
 from session_ops.shared.text import squash
 
 
@@ -25,10 +28,58 @@ REVIEW_CHANNEL = "any_channel"
 SEARCH_RESULT_LIMIT = 1000
 
 
-def zendesk_session(email, token):
+# The token is set once per call and urllib3's retries resend it, so it must outlive the
+# session's whole retry span: every attempt timing out and every wait at its longest.
+# A caller passing a larger `attempts` than the default can still outrun it.
+TOKEN_RENEW_MARGIN_SECONDS = 60 + (http.DEFAULT_ATTEMPTS - 1) * (
+    http.DEFAULT_TIMEOUT + max(http.MAX_RETRY_AFTER, http.MAX_BACKOFF))
+
+
+class ClientCredentials(requests.auth.AuthBase):
+    """Bearer auth from an OAuth client-credentials grant, renewed as it nears expiry.
+
+    The token acts as the admin who created the OAuth client. Zendesk issues no
+    refresh token for this grant, so renewing is a fresh grant with the same secret.
+    https://developer.zendesk.com/api-reference/ticketing/oauth/grant_type_tokens/
+    """
+
+    def __init__(self, subdomain, client_id, client_secret):
+        self.url = f"https://{subdomain}.zendesk.com/oauth/tokens"
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.transport = http.Session()
+        self.lock = threading.Lock()
+        self.token = None
+        self.renew_at = 0.0
+
+    def current(self):
+        with self.lock:
+            if self.token is None or time.monotonic() >= self.renew_at:
+                resp = self.transport.request("POST", self.url, json={
+                    "grant_type": "client_credentials", "client_id": self.client_id,
+                    "client_secret": self.client_secret, "scope": "read write"})
+                if not 200 <= resp.status_code < 300:
+                    # The body names the cause (invalid_client, invalid_scope) and
+                    # never echoes the secret.
+                    raise RuntimeError(f"Zendesk refused the OAuth client: HTTP "
+                                       f"{resp.status_code} {resp.text[:200]}")
+                body = resp.json()
+                self.token = body["access_token"]
+                # A null expires_in is a token that does not expire.
+                lifetime = body.get("expires_in") or float("inf")
+                self.renew_at = time.monotonic() + lifetime - TOKEN_RENEW_MARGIN_SECONDS
+            return self.token
+
+    def __call__(self, request):
+        request.headers["Authorization"] = f"Bearer {self.current()}"
+        return request
+
+
+def zendesk_session(subdomain):
+    """A session authenticated as the admin who created the OAuth client."""
     session = http.Session()
-    # Zendesk API-token auth: username is "{email}/token", password is the token.
-    session.auth = (f"{email}/token", token)
+    session.auth = ClientCredentials(subdomain, get_env("ZENDESK_OAUTH_CLIENT_ID"),
+                                     get_env("ZENDESK_OAUTH_CLIENT_SECRET"))
     session.headers["Accept"] = "application/json"
     return session
 
@@ -92,7 +143,7 @@ def fetch_tickets(session, subdomain, query, max_tickets):
         resp = session.request("GET", url, params=params)
         params = None  # next_page already carries the query
         if resp.status_code == 403:
-            sys.exit("Zendesk returned 403 — the API token/email may lack search access.")
+            sys.exit("Zendesk returned 403: the OAuth client may lack search access.")
         # 422 past the result limit: `cap` should have stopped us first, so this only
         # fires if the account's effective limit is lower than documented. Keep the
         # tickets already in hand — a partial digest beats no digest — and let the

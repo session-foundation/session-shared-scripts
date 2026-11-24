@@ -129,7 +129,7 @@ def main(argv=None):
     message = build_message(unit, socket.gethostname(), detail=detail,
                             result=unit_property(unit, "Result"))
     payload = {"content": message, "allowed_mentions": {"parse": []}}
-    # A fresh session, never a Zendesk one — that carries the API-token auth header,
+    # A fresh session, never a Zendesk one: that carries the Zendesk credentials,
     # and Discord has no business receiving it.
     if not post_to_discord(http.Session(), webhook, [payload]):
         sys.exit("Could not post the failure to Discord.")

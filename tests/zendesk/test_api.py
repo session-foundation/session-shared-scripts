@@ -3,10 +3,13 @@
 """
 import contextlib
 import io
+import os
 import unittest
+from unittest import mock
 
 import requests
 
+from session_ops.shared import http
 from session_ops.shared.testing import FakeResponse, FakeSession, NonJsonResponse
 from session_ops.zendesk import api, triage
 
@@ -106,6 +109,78 @@ class TestHasOpenChat(unittest.TestCase):
             {"via": {"channel": "sunshine_conversations_twitter_dm"}}))
         self.assertFalse(api.is_messaging({"via": {"channel": "email"}}))
         self.assertFalse(api.is_messaging({}))
+
+
+class TestClientCredentials(unittest.TestCase):
+    def auth(self, *responses):
+        auth = api.ClientCredentials("acme", "client", "s3cret")
+        auth.transport = FakeSession(list(responses))
+        return auth
+
+    def grant(self, token, expires_in=1800):
+        return FakeResponse({"access_token": token, "token_type": "bearer",
+                             "expires_in": expires_in}, status_code=201)
+
+    def test_the_grant_is_a_client_credentials_post_to_the_token_endpoint(self):
+        auth = self.auth(self.grant("t1"))
+        self.assertEqual(auth.current(), "t1")
+        method, url, kwargs = auth.transport.calls[0]
+        self.assertEqual((method, url), ("POST", "https://acme.zendesk.com/oauth/tokens"))
+        self.assertEqual(kwargs["json"]["grant_type"], "client_credentials")
+        self.assertEqual(kwargs["json"]["client_secret"], "s3cret")
+
+    def test_a_token_is_reused_until_it_nears_expiry_then_renewed(self):
+        auth = self.auth(self.grant("t1"), self.grant("t2"))
+        self.assertEqual([auth.current(), auth.current()], ["t1", "t1"])
+        auth.renew_at = 0.0
+        self.assertEqual(auth.current(), "t2")
+        self.assertEqual(len(auth.transport.calls), 2)
+
+    def test_a_token_without_expiry_is_never_renewed(self):
+        auth = self.auth(self.grant("t1", expires_in=None))
+        self.assertEqual(auth.current(), "t1")
+        self.assertEqual(auth.renew_at, float("inf"))
+
+    def test_a_token_shorter_than_the_margin_is_renewed_on_the_next_request(self):
+        lifetime = api.TOKEN_RENEW_MARGIN_SECONDS - 1
+        auth = self.auth(self.grant("t1", expires_in=lifetime), self.grant("t2"))
+        self.assertEqual([auth.current(), auth.current()], ["t1", "t2"])
+
+    def test_the_margin_outlasts_a_call_retried_through_its_whole_budget(self):
+        waits = (http.DEFAULT_ATTEMPTS - 1) * max(http.MAX_RETRY_AFTER, http.MAX_BACKOFF)
+        sends = (http.DEFAULT_ATTEMPTS - 1) * http.DEFAULT_TIMEOUT
+        self.assertGreater(api.TOKEN_RENEW_MARGIN_SECONDS, waits + sends)
+
+    def test_a_refused_grant_raises_without_the_secret(self):
+        auth = self.auth(FakeResponse({"error": "invalid_client"}, status_code=401))
+        with self.assertRaises(RuntimeError) as caught:
+            auth.current()
+        self.assertIn("invalid_client", str(caught.exception))
+        self.assertNotIn("s3cret", str(caught.exception))
+
+    def test_requests_carry_the_bearer_token(self):
+        auth = self.auth(self.grant("t1"))
+        request = requests.Request("GET", "https://acme.zendesk.com/api/v2/x").prepare()
+        self.assertEqual(auth(request).headers["Authorization"], "Bearer t1")
+
+
+class TestZendeskSession(unittest.TestCase):
+    def session(self, env):
+        with mock.patch.dict(os.environ, env, clear=True):
+            return api.zendesk_session("acme")
+
+    def test_the_session_authenticates_with_the_oauth_client(self):
+        auth = self.session({"ZENDESK_OAUTH_CLIENT_ID": "client",
+                             "ZENDESK_OAUTH_CLIENT_SECRET": "s3cret"}).auth
+        self.assertIsInstance(auth, api.ClientCredentials)
+        self.assertEqual((auth.url, auth.client_id, auth.client_secret),
+                         ("https://acme.zendesk.com/oauth/tokens", "client", "s3cret"))
+
+    def test_an_incomplete_oauth_client_stops_the_run(self):
+        for env in ({}, {"ZENDESK_OAUTH_CLIENT_ID": "client"},
+                    {"ZENDESK_EMAIL": "agent@acme.test", "ZENDESK_API_TOKEN": "tok"}):
+            with self.subTest(env=env), self.assertRaises(SystemExit):
+                self.session(env)
 
 
 if __name__ == "__main__":

@@ -29,8 +29,8 @@ from tests.zendesk.test_triage import Patched
 # arbitrary — but it must not be empty, since an unset secret refuses everything.
 ZENDESK_SECRET = "s3cret"
 
-BASE_ENV = {"ZENDESK_SUBDOMAIN": "acme", "ZENDESK_EMAIL": "agent@acme.test",
-            "ZENDESK_API_TOKEN": "tok", "RELAY_DRY_RUN": None}
+BASE_ENV = {"ZENDESK_SUBDOMAIN": "acme", "ZENDESK_OAUTH_CLIENT_ID": "client",
+            "ZENDESK_OAUTH_CLIENT_SECRET": "secret", "RELAY_DRY_RUN": None}
 
 
 class Env:

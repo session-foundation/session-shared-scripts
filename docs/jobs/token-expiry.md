@@ -20,5 +20,5 @@ as Crowdin's, counts from 00:00 UTC that day.
 `CROWDIN_API_TOKEN` is reported on every daily run until `expiry.toml` has a date or
 `"never"` for it.
 
-The Zendesk API token, the Claude API key, the Discord webhooks and the GitHub App key
+The Zendesk OAuth client, the Claude API key, the Discord webhooks and the GitHub App key
 do not expire.

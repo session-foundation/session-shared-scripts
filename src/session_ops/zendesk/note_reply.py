@@ -47,8 +47,9 @@ text. stdout gets ticket ids and outcomes.
 
 Config (env vars, or flags for local runs):
     ZENDESK_SUBDOMAIN     e.g. "mycompany"  -> https://mycompany.zendesk.com
-    ZENDESK_EMAIL         agent email for API token auth; authors every comment
-    ZENDESK_API_TOKEN     Zendesk API token
+    ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET
+                          a confidential OAuth client; its token acts as, and
+                          authors every comment as, the admin who created it
     ZENDESK_HOUSE_ANSWERS (optional) path to the house-answer file — what support
                           usually replied to each kind of problem, per platform.
                           Absent, drafting works exactly as it does without it
@@ -207,7 +208,7 @@ def comment_text(comment):
 
 
 def api_user_id(session, subdomain):
-    """The user the API token authenticates as.
+    """The user the OAuth client authenticates as.
 
     Its own notes are skipped when looking for a command, which is the in-code half
     of the loop guard. The other half is the Zendesk trigger, which should exclude
@@ -1327,8 +1328,7 @@ def main(argv=None):
                         help="do everything except write to Zendesk")
     args = parser.parse_args(argv)
     subdomain = get_env("ZENDESK_SUBDOMAIN")
-    session = api.zendesk_session(get_env("ZENDESK_EMAIL"),
-                                  get_env("ZENDESK_API_TOKEN"))
+    session = api.zendesk_session(subdomain)
     api_user = api_user_id(session, subdomain)
 
     ticket = api.fetch_ticket(session, subdomain, args.ticket)
