@@ -28,8 +28,11 @@ REVIEW_CHANNEL = "any_channel"
 SEARCH_RESULT_LIMIT = 1000
 
 
-# Renew this long before expiry so a request never leaves with a token that dies in flight.
-TOKEN_RENEW_MARGIN_SECONDS = 120
+# The token is set once per call and urllib3's retries resend it, so it must outlive the
+# session's whole retry span: every attempt timing out and every wait at its longest.
+# A caller passing a larger `attempts` than the default can still outrun it.
+TOKEN_RENEW_MARGIN_SECONDS = 60 + (http.DEFAULT_ATTEMPTS - 1) * (
+    http.DEFAULT_TIMEOUT + max(http.MAX_RETRY_AFTER, http.MAX_BACKOFF))
 
 
 class ClientCredentials(requests.auth.AuthBase):

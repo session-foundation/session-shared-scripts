@@ -9,6 +9,7 @@ from unittest import mock
 
 import requests
 
+from session_ops.shared import http
 from session_ops.shared.testing import FakeResponse, FakeSession, NonJsonResponse
 from session_ops.zendesk import api, triage
 
@@ -140,9 +141,15 @@ class TestClientCredentials(unittest.TestCase):
         self.assertEqual(auth.current(), "t1")
         self.assertEqual(auth.renew_at, float("inf"))
 
-    def test_a_short_lived_token_is_renewed_on_the_next_request(self):
-        auth = self.auth(self.grant("t1", expires_in=60), self.grant("t2"))
+    def test_a_token_shorter_than_the_margin_is_renewed_on_the_next_request(self):
+        lifetime = api.TOKEN_RENEW_MARGIN_SECONDS - 1
+        auth = self.auth(self.grant("t1", expires_in=lifetime), self.grant("t2"))
         self.assertEqual([auth.current(), auth.current()], ["t1", "t2"])
+
+    def test_the_margin_outlasts_a_call_retried_through_its_whole_budget(self):
+        waits = (http.DEFAULT_ATTEMPTS - 1) * max(http.MAX_RETRY_AFTER, http.MAX_BACKOFF)
+        sends = (http.DEFAULT_ATTEMPTS - 1) * http.DEFAULT_TIMEOUT
+        self.assertGreater(api.TOKEN_RENEW_MARGIN_SECONDS, waits + sends)
 
     def test_a_refused_grant_raises_without_the_secret(self):
         auth = self.auth(FakeResponse({"error": "invalid_client"}, status_code=401))
