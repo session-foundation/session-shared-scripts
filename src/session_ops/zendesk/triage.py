@@ -28,8 +28,11 @@ elsewhere.
 
 Config (env vars, or flags for local runs):
     ZENDESK_SUBDOMAIN     e.g. "mycompany"  -> https://mycompany.zendesk.com
-    ZENDESK_EMAIL         agent email for API token auth
-    ZENDESK_API_TOKEN     Zendesk API token
+    ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET
+                          a confidential OAuth client; its token acts as the admin
+                          who created it. Wins over the API token when both are set
+    ZENDESK_EMAIL         agent email for API token auth (without the OAuth client)
+    ZENDESK_API_TOKEN     Zendesk API token, refused by Zendesk from 2027-04-30
     ANTHROPIC_API_KEY     Claude API key (not needed with --findings or --dump-batch)
     ZENDESK_DISCORD_WEBHOOK_URL
                           Discord incoming webhook for the triage channel, shared
@@ -1038,8 +1041,10 @@ def build_messages(findings, subdomain, stats=None, updated_ids=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Triage open Zendesk tickets with Claude and post a Discord summary.")
     parser.add_argument("--subdomain", help="Zendesk subdomain (else ZENDESK_SUBDOMAIN).")
-    parser.add_argument("--email", help="Zendesk agent email (else ZENDESK_EMAIL).")
-    parser.add_argument("--api-token", help="Zendesk API token (else ZENDESK_API_TOKEN).")
+    parser.add_argument("--email", help="Zendesk agent email (else ZENDESK_EMAIL). "
+                        "Unused when the OAuth client is configured.")
+    parser.add_argument("--api-token", help="Zendesk API token (else ZENDESK_API_TOKEN). "
+                        "Unused when the OAuth client is configured.")
     parser.add_argument("--webhook",
                         help="Discord webhook URL (else ZENDESK_DISCORD_WEBHOOK_URL).")
     parser.add_argument("--query", help="Zendesk search query (else ZENDESK_QUERY, else default). "
@@ -1110,9 +1115,6 @@ def main(argv=None):
         findings = load_findings(args.findings)
         print(f"Loaded {len(findings)} findings from {args.findings}.")
     else:
-        email = get_env("ZENDESK_EMAIL", args.email)
-        api_token = get_env("ZENDESK_API_TOKEN", args.api_token)
-
         # An explicit query wins over --window-hours; warn rather than silently drop it.
         window_start = None
         explicit_query = args.query or os.environ.get("ZENDESK_QUERY")
@@ -1127,7 +1129,7 @@ def main(argv=None):
         else:
             query = DEFAULT_QUERY
 
-        zd = zendesk_session(email, api_token)
+        zd = zendesk_session(subdomain, args.email, args.api_token)
         tickets, total_matched = fetch_tickets(zd, subdomain, query, args.max_tickets)
         matched = "?" if total_matched is None else total_matched
         print(f"Fetched {len(tickets)} of {matched} matching tickets (query: {query!r}).")

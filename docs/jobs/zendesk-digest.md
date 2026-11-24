@@ -131,8 +131,9 @@ Two caveats worth knowing:
 | Secret                | Description                                             |
 | --------------------- | ------------------------------------------------------- |
 | `ZENDESK_SUBDOMAIN`   | Zendesk subdomain (`mycompany` → `mycompany.zendesk.com`) |
-| `ZENDESK_EMAIL`       | Agent email used for Zendesk API-token auth             |
-| `ZENDESK_API_TOKEN`   | Zendesk API token                                       |
+| `ZENDESK_OAUTH_CLIENT_ID`, `ZENDESK_OAUTH_CLIENT_SECRET` | A confidential OAuth client. Its token acts as the admin who created it, so create it as the admin the reply flow posts as. Wins over the API token when both are set |
+| `ZENDESK_EMAIL`       | Agent email for API-token auth, used only without the OAuth client |
+| `ZENDESK_API_TOKEN`   | Zendesk API token, used only without the OAuth client. Zendesk refuses API tokens from 2027-04-30 |
 | `ZENDESK_DISCORD_WEBHOOK_URL` | Discord incoming webhook for the triage channel, shared with the tally and the failure alerts |
 
 ## Claude Authentication
@@ -220,7 +221,7 @@ Local runs need `ANTHROPIC_API_KEY` alongside the Zendesk credentials. `--dry-ru
 
 ```
 uv sync
-export ZENDESK_SUBDOMAIN=... ZENDESK_EMAIL=... ZENDESK_API_TOKEN=...
+export ZENDESK_SUBDOMAIN=... ZENDESK_OAUTH_CLIENT_ID=... ZENDESK_OAUTH_CLIENT_SECRET=...
 
 # what the unit runs, minus the Discord post and the state file
 uv run zendesk-triage --window-hours 72 --dry-run
@@ -300,7 +301,7 @@ A dry run prints the message it would have posted instead of posting it, and `--
 
 ### Required Secrets
 
-`ZENDESK_SUBDOMAIN`, `ZENDESK_EMAIL`, `ZENDESK_API_TOKEN` — the same three the triage uses — plus `ZENDESK_DISCORD_WEBHOOK_URL`, the triage channel's own webhook, so the tally lands next to the digests it accounts for. Not the shared `DISCORD_WEBHOOK_URL`: a webhook is bound to the channel it was created in. No Claude credentials: it classifies nothing.
+`ZENDESK_SUBDOMAIN` and the Zendesk credentials, the same ones the triage uses, plus `ZENDESK_DISCORD_WEBHOOK_URL`, the triage channel's own webhook, so the tally lands next to the digests it accounts for. Not the shared `DISCORD_WEBHOOK_URL`: a webhook is bound to the channel it was created in. No Claude credentials: it classifies nothing.
 
 The webhook is resolved before the run fetches anything, so a missing secret stops it rather than letting it bulk-edit tickets it then can't report; a dry run doesn't need one.
 

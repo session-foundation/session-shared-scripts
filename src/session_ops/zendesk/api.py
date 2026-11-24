@@ -1,14 +1,18 @@
 """Zendesk's API as the jobs use it: tickets, their comments and users, the
 markers a run leaves, and what a customer's side of a ticket looks like.
 """
+import os
 import re
 import sys
+import threading
+import time
 from datetime import datetime
 
 import requests
 
 from session_ops.shared import http
 from session_ops.shared.discord import clip
+from session_ops.shared.env import get_env
 from session_ops.shared.text import squash
 
 
@@ -25,10 +29,66 @@ REVIEW_CHANNEL = "any_channel"
 SEARCH_RESULT_LIMIT = 1000
 
 
-def zendesk_session(email, token):
+# Renew this long before expiry so a request never leaves with a token that dies in flight.
+TOKEN_RENEW_MARGIN_SECONDS = 120
+
+
+class ClientCredentials(requests.auth.AuthBase):
+    """Bearer auth from an OAuth client-credentials grant, renewed as it nears expiry.
+
+    The token acts as the admin who created the OAuth client. Zendesk issues no
+    refresh token for this grant, so renewing is a fresh grant with the same secret.
+    https://developer.zendesk.com/api-reference/ticketing/oauth/grant_type_tokens/
+    """
+
+    def __init__(self, subdomain, client_id, client_secret):
+        self.url = f"https://{subdomain}.zendesk.com/oauth/tokens"
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.transport = http.Session()
+        self.lock = threading.Lock()
+        self.token = None
+        self.renew_at = 0.0
+
+    def current(self):
+        with self.lock:
+            if self.token is None or time.monotonic() >= self.renew_at:
+                resp = self.transport.request("POST", self.url, json={
+                    "grant_type": "client_credentials", "client_id": self.client_id,
+                    "client_secret": self.client_secret, "scope": "read write"})
+                if not 200 <= resp.status_code < 300:
+                    # The body names the cause (invalid_client, invalid_scope) and
+                    # never echoes the secret.
+                    raise RuntimeError(f"Zendesk refused the OAuth client: HTTP "
+                                       f"{resp.status_code} {resp.text[:200]}")
+                body = resp.json()
+                self.token = body["access_token"]
+                # A null expires_in is a token that does not expire.
+                lifetime = body.get("expires_in") or float("inf")
+                self.renew_at = time.monotonic() + lifetime - TOKEN_RENEW_MARGIN_SECONDS
+            return self.token
+
+    def __call__(self, request):
+        request.headers["Authorization"] = f"Bearer {self.current()}"
+        return request
+
+
+def zendesk_session(subdomain, email=None, api_token=None):
+    """A session authenticated as the reply-flow's admin user.
+
+    OAuth when ZENDESK_OAUTH_CLIENT_ID and ZENDESK_OAUTH_CLIENT_SECRET are set, else
+    the API token, which Zendesk stops accepting on 2027-04-30. `email` and
+    `api_token` override their env vars, as the jobs' --email and --api-token do.
+    """
     session = http.Session()
-    # Zendesk API-token auth: username is "{email}/token", password is the token.
-    session.auth = (f"{email}/token", token)
+    client_id = os.environ.get("ZENDESK_OAUTH_CLIENT_ID")
+    client_secret = os.environ.get("ZENDESK_OAUTH_CLIENT_SECRET")
+    if client_id and client_secret:
+        session.auth = ClientCredentials(subdomain, client_id, client_secret)
+    else:
+        # Zendesk API-token auth: username is "{email}/token", password is the token.
+        session.auth = (f"{get_env('ZENDESK_EMAIL', email)}/token",
+                        get_env("ZENDESK_API_TOKEN", api_token))
     session.headers["Accept"] = "application/json"
     return session
 

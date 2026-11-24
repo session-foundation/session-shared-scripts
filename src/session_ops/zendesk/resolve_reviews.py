@@ -49,8 +49,11 @@ watches directly.
 
 Config (env vars, or flags for local runs):
     ZENDESK_SUBDOMAIN     e.g. "mycompany"  -> https://mycompany.zendesk.com
-    ZENDESK_EMAIL         agent email for API token auth
-    ZENDESK_API_TOKEN     Zendesk API token
+    ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET
+                          a confidential OAuth client; its token acts as the admin
+                          who created it. Wins over the API token when both are set
+    ZENDESK_EMAIL         agent email for API token auth (without the OAuth client)
+    ZENDESK_API_TOKEN     Zendesk API token, refused by Zendesk from 2027-04-30
     ZENDESK_DISCORD_WEBHOOK_URL
                           Discord incoming webhook for the triage channel, the one
                           the digest posts to (only needed with --apply)
@@ -338,15 +341,15 @@ def main(argv=None):
     parser.add_argument("--no-discord", action="store_true",
                         help="Solve the tickets without posting the summary to Discord.")
     parser.add_argument("--subdomain", help="Zendesk subdomain (else ZENDESK_SUBDOMAIN).")
-    parser.add_argument("--email", help="Zendesk agent email (else ZENDESK_EMAIL).")
-    parser.add_argument("--api-token", help="Zendesk API token (else ZENDESK_API_TOKEN).")
+    parser.add_argument("--email", help="Zendesk agent email (else ZENDESK_EMAIL). "
+                        "Unused when the OAuth client is configured.")
+    parser.add_argument("--api-token", help="Zendesk API token (else ZENDESK_API_TOKEN). "
+                        "Unused when the OAuth client is configured.")
     parser.add_argument("--webhook",
                         help="Discord webhook URL (else ZENDESK_DISCORD_WEBHOOK_URL).")
     args = parser.parse_args(argv)
 
     subdomain = get_env("ZENDESK_SUBDOMAIN", args.subdomain)
-    email = get_env("ZENDESK_EMAIL", args.email)
-    api_token = get_env("ZENDESK_API_TOKEN", args.api_token)
     # Resolved up front, before anything is fetched or solved: a missing webhook
     # should stop the run rather than have it bulk-edit tickets it cannot report. A
     # dry run posts nothing, so it never needs one.
@@ -354,7 +357,7 @@ def main(argv=None):
     webhook = get_env("ZENDESK_DISCORD_WEBHOOK_URL", args.webhook,
                       required=needs_webhook)
 
-    session = api.zendesk_session(email, api_token)
+    session = api.zendesk_session(subdomain, args.email, args.api_token)
     query = build_query()
     # Every match, not the newest 1000: the tail of this query is held open by
     # low-star reviews the job never solves, so a plain fetch hides the solvable

@@ -26,8 +26,11 @@ and note_reply.py is the only way in.
 
 Config (env vars):
     ZENDESK_SUBDOMAIN     e.g. "mycompany"
-    ZENDESK_EMAIL         agent email for API token auth
-    ZENDESK_API_TOKEN     Zendesk API token
+    ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET
+                          a confidential OAuth client; its token acts as the admin
+                          who created it. Wins over the API token when both are set
+    ZENDESK_EMAIL         agent email for API token auth (without the OAuth client)
+    ZENDESK_API_TOKEN     Zendesk API token, refused by Zendesk from 2027-04-30
     ZENDESK_WEBHOOK_SECRET  shared secret Zendesk signs its webhooks with. Unset
                           refuses every request
     RELAY_DRY_RUN         (optional) "1" passes --dry-run to note_reply.py, so the
